@@ -30,4 +30,8 @@ styles/             样式
 
 ## 许可
 
-本仓库目前未附开源许可证（UNLICENSED）。
+本项目以 **GNU Affero General Public License v3.0 only**（SPDX：`AGPL-3.0-only`）授权，完整条款见 [LICENSE](LICENSE)。
+
+Copyright (C) 2026 Mingle180。
+
+本站由同一仓库源码直接发布；通过网络使用本项目的用户，可依 AGPL 第 13 条从本仓库获取完整对应源代码：<https://github.com/Mingle180/DayPlan>。
