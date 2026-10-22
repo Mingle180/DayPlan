@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DayPlan</title>
+<link rel="stylesheet" href="styles/app.css">
+<link rel="stylesheet" href="styles/views.css">
+<link rel="stylesheet" href="styles/week.css">
+<link rel="stylesheet" href="styles/month.css">
+</head>
+<body>
+<div id="app">
+  <header class="app-header">
+    <button id="brand-about" class="brand" type="button" aria-haspopup="dialog" aria-label="关于 DayPlan">
+      <span class="brand-name">DayPlan</span>
+    </button>
+    <div class="header-right">
+      <div id="view-switch" class="view-switch" role="tablist" aria-label="视图模式">
+        <button id="btn-view-month" class="view-switch-btn" type="button" role="tab"
+                data-view="month" aria-pressed="false" title="月视图（M）">月</button>
+        <button id="btn-view-week" class="view-switch-btn" type="button" role="tab"
+                data-view="week" aria-pressed="false" title="周视图（W）">周</button>
+        <button id="btn-view-day" class="view-switch-btn is-active" type="button" role="tab"
+                data-view="day" aria-pressed="true" title="日视图（D）">日</button>
+      </div>
+      <span id="today-chip" class="today-chip"></span>
+      <button id="btn-settings" class="btn btn-ghost" type="button" aria-haspopup="dialog">设置</button>
+    </div>
+  </header>
+
+  <!-- 警告条容器（存储降级 / 数据损坏 / 截断提示等） -->
+  <div id="banners" class="banners" role="status" aria-live="polite"></div>
+
+  <div class="app-body">
+    <!-- 迭代 4（S26 / ADR-26）：左侧当月迷你月历已删除（#calendar-panel / #calendar / #calendar-foot） -->
+
+    <!-- 主视图容器（月 / 周 / 日） -->
+    <main class="panel-main" id="main-panel">
+      <div id="view-month-root" class="view-root" data-view="month" hidden></div>
+      <div id="view-week-root" class="view-root" data-view="week" hidden></div>
+
+      <!-- 日视图（默认） -->
+      <section id="day-panel" class="view-root panel-day" data-view="day">
+        <div class="day-head">
+          <div class="day-title-wrap">
+            <h1 id="day-title" class="day-title">—</h1>
+            <div id="day-sub" class="day-sub"></div>
+          </div>
+          <div class="head-actions">
+            <div class="date-nav" role="group" aria-label="日期导航">
+              <button id="btn-prev-day" class="date-nav-btn date-nav-arrow" type="button" title="前一天（[）" aria-label="前一天">‹</button>
+              <button id="btn-today" class="date-nav-btn is-current" type="button" title="回到今天（T）">今天</button>
+              <button id="btn-next-day" class="date-nav-btn date-nav-arrow" type="button" title="后一天（]）" aria-label="后一天">›</button>
+            </div>
+            <button id="btn-new-item" class="btn-add-round" type="button" title="新建事项（N）" aria-label="新建事项">+</button>
+          </div>
+        </div>
+
+        <!-- 迭代 10 批次 4（条8）：左右两栏 —— 左时间表、右记录栏（独立白底、与时间表等高相对静止） -->
+        <div class="view-body" id="day-view-body">
+          <div class="view-main">
+            <!-- 时间轴区（按类别分行组，两侧空闲压缩为窄带） -->
+            <section class="timeline-section" aria-label="时间轴">
+              <div class="timeline-scroll" id="timeline-scroll">
+                <div class="timeline-inner" id="timeline-inner">
+                  <div class="timeline-ruler" id="timeline-ruler"></div>
+                  <div class="timeline-body" id="timeline-body">
+                    <div class="timeline-track" id="timeline-track">
+                      <div class="timeline-now" id="timeline-now" hidden></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- 无时段事项（时间表下方） -->
+            <section class="untimed-section" aria-label="未排时段事项">
+              <div class="section-head">
+                <h2 id="untimed-title">未排时段</h2>
+                <span id="untimed-count" class="muted"></span>
+              </div>
+              <ul id="untimed-list" class="untimed-list"></ul>
+              <p id="untimed-empty" class="empty-hint" hidden></p>
+            </section>
+          </div>
+
+          <!-- 右侧栏：上「事项完成台」（批次 5 接入交互）+ 下「今日记录」 -->
+          <aside class="side-rail" id="day-rail" aria-label="今日记录与完成台">
+            <section class="finish-dock" id="day-finish-dock" aria-label="事项完成台">
+              <div class="section-head">
+                <h2>事项完成台</h2>
+                <span class="finish-dock-tools">
+                  <span class="muted" id="finish-dock-count"></span>
+                </span>
+              </div>
+              <div class="finish-dock-body" id="finish-dock-body"></div>
+            </section>
+
+            <section class="notes-section" aria-label="今日记录">
+              <div class="section-head">
+                <h2>今日记录</h2>
+                <span id="notes-status" class="muted"></span>
+              </div>
+              <textarea id="notes-input" class="notes-input" rows="4"
+                aria-label="今日记录"></textarea>
+            </section>
+          </aside>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<!-- 弹窗容器 -->
+<div id="modal-root"></div>
+
+<!-- 实现（经典 script 顺序加载，file:// 直接打开即可运行）
+     顺序即依赖顺序：core → data → views(纯几何) → store → ui → views(DOM) → app -->
+<script src="src/core/datetime.js"></script>
+<script src="src/core/id.js"></script>
+<script src="src/core/schema.js"></script>
+<script src="src/core/lunar.js"></script>
+<script src="src/data/holidays.js"></script>
+<script src="src/core/order.js"></script>
+<script src="src/core/recurrence.js"></script>
+<script src="src/core/layout.js"></script>
+<script src="src/core/calendar-grid.js"></script>
+<script src="src/core/picker.js"></script>
+<script src="src/core/seed.js"></script>
+<script src="src/views/timeline.js"></script>
+<script src="src/views/week-layout.js"></script>
+<script src="src/store.js"></script>
+<script src="src/ui/modal.js"></script>
+<script src="src/ui/overlay.js"></script>
+<script src="src/ui/itemcard.js"></script>
+<script src="src/ui/finishdock.js"></script>
+<script src="src/ui/form.js"></script>
+<script src="src/views/month.js"></script>
+<script src="src/views/week.js"></script>
+<script src="src/views/day.js"></script>
+<script src="src/views/settings.js"></script>
+<script src="src/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,450 @@
+/* ============================================================
+ * DayPlan · 视图级样式（迭代 4）
+ *   本文件 = **共享部分**：视图容器 / 视图切换 / 节假日标注 /
+ *   日视图时间轴与行组 / 事项卡折叠与展开 / 展开浮层
+ *
+ * 迭代 4（T43）按写域拆成三个文件（ADR-27）：
+ *   styles/views.css  ← 本文件（共享 + 日视图 + 卡片 + 浮层）
+ *   styles/week.css   ← 周视图
+ *   styles/month.css  ← 月视图
+ * 变量与基础组件在 app.css。
+ * ============================================================ */
+
+/* ---------- 迭代 3/4 变量（app.css 的变量在此补充） ---------- */
+:root {
+  --cat-label-width: 34px;   /* 左侧竖排类别名列宽（DM-15 / DM-21 CAT_LABEL_WIDTH） */
+  --group-gap: 10px;         /* 类别行组之间的纵向间距（DM-21 GROUP_GAP） */
+  --compress-height: 26px;   /* 首末空闲段窄带宽度（DM-21 COMPRESS_HEIGHT_DEFAULT） */
+  --holiday-hue: #ff3b30;
+  --workday-hue: #007aff;
+}
+
+/* ---------- 主区域容器 ---------- */
+.panel-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 16px;
+  gap: 0;
+}
+.view-root { min-width: 0; }
+.view-root[hidden] { display: none !important; }
+
+/* 视图切换（2026-10-21）：仅用户换档时由 app.js 加类，纯透明度淡入。
+   不用 transform / filter —— 它们会成为 fixed 包含块，把展开卡的固定定位带偏。 */
+.view-root.is-view-entering {
+  animation: dp-view-enter 200ms cubic-bezier(.2, .8, .2, 1);
+}
+@keyframes dp-view-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ---------- 视图切换控件（F-02.1；规范 12 / LA-1：iOS 分段控件） ---------- */
+.view-switch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--surface-3);
+}
+.view-switch-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 4px 14px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-2);
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+  transition: background var(--ease), color var(--ease), box-shadow var(--ease);
+}
+.view-switch-btn + .view-switch-btn { border-left: 0; }
+.view-switch-btn:hover { color: var(--text); }
+.view-switch-btn.is-active {
+  background: var(--seg-active);
+  color: var(--seg-active-text);
+  font-weight: 600;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .14);
+}
+.view-switch-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+
+/* 迭代 10 批次 2（条6）：可拖动白块。
+ * 有 .has-thumb 时按钮自身的选中底色下线，白色胶囊由 thumb 统一绘制（拖动时跟手）。 */
+.view-switch { position: relative; touch-action: none; }
+.view-switch.has-thumb .view-switch-btn { position: relative; z-index: 1; background: transparent; }
+.view-switch.has-thumb .view-switch-btn.is-active { background: transparent; box-shadow: none; }
+.view-switch-thumb {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 0;
+  border-radius: var(--radius-xs);
+  background: var(--seg-active);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .14);
+  pointer-events: none;
+  will-change: transform;
+  transition: transform var(--ease), width var(--ease), height var(--ease);
+}
+.view-switch-thumb.is-dragging { transition: none; }
+
+/* 迭代 10 批次 2（条4）：上/下周箭头按钮（只留 ‹ ›） */
+.btn-arrow {
+  min-width: 30px;
+  padding-left: 8px;
+  padding-right: 8px;
+  font-size: 15px;
+  line-height: 1.1;
+}
+
+/* ---------- 节假日标注（F-21.2） ---------- */
+.hd-tag {
+  display: inline-block;
+  padding: 0 3px;
+  border-radius: 3px;
+  font-size: 9px;
+  line-height: 13px;
+  font-weight: 700;
+  letter-spacing: .5px;
+  vertical-align: top;
+}
+.hd-tag.is-holiday { background: var(--danger-weak); color: var(--danger); }
+.hd-tag.is-workday { background: var(--primary-weak); color: var(--primary); }
+.hd-name { font-size: 9px; color: var(--text-3); }
+
+/* ---------- 日视图时间轴：行组 + 竖排类别名 + 首末空闲窄带（F-16 / F-24） ---------- */
+.timeline-body {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  min-height: var(--lane-height);
+}
+/* 刻度与竖线由 JS 按压缩轴逐条绘制，故关闭 app.css 的整日渐变底纹 */
+.timeline-body .timeline-track {
+  flex: 1 1 auto;
+  min-width: 0;
+  background-image: none;
+  min-height: var(--lane-height);
+}
+/* 美化迭代 10：左侧类别名列下线（宽度恒 0，容器保留以兼容 DOM 骨架） */
+.timeline-labels {
+  flex: 0 0 var(--cat-label-width);
+  position: sticky;
+  left: 0;
+  z-index: 5;
+  border-right: 0;
+  overflow: hidden;
+}
+/* 标签列与时段区共用同一 x/y 坐标系；刻度行压在空闲窄带/当前时间线之上（迭代 4） */
+.timeline-ruler { position: relative; z-index: 2; }
+.timeline-ruler .ruler-tick { top: 4px; }
+
+.tl-type-label {
+  pointer-events: none;         /* BR-27：文本不参与点击（置于首行，避免被前一条声明的行尾注释隔断解析） */
+  position: absolute;
+  left: 0;
+  width: var(--cat-label-width);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  white-space: nowrap;          /* BR-27：不换行，行高随文本增长 */
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 1px;
+  color: var(--text-3);
+  background: var(--cat-bg, transparent);
+  border-radius: var(--radius-xs);
+  overflow: visible;            /* 展开卡不被裁切（与 BR-34 一致；标签本身由行高保证可见） */
+  user-select: none;
+}
+
+.tl-typegroup {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-radius: var(--radius-sm);
+  overflow: visible;
+}
+.tl-typegroup + .tl-typegroup { border-top: 1px dashed var(--border); }
+
+/* 首末空闲窄带（BR-20 / F-16.4 / S29）：竖直窄带，位于时间轴两端
+   美化迭代 4：斜条纹改为极浅纯色底（用户裁定：条纹太丑） */
+.tl-idle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(120, 120, 128, .05);
+  border-left: 1px dashed var(--border-strong);
+  border-right: 1px dashed var(--border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  font-size: 11px;
+  cursor: help;
+  user-select: none;
+  writing-mode: vertical-rl;
+}
+.tl-idle.is-lead { border-left: 0; }
+.tl-idle.is-trail { border-right: 0; }
+
+/* 小时/半小时竖线（由 JS 逐条放置，横向轴专用） */
+.tl-gridline {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1px solid var(--border);
+  pointer-events: none;
+}
+.tl-gridline.is-hour { border-left-color: var(--border-strong); }
+
+/* ---------- 事项卡：折叠态补充 + 展开区（F-14 / F-26） ---------- */
+.item-star { color: var(--warn); font-size: 12px; line-height: 1; flex: none; }
+/* 美化迭代 5（用户裁定）：紧急 = 标题文字变红，不再有淡红底 */
+.untimed-item.is-urgent .ui-title { color: var(--danger); }
+/* 折叠态备注（F-44，card 变体）：与时间/标题同列，超出可滚动 */
+.ui-note {
+  display: block;
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  max-height: 48px;
+}
+.item-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px 10px;
+  border-top: 1px dashed var(--border);
+  background: var(--surface);
+  text-align: left;
+  cursor: default;
+}
+.item-note {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  color: var(--text-2);
+  max-height: 160px;
+  overflow: auto;
+}
+.item-note.is-empty { font-style: italic; color: var(--text-3); }
+.item-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+/* 2026-10-20（用户裁定）：展开块里的操作按钮统一「白底 + 加粗 + 投影」。
+ * 底层灰药丸不再使用；危险态 / 已开启态只改**字色**，底色一律白，
+ * 这样一排按钮（含四宫格）视觉齐整，也不会和卡面白底打架。 */
+.item-actions .btn {
+  font-size: 12px;
+  padding: 3px 9px;
+  background: var(--surface);
+  font-weight: 700;
+  border-color: transparent;
+  /* 2026-10-21（用户反馈）：拉伸到整块高后，继承 .btn 的 999px 圆角会变成大圆球；
+     行动按钮统一改方形圆角。 */
+  border-radius: var(--radius-xs);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .10), 0 2px 8px rgba(16, 24, 40, .08);
+}
+.item-actions .btn:hover {
+  background: var(--surface);
+  box-shadow: 0 2px 6px rgba(16, 24, 40, .16), 0 6px 16px rgba(16, 24, 40, .12);
+}
+.item-actions .btn.is-on {
+  border-color: transparent;
+  color: var(--danger);
+  font-weight: 700;
+}
+
+/* 展开态的时段块：只留按钮区（迭代 7 / F-44：折叠态的时间/标题/备注在展开态隐藏）
+ * 迭代 10 批次 3（条7）：展开后与原块同宽同高；去白色长方形底。
+ * 2026-10-21（用户裁定，取代旧「min-width + height:auto」口径）：
+ *   **非省略块展开后必须与原块完全重叠** —— 宽高都取原内联几何，不强制最小宽度、
+ *   不把 height 改成 auto。按钮改由 itemcard 按原块宽高挑排布（见 .is-actions-*）。
+ *   只有折叠时因太小而省略/只剩色块的块（.is-expanded-grow）才允许放大到可读尺寸。 */
+.tl-block.is-expanded {
+  z-index: 6;
+  padding: 4px 8px;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+}
+/* 省略态 / 微块：折叠时只剩「…」+首字或纯色块，展开必须给按钮可读宽度。
+   宽度下限由 .tl-block 的 --blk-expanded-min-w 单点定义。 */
+.tl-block.is-expanded.is-expanded-grow,
+.tl-block.is-expanded.is-omitted,
+.tl-block.is-expanded.is-tiny {
+  height: auto !important;
+  min-height: var(--block-h, var(--block-height));
+  min-width: var(--blk-expanded-min-w);
+}
+/* 2026-10-21（用户反馈）：日视图较窄的块按钮竖排，原块放不下时允许面板**适当超出**
+   （不再为了「完全重叠」把按钮压成竖排文字）。宽度下限 = 竖排按钮可读所需；
+   高度下限由 itemcard 按按钮数算好写在 --blk-fit-min-h 上。
+   原块本来够宽够高时，两条下限都不生效 → 仍与原块完全重叠。 */
+.tl-block.is-expanded.is-expanded-fit {
+  min-width: var(--blk-expanded-fit-w);
+  min-height: var(--blk-fit-min-h, var(--block-h, var(--block-height)));
+}
+.tl-block.is-expanded > .tl-time,
+.tl-block.is-expanded > .tl-titlerow,
+.tl-block.is-expanded > .tl-note { display: none; }
+.tl-block.is-expanded .item-detail {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  justify-content: center;
+  margin: 0;
+  padding: 2px;
+  border-top: 0;
+  background: transparent;
+  min-height: 0;
+  animation: dp-detail-in .16s cubic-bezier(.4, 0, .2, 1);
+}
+/* 2026-10-21（用户反馈）：按钮组纵向铺满整块 —— 三按钮横排、四按钮四宫格、
+   一行四颗、窄块竖排，都要吃到展开块的全部剩余高度，不留上下空白。 */
+.tl-block.is-expanded .item-actions {
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 4px;
+  width: 100%;
+  min-height: 0;
+}
+.tl-block.is-expanded .item-actions .btn {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  justify-content: center;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  padding: 2px 4px;
+}
+/* 四宫格：网格两行等高，按钮随行列拉伸（不再按内容定高、底部留空） */
+.tl-block.is-expanded .item-actions.is-quad {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-auto-rows: 1fr;
+  align-content: stretch;
+  flex-wrap: nowrap;
+}
+.tl-block.is-expanded .item-actions.is-quad .btn { flex: none; min-width: 0; min-height: 0; }
+/* 2026-10-21（用户裁定）：按钮排布由 itemcard 按**原块宽高**选择
+   （.is-actions-row / .is-actions-column / .is-actions-grid / .is-actions-line4）。
+   窄而高的块竖排，窄而矮的块横排 —— 再也不靠加高块来容纳按钮。 */
+.tl-block.is-expanded.is-actions-column .item-actions {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+}
+.tl-block.is-expanded.is-actions-column .item-actions.is-quad {
+  display: grid;
+  grid-template-columns: 1fr;
+  grid-auto-rows: 1fr;
+}
+.tl-block.is-expanded.is-actions-column .item-actions .btn,
+.tl-block.is-expanded.is-actions-column .item-actions.is-quad .btn {
+  flex: 1 1 0;
+  width: 100%;
+  min-height: 0;
+  padding: 2px;
+}
+/* 四按钮：原高度放得下两行 → 四宫格；放不下 → 压回一行（文字可省略，块不许变高） */
+.tl-block.is-expanded.is-actions-line4 .item-actions.is-quad {
+  display: flex;
+  flex-wrap: nowrap;
+}
+.tl-block.is-expanded.is-actions-line4 .item-actions.is-quad .btn { flex: 1 1 0; }
+/* 省略 / 微块展开后高度仍随内容（不铺满）：给按钮可读的下限高度 */
+.tl-block.is-expanded.is-expanded-grow .item-actions .btn {
+  flex: 0 0 auto;
+  min-height: 24px;
+}
+
+@keyframes dp-detail-in {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* 展开态的无时卡片 —— 2026-10-20 四轮（用户反馈：「点击后依然变高，按钮未延展居中」）
+ *
+ * ① **不许变高**。旧口径是 `flex-direction: column` + 内容 `display:none`，于是
+ *    内容行残留的 4px（.ui-main 的上下 padding）+ 卡片 gap 8px + detail 的
+ *    padding-top 4px 三者相加，把 43.7px 的卡撑到 59.9px。删掉内容行也删不掉
+ *    这 16px，因为 column 布局**必然**把 detail 排到内容行下面。
+ *    改法：收起态与展开态用**同一行**——`display:grid` 让内容行与 detail 落在
+ *    同一格里（`grid-area: 1/2`）叠放，行高取两者较大值。内容不再 display:none，
+ *    而是 `visibility:hidden` **保留占位**，所以行高恒等于收起态的内容行高。
+ *    按钮行压到 24.5px（padding 2px 9px）< 内容行 26.4px → 卡片高度**严格不变**。
+ * ② **按钮延展 + 居中**。上一轮为了治「卡片看着变宽」把按钮改成 `flex:0 0 auto`
+ *    靠左，结果六颗按钮挤在左边、右侧空出 564px。改为均分（`flex:1 1 0`）+
+ *    `max-width` 限宽 + 整组 `justify-content:center`：既延展，又居中，
+ *    也不会回到当初每颗 233px 的「大条」。
+ * ③ 白底与虚线：`.item-detail` 继承的 `--surface` + 虚线在无时卡片里铺成一条白板，
+ *    时段块早已改透明，这里同一口径。
+ *
+ * 网格列宽 `18px / gap 8px` 必须与收起态的 `.ui-seq`（width:18px）+ `.untimed-item{gap:8px}` 一致。 */
+.untimed-item.is-expanded {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  grid-auto-rows: minmax(0, auto);
+  column-gap: 8px;
+  align-items: center;
+}
+/* 序号**保留可见**：它是列表项身份，藏掉会让展开行像「少了一条」（截图里只剩 2、3） */
+.untimed-item.is-expanded > .ui-seq { grid-area: 1 / 1; }
+.untimed-item.is-expanded > .ui-main { grid-area: 1 / 2; visibility: hidden; }
+.untimed-item.is-expanded > .item-detail { grid-area: 1 / 2; min-width: 0; }
+/* 展开时内容行整体不可见：只需 `.ui-main` 一条 —— visibility 会继承给
+   .ui-title / .ui-note / .ui-cat / .muted，不必逐个写（写了也是冗余，还挡断言）。 */
+.untimed-item.is-expanded .item-detail {
+  padding: 0;
+  border-top: 0;
+  background: transparent;
+  justify-content: center;
+}
+/* 三颗并排延展；四颗（is-quad）也压回一行 —— 无时卡片只有一行高，换行就必然变高。
+   极窄时宁可让文字省略，也不许把卡片撑高。 */
+.untimed-item.is-expanded .item-actions {
+  flex-wrap: nowrap;
+  gap: 6px;
+  width: 100%;
+  justify-content: center;
+}
+.untimed-item.is-expanded .item-actions .btn {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 140px;
+  min-height: 24px;
+  padding: 2px 9px;
+  justify-content: center;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------- 展开浮层（F-26 / ADR-22 / ADR-25） ---------- */
+/* 展开时由 JS 切到 position:fixed 临时脱离裁切上下文，这里只保证视觉层次与宽度 */
+.is-pinned-expand {
+  position: fixed !important;
+  z-index: 60;
+  box-shadow: var(--shadow-lg);
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  /* 2026-10-21：不再限制最大宽度 —— 展开卡必须与原块**完全重叠**，
+     宽块的宽度就是原块宽度（旧 max-width 会把宽块压窄）。 */
+  max-width: none;
+}

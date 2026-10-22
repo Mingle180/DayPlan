@@ -1,0 +1,356 @@
+/* ============================================================
+ * DayPlan · 月视图样式（迭代 4，ADR-27 三分后的独立写域）
+ *   归属：T37 建立基线，T48（迭代 4）改写为连续多月列表，迭代 6（F-40）去虚化。
+ *   契约：docs/spec/07-iteration-4-delta.md F-27 / ADR-23 / US-23；
+ *         docs/spec/10-iteration-6-delta.md F-40（R-19）
+ *   - 无"选中"态（AC-23.1）：不再有 .is-center 强调、.ym-badge、"选中"文案
+ *   - 响应式多列网格：repeat(auto-fill, minmax(240px, 1fr))（BR-33 / AC-23.2）
+ *   - 年份分隔标题（AC-23.5）
+ *   - **迭代 6：删除上下边界虚化（mask-image 下线），今日格新增 .mc-today-tag**
+ * ============================================================ */
+
+.month-view {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* 桌面档的真实高度由下方 body[data-view-mode='month'] 的纵向链给出；
+     2026-10-21 用户口径：显示窗要顶满可用高度，不再用 100vh − 180px 去猜。 */
+  height: auto;
+  min-height: 320px;
+}
+.month-scroll {
+  position: relative;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 24px 0;
+}
+
+/* 2026-10-21（用户口径）：月视图的月份显示窗上下顶满。
+   旧实现固定 height: calc(100vh - 180px)：没有提示条时底部空出约 80px；
+   有提示条时反而把页面撑出视口。这里让 #app 吃满视口，.app-body →
+   #main-panel → #view-month-root → .month-view 一路 flex 拉直，
+   显示窗高度 = 内容区真实剩余高度（顶栏 / 提示条多高都不必再算）。
+   仅桌面宽度生效；≤900px 仍保持页面自然滚动（见文末媒体查询）。 */
+@media (min-width: 901px) {
+  body[data-view-mode='month'] { overflow: hidden; }
+  body[data-view-mode='month'] #app { height: 100vh; min-height: 0; }
+  body[data-view-mode='month'] .app-body { min-height: 0; align-items: stretch; }
+  body[data-view-mode='month'] .panel-main { min-height: 0; }
+  body[data-view-mode='month'] #view-month-root {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+  body[data-view-mode='month'] .month-view {
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 0;
+  }
+}
+
+/* 连续月份网格：每行 3–6 个月（随窗口宽度自适应）
+   美化迭代 13：stretch 让同一排的月份卡等高（底边对齐），不再各自随内容收缩 */
+.month-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+  align-items: stretch;
+}
+
+/* 年份分隔标题（参考图样式；规范 12 / LA-4：超大 700 浅灰） */
+.month-year-sep {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -.4px;
+  color: var(--text-3);
+}
+.month-year-sep .sep-note { font-size: 11px; font-weight: 500; color: var(--text-3); }
+
+.month-col {
+  /* 2026-10-21：本月计划就地覆盖本列 → 列必须是面板的定位锚点 */
+  position: relative;
+  background: var(--glass);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  /* 2026-10-21（用户反馈）：整张月份卡悬停效果与事项块一致：
+     常态 shadow-block → 悬停 shadow + scale(1.02)。 */
+  box-shadow: var(--shadow-block);
+  padding: 10px;
+  min-width: 0;
+  cursor: pointer;
+  transition: box-shadow var(--ease), transform var(--ease);
+}
+.month-col:hover {
+  box-shadow: var(--shadow);
+  transform: scale(1.02);
+  z-index: 4;
+}
+/* 面板打开时卡内已有可交互内容：不再整体缩放（避免面板与条目跟着抖动）。 */
+.month-col.is-plan-open:hover { box-shadow: var(--shadow-block); transform: none; }
+.month-col-head {
+  /* 2026-10-20 六轮（用户需求）：列头 = 月份卡片的「非日期部分」，点击进入本月计划。
+     改成 button 后必须把原生外观彻底重置，否则会出现灰底 + 居中失效。 */
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  color: var(--text);
+  padding: 2px 4px 6px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--radius-xs) var(--radius-xs) 0 0;
+  background: transparent;
+  margin-bottom: 6px;
+  cursor: pointer;
+}
+/* 2026-10-21（用户反馈）：月标题不再响应鼠标悬停（不要 hover 高亮）。
+   仍是可点击入口 → 保留 pointer 光标与 is-plan-open 的展开态。 */
+.month-col-head:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.month-col-head .ym-m { color: var(--text-3); font-weight: 500; font-size: 11px; }
+.month-col-head .mch-plan {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-3);
+  padding: 0 5px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  line-height: 15px;
+}
+.month-col-head .mch-plan.has-items { color: var(--primary); border-color: currentColor; }
+.month-col-head.is-plan-open { color: var(--primary); background: var(--primary-weak); }
+
+/* ------------------------------------------------------------------ *
+ * 本月计划面板（2026-10-21 用户需求）
+ * 版式依用户手绘稿：标题「本月计划」→ 编号条目 → 底部「＋创建」。
+ * **就地覆盖原月份卡**：绝对定位 inset:0，宽高与原列完全一致（与事项块展开同一心智），
+ * 随月列表滚动；条目多时只让列表区滚动，标题与创建按钮常驻。
+ * ------------------------------------------------------------------ */
+.month-plan {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 10px;
+  background: var(--surface);
+  border-radius: inherit;
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  cursor: default;
+  /* 2026-10-21（用户反馈）：不要淡入/位移动画 —— 首帧 opacity:0 会把底下的
+     月份卡（含刚加上的 is-plan-open 列头底色）透出来，看起来「闪一下」。
+     面板是就地覆盖，直接不透明落位即可。 */
+}
+.mp-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex: none;
+  padding: 0 2px 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+.mp-title { margin: 0; font-size: 16px; font-weight: 700; letter-spacing: .5px; }
+.mp-sub { font-size: 11px; color: var(--text-3); }
+/* 列表独占剩余高度：条目多时在面板内部滚动，面板本身不外溢 */
+.mp-list { display: flex; flex-direction: column; gap: 6px; flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 2px; }
+.mp-list:empty { flex: 0 0 auto; overflow: visible; }
+.mp-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  cursor: pointer;
+  transition: background-color var(--ease);
+}
+.mp-item:hover { background: var(--surface-3); }
+.mp-item:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.mp-seq {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+}
+.mp-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 2026-10-21（用户需求）：右键标记完成后用删除线 + 弱化颜色，编号同步变淡。 */
+.mp-item.is-done .mp-text { color: var(--text-3); text-decoration: line-through; }
+.mp-item.is-done .mp-seq { opacity: .45; }
+.mp-del {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 20px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--ease), color var(--ease), background-color var(--ease);
+}
+.mp-item:hover .mp-del,
+.mp-item:focus-within .mp-del { opacity: 1; }
+.mp-del:hover { color: var(--danger); background: var(--danger-weak); }
+.mp-foot { display: flex; justify-content: center; flex: none; margin-top: auto; padding-top: 10px; }
+.mp-add { border-radius: 999px; padding: 5px 16px; }
+.plan-edit-foot { margin-top: 2px; }
+
+.month-grid { display: flex; flex-direction: column; }
+/* 2026-10-22 二十五轮（用户反馈）：1fr 的隐含最小宽度是 min-content，
+   长节日名（nowrap）会把所在列撑宽，整行 7 列不再与表头等宽 → 日期错位。
+   两行统一 minmax(0, 1fr)，列宽严格相等，超出内容交给 .mc-lunar 省略号。 */
+.month-dow-row { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; margin-bottom: 2px; }
+.month-week-row {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 2px;
+  position: relative;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  /* 2026-10-21 十三轮（用户反馈）：静止态不画任何边界；
+     悬停时该周作为有阴影的横块从月卡里浮出，叠在整卡悬停响应之后。 */
+  background-color: transparent;
+  box-shadow: none;
+  transition: background-color var(--ease), box-shadow var(--ease), transform var(--ease);
+}
+/* 2026-10-22 二十三轮（用户反馈）：横块浮出时文字跟随同步放大，
+   整行（背景、日期、农历、标记）作为一个整体从月卡里浮出。 */
+.month-week-row:hover {
+  background-color: var(--surface);
+  box-shadow: var(--shadow);
+  transform: scale(1.02);
+  z-index: 2;
+}
+.month-week-row:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.month-cell {
+  position: relative;
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: var(--radius-xs);
+  min-height: 46px;
+  min-width: 0;
+  /* 2026-10-22 二十五轮：横向 1px，给 3 字农历 / 节日名留出整字宽，
+     避免等宽列把「中秋节」压成省略号；列间 2px gap 仍提供呼吸空间 */
+  padding: 2px 1px;
+  /* 2026-10-22 二十五轮（用户反馈）：日期数字居中对齐星期表头，不再左对齐。
+     button 的 UA 样式让 flex 子项贴左，必须同时给 align-items:center，
+     否则 text-align 只影响文字、拉不回日期行 / 农历 / 标记块。 */
+  text-align: center;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+.month-cell.is-outside { opacity: .4; }
+/* 迭代 7（F-46 / R-27）+ 规范 12 / LA-4 / R-L5：今天只用整格底色标出，不再显示「今天」文字、不加描边 */
+.month-cell.is-today {
+  background: var(--primary-weak);
+  border-radius: var(--radius-xs);
+}
+.month-cell.is-today .mc-day { color: var(--primary); font-weight: 800; }
+.mc-day { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+/* 美化迭代 6+10：日期行 = 数字 + 旁侧内联「休/班」小字（同一行、不遮数字） */
+.mc-dayrow { display: flex; align-items: baseline; gap: 3px; justify-content: center; }
+.mc-flag { font-size: 9px; font-weight: 600; line-height: 1.1; }
+.mc-flag.is-holiday { color: var(--danger); }
+.mc-flag.is-workday { color: var(--warn); }
+.mc-lunar {
+  display: block; /* 行内元素不生效 max-width/overflow，长节日名会溢出邻格 */
+  font-size: 9px;
+  color: var(--text-3);
+  line-height: 1.1;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* 有节假日标注的格子：节日名占农历位（假日红、调休班次保持灰） */
+.mc-lunar.is-festival { color: var(--danger); font-weight: 600; }
+.mc-marks { display: flex; gap: 2px; align-items: center; justify-content: center; }
+.mc-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--border-strong); }
+.mc-noteline { width: 10px; height: 2px; border-radius: 1px; background: var(--text-3); }
+
+/* 星期表头单元格 */
+.month-dow {
+  text-align: center;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 18px;
+  color: var(--text-3);
+}
+.month-dow.is-weekend { color: var(--danger); opacity: .8; }
+
+/* 边界提示条（绝对定位，不参与网格排布；「未收录节假日」背景提示已下线） */
+.month-boundary {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow);
+  color: var(--text-2);
+  font-size: 12px;
+  text-align: center;
+  pointer-events: none;
+}
+.month-boundary { bottom: 10px; }
+.month-boundary[hidden] { display: none; }
+
+@media (max-width: 900px) {
+  .month-view { height: auto; max-height: none; min-height: 0; }
+  .month-list { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+}
+
+/*
+ * 窄窗口降级（BR-33 / AC-23.2「每行 3–6 个」）：
+ * auto-fill 在容器宽不足时会退到 1–2 列（320px 时 180px 只排得下 1 列），
+ * 与 monthColumnsFor 的 min=3 夹取口径不一致，故在 ≤640px 起显式固定为 3 列。
+ *   ≤640px：3 列（320px 视口 → 约 99px/列，仍可容纳「日 + 农历小字」）
+ *   >640px：auto-fill/minmax（572px 起自然 ≥3 列，1440px → 6 列，最多 6 列）
+ */
+@media (max-width: 640px) {
+  .month-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}

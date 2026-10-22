@@ -1,0 +1,1499 @@
+/* DayPlan · 样式表
+   设计要点见 docs/spec/04-system-design.md §4。
+   时间轴几何：pxPerHour 由 CSS 变量 --px-per-hour 控制，与 JS 侧设置保持一致。 */
+
+:root {
+  color-scheme: light dark;
+
+  /* 主题色（分支 A / 规范 12：Apple 毛玻璃极简风，浅色为底） */
+  --bg: #f5f5f7;
+  --surface: #ffffff;                          /* 前景件实色（按钮/输入聚焦后的卡面） */
+  --surface-2: rgba(120, 120, 128, .08);       /* 浅灰填充（输入/次级底） */
+  --surface-3: rgba(120, 120, 128, .12);       /* 更深一档填充（分段轨道/高亮带） */
+  --glass: rgba(255, 255, 255, .72);           /* 毛玻璃卡面 */
+  --glass-blur: blur(20px) saturate(180%);
+  --border: rgba(0, 0, 0, .06);
+  --border-strong: rgba(0, 0, 0, .12);
+  --text: #1d1d1f;
+  --text-2: #6e6e73;
+  --text-3: #aeaeb2;
+  --primary: #007aff;
+  --primary-weak: rgba(0, 122, 255, .1);
+  --danger: #ff3b30;
+  --danger-weak: rgba(255, 59, 48, .1);
+  --warn: #ff9500;
+  --warn-weak: rgba(255, 149, 0, .12);
+  --ok: #34c759;
+  --ok-weak: rgba(52, 199, 89, .12);
+  --seg-active: #ffffff;                       /* 分段控件当前项胶囊 */
+  --seg-active-text: #1d1d1f;
+
+  /* 时间轴 */
+  --px-per-hour: 60px;
+  --lane-height: 48px;
+  --block-height: 44px;
+  --ruler-height: 26px;
+  /* 迭代 8 / F-57：时间「密码锁」的几何（读取位 = 中间行）。
+     **必须**与 src/core/picker.js 的 DEFAULT_ITEM_HEIGHT / DEFAULT_VISIBLE_ROWS 一致：
+     不一致 = 中间行与「落点」错位（由冒烟 SC-64 用 data-item-height / data-visible-rows 交叉核对）。 */
+  --wheel-item-height: 32px;
+  --wheel-visible-rows: 5;
+
+  /* 尺寸（规范 12 §2：圆角分层 + 8px 网格，留白较旧版 +50%） */
+  --radius-lg: 20px;
+  --radius: 16px;
+  --radius-sm: 10px;
+  --radius-xs: 8px;
+  --gap: 21px;
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, .10);
+  --shadow: 0 8px 32px rgba(0, 0, 0, .08);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, .16);
+  /* 事项块常态投影（迭代 10 批次 1 反馈）：块与底页之间需要一层可感知的浮起 */
+  --shadow-block: 0 1px 2px rgba(0, 0, 0, .06), 0 3px 10px rgba(0, 0, 0, .07);
+  --ease: .25s cubic-bezier(.4, 0, .2, 1);
+
+  /* 滚动条（2026-10-22 二十六轮）：只保留灰色滑块本身 */
+  --scroll-thumb: rgba(0, 0, 0, .22);
+  --scroll-thumb-hover: rgba(0, 0, 0, .35);
+}
+
+/* 暗色镜像（规范 12 §2.1 / R-L6）
+   美化迭代 3：由 JS 写 <html data-theme>（'auto' 时跟随系统），不再直接绑 prefers-color-scheme */
+html[data-theme='dark'] {
+  --bg: #000000;
+  --surface: #1c1c1e;
+  --surface-2: rgba(120, 120, 128, .24);
+  --surface-3: rgba(120, 120, 128, .32);
+  --glass: rgba(44, 44, 46, .72);
+  --border: rgba(255, 255, 255, .1);
+  --border-strong: rgba(255, 255, 255, .18);
+  --text: #f5f5f7;
+  --text-2: #aeaeb2;
+  --text-3: #6e6e73;
+  --primary: #0a84ff;
+  --primary-weak: rgba(10, 132, 255, .18);
+  --danger: #ff453a;
+  --danger-weak: rgba(255, 69, 58, .18);
+  --warn: #ff9f0a;
+  --warn-weak: rgba(255, 159, 10, .2);
+  --ok: #30d158;
+  --ok-weak: rgba(48, 209, 88, .2);
+  --seg-active: #636366;
+  --seg-active-text: #f5f5f7;
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, .45);
+  --shadow: 0 8px 32px rgba(0, 0, 0, .5);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, .6);
+  --shadow-block: 0 1px 2px rgba(0, 0, 0, .5), 0 3px 10px rgba(0, 0, 0, .45);
+  --scroll-thumb: rgba(255, 255, 255, .24);
+  --scroll-thumb-hover: rgba(255, 255, 255, .38);
+}
+
+/* 毛玻璃实色回退（规范 12 §2.2 / GA-3） */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root { --glass: #ffffff; }
+  html[data-theme='dark'] { --glass: #1c1c1e; }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+/* 2026-10-22 二十一轮：月视图隐藏页面滚动条，日周视图有滚动条，
+   不预留槽位会让右侧「月/周/日」分段控件横向跳动；稳定槽位后各档几何一致。 */
+html { scrollbar-gutter: stable; }
+
+/* 2026-10-22 二十六轮（用户反馈）：所有滚动条去掉白色背景条与两端箭头，只保留灰色滑块。
+   Chromium 一旦命中下面这些伪元素就不再绘制原生滚动条；不要在别处补
+   scrollbar-width / scrollbar-color —— Chromium 121+ 会转而忽略 webkit 伪元素。 */
+::-webkit-scrollbar { width: 10px; height: 10px; background: transparent; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-track-piece { background: transparent; }
+::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background-color: var(--scroll-thumb-hover); }
+::-webkit-scrollbar-corner { background: transparent; }
+
+body {
+  font: 14px/1.6 -apple-system, "SF Pro SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+button { font: inherit; color: inherit; }
+
+.muted { color: var(--text-3); font-size: 12px; }
+
+/* ------------------------------------------------------------------ *
+ * 布局
+ * ------------------------------------------------------------------ */
+
+#app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+  padding: 12px 24px;
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+/* 2026-10-22 二十三轮（用户反馈）：去掉蓝点与「日程安排」副标题；
+   品牌名放在白底带阴影的块上，悬停与事项块同款抬升，点击打开「关于」。 */
+.brand {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow-block);
+  cursor: pointer;
+  transition: box-shadow var(--ease), transform var(--ease);
+}
+.brand:hover { box-shadow: var(--shadow); transform: scale(1.02); }
+.brand:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.brand-name { font-weight: 600; font-size: 17px; letter-spacing: .2px; line-height: 20px; }
+
+.header-right { display: flex; align-items: center; gap: 10px; }
+.today-chip {
+  color: var(--text-2);
+  font-size: 12px;
+  background: var(--surface-2);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 迭代 4（S26 / ADR-26）：左侧迷你月历已删除 → 主区域单列铺满 */
+.app-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--gap);
+  padding: var(--gap);
+  align-items: start;
+}
+
+/* ------------------------------------------------------------------ *
+ * 通用按钮 / 控件
+ * ------------------------------------------------------------------ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  /* 文字恒居中：.btn 有 min-width（btn-primary 72px / btn-arrow 30px）或被 flex 拉宽时，
+     默认的 flex-start 会把文字顶到左边。实测「创建」偏 −7.3px、「‹」偏 −3.7px。 */
+  justify-content: center;
+  text-align: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 1px solid transparent;
+  background: var(--surface-2);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background var(--ease), box-shadow var(--ease), transform var(--ease);
+  white-space: nowrap;
+}
+.btn:hover { background: var(--surface-3); }
+.btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.btn[disabled] { opacity: .4; cursor: not-allowed; }
+
+.btn-primary {
+  background: var(--primary);
+  border-color: transparent;
+  color: #fff;
+  font-weight: 600;
+  min-width: 72px;
+}
+.btn-primary:hover { background: var(--primary); box-shadow: 0 4px 14px rgba(0, 122, 255, .35); }
+
+.btn-ghost { border-color: transparent; background: transparent; }
+.btn-ghost:hover { background: var(--surface-2); }
+
+.btn-icon { padding: 6px 11px; font-size: 16px; line-height: 1; }
+
+.btn-danger { border-color: transparent; color: var(--danger); background: var(--danger-weak); font-weight: 600; }
+.btn-danger:hover { background: rgba(255, 59, 48, .16); }
+
+.btn-sm { padding: 3px 10px; font-size: 12px; }
+
+.switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+/* 迭代 7（F-50）：所有「是否型」选项统一为滑块（原生 checkbox 视觉重置，键盘/读屏不变）
+   规范 12 / LA-5：滑块改 iOS 观感（轨道灰 / 选中绿），几何与 :checked::after 声明保留（SC-55） */
+.switch input[type=checkbox] {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  position: relative;
+  width: 34px;
+  height: 18px;
+  margin: 0;
+  border-radius: 999px;
+  background: rgba(120, 120, 128, .32);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background var(--ease);
+}
+/* 2026-10-20（用户反馈）：圆形必须**垂直居中**。旧写法 top:1px + 14px 在 18px 轨道里
+   底边余 3px、上边余 1px（差 2px），放大后肉眼可见偏上。改用 50% + translateY(-50%)，
+   与轨道高度解耦 —— 以后改轨道高度也不会再偏。 */
+.switch input[type=checkbox]::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 1px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
+  transform: translateY(-50%);
+  transition: transform var(--ease);
+}
+.switch input[type=checkbox]:checked { background: var(--ok); }
+.switch input[type=checkbox]:checked::after { transform: translate(16px, -50%); }
+.switch input[type=checkbox]:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+/* 单选（修改范围）保持原生圆点语义，不套滑块 */
+.switch input[type=radio] { accent-color: var(--primary); margin-right: 2px; }
+
+.banners { display: flex; flex-direction: column; gap: 8px; padding: 0 var(--gap); }
+.banners:not(:empty) { padding-top: var(--gap); }
+
+.banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  font-size: 13px;
+  box-shadow: var(--shadow);
+}
+.banner-warn { background: var(--warn-weak); border-color: transparent; color: var(--text); }
+.banner-danger { background: var(--danger-weak); border-color: transparent; color: var(--text); }
+.banner-info { background: var(--primary-weak); border-color: transparent; color: var(--text); }
+.banner-body { flex: 1; }
+.banner-actions { display: flex; gap: 6px; }
+.banner .btn { padding: 2px 10px; font-size: 12px; }
+
+/* ------------------------------------------------------------------ *
+ * 卡片面板
+ * ------------------------------------------------------------------ */
+
+/* 规范 12 / R-L2：面板是 pin 展开卡的祖先 → 只用半透明底色，不上 backdrop-filter */
+/* 迭代 10 批次 4（条8）：整视图框进一张**白卡**（暗色自动取 --surface 深色卡面）；
+   原为毛玻璃半透明，与「白色背景框住」的口径不符。 */
+.panel-day {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+}
+
+.panel-day { padding: 24px; min-height: 420px; }
+
+/* ---------- 迭代 10 批次 4（条8）：视图左右两栏 ---------- *
+ * 左：时间表（可长可短、页面滚动）；右：记录栏（1/4~1/3 宽、独立白底、sticky 相对静止）。
+ * 右栏宽用 clamp 夹在 240~380px：在 1280 视口下约 28%，符合「1/4~1/3」。 */
+.view-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(240px, 27%, 380px);
+  gap: 20px;
+  align-items: start;
+}
+.view-main { min-width: 0; }
+
+.side-rail {
+  position: sticky;
+  /* 顶栏是 sticky（约 56px），留 12px 呼吸位，避免压在顶栏下面 */
+  top: 68px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  /* 与时间表等高：贴住视口可用高度 */
+  height: calc(100vh - 96px);
+  min-height: 320px;
+  padding: 14px;
+  border-radius: var(--radius);
+  /* 独立白底：比白卡再亮一级（浅色为纯白，暗色为 --surface 之上的一档） */
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  /* 批次 5：完成台可堆多条事项，超出时在右栏内部滚动（不改变栏高、不影响 sticky） */
+  overflow-y: auto;
+}
+html[data-theme='dark'] .side-rail { background: var(--surface-2); }
+
+/* 周视图：周表自身有 max-height（内部滚动）→ 让右栏由 grid 拉伸到与周表等高，而不是贴满视口 */
+.week-view .view-body { align-items: stretch; }
+.week-view .side-rail { height: auto; max-height: calc(100vh - 96px); }
+
+/* 记录区吃掉右栏剩余高度（textarea 撑满，避免底部留大片空白） */
+.side-rail .notes-section {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.side-rail .notes-section .notes-input {
+  flex: 1 1 auto;
+  resize: none;
+  min-height: 96px;
+}
+
+/* 事项完成台（批次 5：拖入 + 三种计时） */
+.finish-dock {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  min-height: 148px;
+  padding-bottom: 12px;
+}
+/* 标题行：音效铃铛贴到右上角（不跟标题挤在一起） */
+.finish-dock .section-head { align-items: center; }
+.finish-dock-tools { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
+
+.finish-dock-body {
+  flex: 0 0 auto;
+  min-height: 96px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 6px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  transition: border-color .16s ease, background .16s ease;
+}
+/* 拖拽经过时高亮整块区域 */
+.finish-dock.is-drop-target .finish-dock-body {
+  border-color: var(--primary);
+  background: var(--primary-weak);
+}
+
+/* ---------- 完成台条目 ---------- */
+.dock-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 9px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  animation: dock-item-in .18s cubic-bezier(.4, 0, .2, 1);
+}
+.dock-item-head { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.dock-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dock-chip {
+  flex: 0 0 auto;
+  font-size: 9px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 999px;
+  color: var(--cat, var(--text-2));
+  background: var(--cat-bg, var(--surface-2));
+  white-space: nowrap;
+}
+.dock-back {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.dock-back:hover { background: var(--surface-3); color: var(--text); }
+
+.dock-clock {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: .5px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: var(--text);
+}
+.dock-clock.is-done { color: var(--warn); }
+
+.dock-stage { display: flex; flex-direction: column; gap: 6px; animation: dock-swap-in .16s cubic-bezier(.4, 0, .2, 1); }
+.dock-actions { display: flex; gap: 5px; }
+.dock-actions .btn {
+  flex: 1 1 0;
+  min-width: 0;
+  justify-content: center;
+  font-size: 11px;
+  padding: 4px 6px;
+}
+.dock-modes { display: flex; gap: 4px; }
+.dock-modes .dock-mode {
+  flex: 1 1 0;
+  min-width: 0;
+  justify-content: center;
+  font-size: 10px;
+  padding: 3px 2px;
+}
+.dock-modes .dock-mode.is-active { background: var(--primary-weak); color: var(--primary); font-weight: 600; }
+.dock-panel { display: flex; flex-direction: column; gap: 6px; }
+/* 时长滚轮（仿建事项的时间「密码锁」：中间行一条浅灰高亮带、无滚动条、选中项主色加粗）。
+   ① 只在「设置」阶段出现（开始计时即收起，重置后再现）—— 渲染与否由 JS 决定；
+   ② 列宽从表单里的固定 56px 改成等分：倒计时三列（时 / 分 / 秒）在窄栏里也放得下；
+   ③ 高亮带横跨所有列、压在中行（top:50% + translateY(-50%)，高 = 条目高），与表单同款。 */
+.dock-fields { display: flex; gap: 2px; margin-bottom: 2px; }
+.dock-field-cap {
+  flex: 1 1 0;
+  min-width: 0;
+  text-align: center;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--text-3);
+}
+.dock-wheels { position: relative; display: flex; align-items: center; gap: 2px; }
+.dock-wheels::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: var(--wheel-item-height);
+  transform: translateY(-50%);
+  background: var(--surface-3);
+  border-radius: var(--radius-xs);
+  pointer-events: none;
+  z-index: 0;
+}
+.dock-wheel-box { flex: 1 1 0; min-width: 0; }
+.dock-wheels .dp-wheel { width: 100%; }
+.dock-wheels .dp-wheel-item { font-size: 13px; }
+/* 分隔冒号必须压在高亮带之上（带子是定位元素 z-index:0，非定位的内联元素会被它盖住） */
+.dock-wheel-sep { position: relative; z-index: 1; flex: 0 0 auto; font-weight: 700; color: var(--text-2); }
+.dock-select { width: 100%; padding: 4px 6px; font: inherit; font-size: 12px; border-radius: var(--radius-xs); border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+.dock-phase { margin: 0; font-size: 11px; font-weight: 600; text-align: center; color: var(--primary); }
+.dock-phase[data-phase='break'] { color: var(--ok); }
+
+/* 拖拽中的源：半透明 + 轻微缩小，明确「正在搬走」 */
+.is-dragging { opacity: .45; }
+
+@keyframes dock-item-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes dock-swap-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* 窄屏回退：右栏折到时间表下方，取消 sticky 与定高 */
+@media (max-width: 1080px) {
+  .view-body { grid-template-columns: minmax(0, 1fr); }
+  .side-rail { position: static; height: auto; min-height: 0; }
+  .side-rail .notes-section .notes-input { min-height: 120px; }
+}
+
+/* ------------------------------------------------------------------ *
+ * 迭代 4（S26 / ADR-26）：迷你月历模块（src/views/calendar.js）与其
+ * .cal-* / .calendar-foot 样式已随左侧栏一并删除（月视图见 styles/month.css）。
+ * ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ *
+ * 单日视图
+ * ------------------------------------------------------------------ */
+
+.day-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+  margin-bottom: 14px;
+}
+.day-title { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -.2px; font-variant-numeric: tabular-nums; }
+.day-sub { color: var(--text-3); font-size: 12px; margin-top: 2px; }
+
+/* 2026-10-22（二十二轮）：「日期导航 + 新建」同一行成组。
+ * 方案 A：浅灰玻璃轨道 + 白色凸起中段 + 透明箭头段。
+ * 方案 B：新建按钮用毛玻璃圆形，直径与轨道高度严格相等（都是 32px）。 */
+.head-actions { --date-nav-h: 32px; display: flex; align-items: center; gap: 8px; flex: none; }
+.date-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: var(--date-nav-h);
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  -webkit-backdrop-filter: blur(14px) saturate(180%);
+  backdrop-filter: blur(14px) saturate(180%);
+}
+.date-nav-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-width: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background var(--ease), color var(--ease), box-shadow var(--ease);
+}
+.date-nav-btn:hover { background: rgba(120, 120, 128, .14); color: var(--text); }
+.date-nav-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.date-nav-btn.is-current {
+  min-width: 62px;
+  padding: 0 16px;
+  background: var(--seg-active);
+  color: var(--seg-active-text);
+  font-weight: 600;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .14), inset 0 1px 0 rgba(255, 255, 255, .7);
+}
+.date-nav-btn.is-current:hover { background: var(--seg-active); }
+.date-nav-arrow { min-width: 28px; width: 28px; padding: 0; font-size: 16px; line-height: 1; }
+
+.btn-add-round {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--date-nav-h);
+  height: var(--date-nav-h);
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, .62);
+  border-radius: 50%;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(14px) saturate(180%);
+  backdrop-filter: blur(14px) saturate(180%);
+  color: var(--text);
+  font: inherit;
+  font-size: 21px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .06), inset 0 1px 0 rgba(255, 255, 255, .75);
+  transition: background var(--ease), box-shadow var(--ease), transform var(--ease);
+}
+.btn-add-round:hover {
+  background: rgba(255, 255, 255, .92);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, .12), inset 0 1px 0 #fff;
+  transform: translateY(-1px);
+}
+.btn-add-round:active { transform: translateY(0) scale(.96); }
+.btn-add-round:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16); }
+html[data-theme='dark'] .btn-add-round:hover { background: rgba(88, 88, 90, .92); }
+
+/* 时间轴 */
+.timeline-section { margin-bottom: 16px; }
+.timeline-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding-bottom: 4px;
+}
+.timeline-inner {
+  position: relative;
+  /* 迭代 4（ADR-19）：宽度由 JS 设为 CAT_LABEL_WIDTH + geometry.axisLength（不再用 --px-per-hour × 24） */
+}
+
+.timeline-ruler {
+  height: var(--ruler-height);
+  position: relative;
+  border-bottom: 1px solid var(--border);
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  /* 迭代 4（US-25）：整日 repeating-linear-gradient 底纹已删除 —— 压缩轴下它是错的；
+     刻度与小时/半小时竖线改由 JS 按 computeAxisGeometry().getX() 逐条放置（.tl-gridline）。 */
+}
+.ruler-tick {
+  position: absolute;
+  top: 4px;
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  transform: translateX(3px);
+  pointer-events: none;
+}
+
+.timeline-track {
+  position: relative;
+  min-height: var(--lane-height);
+  /* 迭代 4（US-25）：整日渐变底纹同样删除，竖线由 JS 生成的 .tl-gridline 提供 */
+}
+
+.timeline-now {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--danger);
+  z-index: 3;
+  pointer-events: none;
+}
+.timeline-now::before {
+  content: "";
+  position: absolute;
+  top: -4px; left: -3px;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+}
+
+.timeline-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  padding-left: 12px;
+  color: var(--text-3);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+/* 时段块（美化迭代 10：去整块类别填充与边框 → 中性毛玻璃；类别色移到标题右侧的胶囊） */
+.tl-block {
+  position: absolute;
+  height: var(--block-height);
+  /* 2026-10-20（用户反馈）：展开后面板要把按钮「放得下」——
+     省略态只有 34px，展开后按钮会被压成 18px 且文字全截断。
+     单一常量：展开态宽度下限只在 .tl-block 上定义一次，各处只引用变量。
+     2026-10-21（用户反馈）：按钮改为**竖排**后不再需要并排三颗四字按钮的 200px；
+     96px 扣掉块内边距 16 + 面板内边距 4 仍有 76px，足够「取消紧急」一行。
+     --blk-expanded-fit-w 给「非省略但较窄」的日视图块（竖排按钮、允许适当超出）。 */
+  --blk-expanded-min-w: 96px;
+  --blk-expanded-fit-w: 96px;
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border-radius: var(--radius-sm);
+  /* 迭代 10 批次 1 反馈：常态投影（hover 时抬升到 --shadow） */
+  box-shadow: var(--shadow-block);
+  padding: 4px 10px;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  transition: box-shadow var(--ease), transform var(--ease);
+}
+.tl-block:hover { box-shadow: var(--shadow); transform: scale(1.02); z-index: 4; }
+.tl-block:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; z-index: 4; }
+/* 美化迭代 10：标题行 = [省略号] + 标题（不省略、可换行）；右侧 22px 让给右上角的胶囊 */
+.tl-block .tl-titlerow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding-right: 22px;
+}
+.tl-block .tl-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+  letter-spacing: .1px;
+  word-break: break-word;
+}
+/* 美化迭代 10 / 2026-10-20（用户裁定）：类别胶囊 = 类别**首字**，
+   固定在块**右上角**（绝对定位，不参与标题行排版）→ 任何宽度档位都能看到类型。
+   标题行右侧留出胶囊宽度，避免标题压到它下面。 */
+.tl-chip {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  flex: 0 0 auto;
+  font-size: 9px;
+  line-height: 1;
+  font-weight: 600;
+  padding: 2px 4px;
+  border-radius: 999px;
+  color: var(--cat, var(--text-2));
+  background: var(--cat-bg, var(--surface-2));
+  white-space: nowrap;
+  pointer-events: none;          /* 纯展示：点击穿透到块本身 */
+}
+/* 省略号（2026-10-20）：只在省略态出现，与类型首字同行、居左 */
+.tl-block .tl-dots {
+  display: none;
+  flex: 0 0 auto;
+  font-size: 14px;
+  line-height: 1;
+  font-weight: 700;
+  color: var(--text-3);
+  letter-spacing: .5px;
+}
+.tl-block .tl-time {
+  font-size: 10.5px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .2px;
+  line-height: 1.3;
+}
+.tl-block.is-done { opacity: .5; }
+.tl-block.is-done .tl-title { text-decoration: line-through; }
+/* 2026-10-20（用户裁定）：窄块只放不下「时间」，类型胶囊仍固定右上角 —— 不再隐藏胶囊 */
+.tl-block.is-narrow { align-items: center; padding: 0 4px; }
+/* 2026-10-20（用户反馈）：时间行的显隐**不再按宽度一刀切**（旧规则 `.is-narrow .tl-time{display:none}`）。
+ * 块高是按「时间行 + 标题 + 备注」的需求算的，一块 40px 宽但被撑到 200px 高的块，
+ * 时间明明放得下却被藏起来 →「又高又空还没有时间」。现在由 core/layout.js::dayBlockShowsTime
+ * 按剩余高度判定，放不下才由 JS 打上 .is-time-hidden。 */
+.tl-block.is-time-hidden .tl-time { display: none; }
+/* 窄块里的时间要能换行（"09:00–09:40" 在 40px 宽下是两行），字号略收 */
+.tl-block.is-narrow .tl-time { font-size: 10px; line-height: 1.25; }
+.tl-block.is-narrow .tl-title { font-size: 11px; }
+/* 2026-10-20（用户反馈）：窄块标题「一个字一行」——
+   45px 宽的块内宽只有 37px，再让位 17px 给右上角胶囊，标题只剩 20px
+   （11px 的字只放得下 1 个），于是「每个字后面都有空间却一字一行」。
+   把窄档胶囊收到 12px、让位收到 14px 后，44px 起就能排下 2 个字。
+   **让位值必须与 core/layout.js::titleChipReserve 的窄档常量同源**。 */
+.tl-block.is-narrow .tl-titlerow { gap: 3px; padding-right: 14px; }
+.tl-block.is-narrow .tl-chip { font-size: 8px; padding: 1px 2px; top: 2px; right: 2px; }
+/* 2026-10-20 三轮补（用户反馈：「每个字后面都有空间，却一个字一行 —— 标题文本框没铺满块？」）：
+   胶囊钉在**右上角**，实际只会压到**首行**，可上面的规则给每一行都让位 14px ——
+   43px 的块内宽 35px，标题只剩 21px，11px 的字只放得下 1 个（2 个要 22px），
+   于是每行 1 字、字后留 10px 空隙。让位只应发生在首行。
+   做法：标题行改成普通块容器，用 `::before` 造一个与胶囊**同宽同位**的 float，
+   首行让 12+2px、第 2 行起铺满块宽（43px 块 → 1 字 / 3 字 / 3 字）。
+   度量侧同步：core/layout.js::blockMetricOpts 的窄档带 chipFirstLineOnly。 */
+.tl-block.is-narrow:not(.is-omitted):not(.is-expanded):not(.is-peek) .tl-titlerow {
+  display: block;
+  padding-right: 0;
+}
+.tl-block.is-narrow:not(.is-omitted):not(.is-expanded):not(.is-peek) .tl-titlerow::before {
+  content: "";
+  float: right;
+  width: 12px;     /* = 胶囊（8px 字 + 左右各 2px 内边距），与 right:2px 合起来 14px 让位 */
+  height: 11px;    /* ≤ 一行（11px 字、行高 14.85px）→ 只让首行让位 */
+  margin-left: 2px;
+}
+/* 美化迭代 5（用户裁定）：紧急 = 标题文字变红，不再有左侧色条与淡红底 */
+.tl-block.is-urgent .tl-title { color: var(--danger); }
+/* 折叠态备注（迭代 8 / F-52）：块高由内容度量撑开（core/layout.js::blockHeightNeed），
+   备注自然换行完整显示；**不再有块内滚动条**（用户裁定去掉「块内滚动备注」） */
+.tl-block .tl-note {
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: visible;
+}
+
+/* 迭代 8（F-53）：窄到放不下内容（日视图 < 2 个汉字宽）→ 折叠态只留类别色块；
+   点击后由展开卡（加宽到 220px+ / 浮出）显示全部内容，故展开态覆盖下面的隐藏规则 */
+.tl-block.is-tiny > .tl-time,
+.tl-block.is-tiny > .tl-titlerow,
+.tl-block.is-tiny > .tl-note { display: none; }
+.tl-block.is-expanded.is-tiny > .tl-time,
+.tl-block.is-expanded.is-tiny > .tl-note { display: block; }
+.tl-block.is-expanded.is-tiny > .tl-titlerow { display: flex; }
+
+/* ============================================================
+ * 2026-10-20（用户裁定）：**省略态** —— 放不下标题时
+ *   只显示「省略号 + 类别首字」，而不是什么都不显示。
+ *   min-width 是「整体把时间轴让到位」的口径：块宽不足 34px 时也按 34px 渲染，
+ *   保证「…」+ 首字一定放得下（与 core/layout.js 的 BLOCK_OMIT_MIN_W 同步）。
+ *   比 17px 更窄的块（用户手动调小 pxPerHour 才会出现）走上面的 .is-tiny。
+ * ============================================================ */
+.tl-block.is-omitted {
+  min-width: 34px;
+  /* 2026-10-20（用户反馈）：省略号要在块里**居中**，不再贴左上角。
+     省略态块高统一走 42px 基线，胶囊钉在右上角（y 2–12），
+     所以「…」可以两个方向都居中 —— 垂直上自然让开胶囊，不会被它压住。 */
+  justify-content: center;
+  align-items: center;
+  padding: 4px;
+}
+/* 省略态只留「…」+ 首字：标题在 .tl-titlerow 内，必须用后代选择器（不能用 >） */
+.tl-block.is-omitted .tl-title,
+.tl-block.is-omitted > .tl-time,
+.tl-block.is-omitted > .tl-note { display: none; }
+.tl-block.is-omitted .tl-dots { display: block; }
+/* 居中口径：让位归零（胶囊在上方，不占这一行的宽），省略号取块内真中心 */
+.tl-block.is-omitted .tl-titlerow { gap: 0; padding-right: 0; justify-content: center; }
+.tl-block.is-omitted .tl-chip { font-size: 8px; padding: 1px 3px; top: 2px; right: 3px; }
+
+/* 同名展开态（点击后）仍按展开卡显示按钮；省略号的隐藏交给 .is-expanded 的规则。
+   2026-10-20（用户反馈）：展开态不能再缩回 34px —— 按钮要「填满 + 居中」，
+   面板必须给到可读宽度（值来自 .tl-block 上的 --blk-expanded-min-w）。 */
+.tl-block.is-expanded.is-omitted { min-width: var(--blk-expanded-min-w); }
+
+/* ============================================================
+ * 2026-10-20（用户裁定）：**悬停预览** —— 光标移到省略/微块上时自动展开，
+ *   按内容自然尺寸（宽高都可超出原块，不必等于原大小），移开即复原。
+ *   只由 itemcard 的 mouseenter/mouseleave 添加/移除 .is-peek。
+ *   min-height 保留原块高：日视图块宽与时长相乘，被省略的块必然很矮（≤46px），
+ *   内容只会比它更高，保底不会出现「缩回去露出底板」；宽度下限由 CSS 给，
+ *   原块比下限更宽时 itemcard 用内联 min-width 兜住「仍覆盖原块」。
+ *   （周视图不同：那里窄块可以是 3 小时的高块，所以 min-height 取 0 按内容走。）
+ * ============================================================ */
+.tl-block.is-peek {
+  width: auto !important;
+  min-width: 150px;
+  max-width: 260px;
+  height: auto !important;
+  min-height: var(--block-h, 34px);
+  z-index: 9;
+  align-items: stretch;
+  padding: 4px 10px;
+  transform: none;
+  box-shadow: var(--shadow-lg);
+}
+.tl-block.is-peek > .tl-titlerow { display: flex !important; padding-right: 22px !important; }
+.tl-block.is-peek > .tl-time { display: block !important; }
+.tl-block.is-peek > .tl-note { display: block !important; max-height: 3.8em; overflow: hidden; }
+.tl-block.is-peek .tl-dots { display: none !important; }
+.tl-block.is-peek .tl-title { display: block !important; font-size: 13px; }
+.tl-block.is-peek .tl-chip { font-size: 9px; padding: 2px 4px; top: 2px; right: 4px; }
+
+/* 迭代 6（F-39）：折叠态的完成勾选框已下线（完成状态由 .is-done 表达，右键切换） */
+
+/* 无时段列表 */
+.section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.section-head h2 { font-size: 14px; margin: 0; }
+.untimed-section { margin-bottom: 16px; }
+.untimed-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+
+.untimed-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  /* 2026-10-21 十四轮（用户反馈）：未排事项改成带阴影的白色块；
+     悬停与 .tl-block 同款抬升（--shadow-block → --shadow + scale(1.02)）。 */
+  background: var(--surface);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-block);
+  /* 迭代 10 条13：整行都是可点、可拖、可悬停的区域（此前只有文字按钮响应） */
+  cursor: pointer;
+  transition: box-shadow var(--ease), transform var(--ease), background var(--ease), border-color var(--ease);
+}
+/* 悬停高亮整行：内层 .ui-main 不再单独高亮（否则只有文字区变色） */
+.untimed-item:hover { box-shadow: var(--shadow); transform: scale(1.02); z-index: 4; }
+.untimed-item:hover .ui-main { background: none; }
+.untimed-item.is-done { opacity: .5; }
+.untimed-item.is-done .ui-title { text-decoration: line-through; }
+/* 拖动排序：来源淡出，目标位置画一条主色落点线 */
+.untimed-item.is-dragging { opacity: .45; }
+.untimed-item.is-drop-before::before,
+.untimed-item.is-drop-after::after {
+  content: '';
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--primary);
+}
+.untimed-item.is-drop-before::before { top: -3px; }
+.untimed-item.is-drop-after::after { bottom: -3px; }
+.ui-seq {
+  width: 18px;
+  text-align: right;
+  color: var(--text-3);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  flex: none;
+  opacity: .8;
+}
+/* 迭代 6（F-39）：.untimed-item .ui-check 随勾选框一并下线 */
+.ui-main {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ui-main:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.ui-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 美化迭代 15：类别标签改为 8px 小色点（悬停显示类别名） */
+.ui-cat { width: 8px; height: 8px; border-radius: 50%; padding: 0; flex: none; }
+/* 迭代 10 条13：.ui-actions（▲▼）已随「拖动改次序」下线 */
+
+.empty-hint {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+/* 记录栏 */
+/* 迭代 10 批次 4（条8）：去掉区域级横向灰线（原 border-top），改由侧栏自身的白底与留白分区 */
+.notes-section { padding-top: 14px; }
+.notes-section:first-child { padding-top: 0; }
+.notes-input {
+  width: 100%;
+  resize: vertical;
+  min-height: 78px;
+  padding: 10px 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font: inherit;
+  color: var(--text);
+  transition: background var(--ease), box-shadow var(--ease);
+}
+.notes-input:focus { outline: none; border-color: var(--primary); background: var(--surface); box-shadow: 0 0 0 4px rgba(0, 122, 255, .15); }
+
+/* ------------------------------------------------------------------ *
+ * 弹窗
+ * ------------------------------------------------------------------ */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .28);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 40px 16px;
+  overflow-y: auto;
+  z-index: 50;
+  animation: dp-backdrop-in 160ms ease-out;
+}
+.modal-backdrop.is-centered { align-items: center; }
+@keyframes dp-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.modal {
+  /* 2026-10-20（用户反馈）：设置与创建事项的版面一律用白底。
+     旧写法取 --glass（半透明 + 毛玻璃），遮罩一透上来整块发灰，读起来像禁用态。
+     改成实色 --surface：浅色主题为纯白，暗色主题为 --surface 深色卡面（自动跟随）。 */
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  width: 100%;
+  max-width: 520px;
+  border: 1px solid var(--border);
+  animation: dp-modal-in 200ms cubic-bezier(.2, .8, .2, 1);
+}
+@keyframes dp-modal-in {
+  from { opacity: 0; transform: translateY(8px) scale(.985); }
+  to { opacity: 1; transform: none; }
+}
+.modal.modal-wide { max-width: 680px; }
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.modal-title { font-size: 16px; font-weight: 600; margin: 0; }
+.modal-body { padding: 18px 20px; }
+/* 关于（2026-10-22 二十六轮）：节假日数据缺口的说明从顶部蓝条移到这里 */
+.about-body { display: flex; flex-direction: column; gap: 12px; }
+.about-note { margin: 0; color: var(--text-2); font-size: 13px; line-height: 1.7; }
+.modal-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--border);
+  /* 2026-10-20（用户反馈）：整块白底 —— 底部原来是 --surface-2 的灰条，与弹窗主体割成两段 */
+  background: var(--surface);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+.modal-foot .spacer { margin-right: auto; }
+
+/* 表单（规范 12 / LA-5：输入框无边框浅灰填充 + 聚焦蓝光） */
+.field { margin-bottom: 14px; }
+.field > label, .field-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  margin-bottom: 5px;
+}
+/* 2026-10-21（用户反馈）：`.field > label` 的 display:block 优先级高于 `.switch`，
+   开关退回行内基线对齐 —— 滑块偏上、文字偏下。显式提高选择器优先级，锁死 18px 行高。 */
+.field > label.switch {
+  display: inline-flex;
+  align-items: center;
+  line-height: 18px;
+}
+.field input[type="text"],
+.field input[type="date"],
+.field input[type="time"],
+.field select,
+.field textarea {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font: inherit;
+  color: var(--text);
+  transition: background var(--ease), box-shadow var(--ease);
+}
+.field textarea { resize: vertical; min-height: 62px; }
+.field input:focus, .field select:focus, .field textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+  background: var(--surface);
+  box-shadow: 0 0 0 4px rgba(0, 122, 255, .15);
+}
+.field-row { display: flex; gap: 10px; }
+.field-row > .field { flex: 1; }
+
+/* ------------------------------------------------------------------ *
+ * 2026-10-20（用户反馈）：数值滑条统一为「已划区蓝色 + 白色圆形滑块」
+ *
+ * 旧实现用原生 range（Chromium 自带蓝条），在设置里与旁边的 iOS 开关
+ * 是两套观感。这里自定义轨道与滑块：
+ *   · 轨道 4px、通铺整行（用户要求「横向顶满」）；
+ *   · 已划到的部分用 --range-fill（JS 写百分比）做线性渐变截断，其余浅灰；
+ *   · 圆形滑块 16px 纯白 + 阴影，margin-top = (4 − 16) / 2 = −6px 精确居中。
+ * 自定义属性会继承进 ::-webkit-slider-runnable-track，故渐变可在伪元素里读 --range-fill。
+ * ------------------------------------------------------------------ */
+.field input[type="range"].range {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 18px;   /* 触摸热区；轨道在伪元素里画 4px */
+  margin: 2px 0 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.field input[type="range"].range:focus { outline: none; }
+.field input[type="range"].range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(to right,
+    var(--primary) 0 var(--range-fill, 0%),
+    rgba(120, 120, 128, .28) var(--range-fill, 0%) 100%);
+}
+.field input[type="range"].range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;   /* (轨道 4 − 滑块 16) / 2 → 垂直居中 */
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, .08);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .28);
+  cursor: grab;
+}
+.field input[type="range"].range:active::-webkit-slider-thumb { cursor: grabbing; }
+.field input[type="range"].range::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(120, 120, 128, .28);
+}
+.field input[type="range"].range::-moz-range-progress {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--primary);
+}
+.field input[type="range"].range::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, .08);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .28);
+}
+
+/* 标签行 = 名称 + 当前值（值不再挤在滑条右侧，滑条才能顶满整行） */
+.range-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.range-head .field-label { margin-bottom: 5px; }
+.range-value { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+
+/* 设置页「显示」分区：六个是否型选项固定两列、三行（2026-10-22 二十四轮用户反馈）；
+   行距与网格到下一控件的间距都取同一个 10px，任何一项都不再整行跨列。 */
+.switch-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 18px;
+  margin-bottom: 10px;
+}
+.switch-grid .field { margin-bottom: 0; }
+
+/* ------------------------------------------------------------------ *
+ * 迭代 7（F-48）：日期「日历簿」+ 时间「密码锁」控件
+ * ------------------------------------------------------------------ */
+.dp-date-field, .dp-time-field { position: relative; }
+.dp-date-btn, .dp-time-btn {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--ease);
+}
+.dp-date-btn:hover, .dp-time-btn:hover { background: var(--surface-3); }
+.dp-date-btn:focus-visible, .dp-time-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: -1px; }
+/* 美化迭代 7：浮层改为**不透明**底（用户裁定：背后文字不得透过浮层），毛玻璃只留给背景层 */
+.dp-pop {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 232px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+.dp-pop[hidden] { display: none; }
+
+/* 下拉控件（美化迭代 7）：按钮与「日历簿」同款观感；浮层为不透明列表 */
+.dp-select-field { position: relative; }
+.dp-select-btn {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  transition: background var(--ease);
+}
+.dp-select-btn:hover { background: var(--surface-3); }
+.dp-select-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: -1px; }
+.dp-select-label { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dp-select-caret { color: var(--text-3); font-size: 10px; flex: none; }
+.dp-select-pop { min-width: 180px; padding: 6px; }
+.dp-select-item {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--ease);
+}
+.dp-select-item:hover { background: var(--surface-2); }
+.dp-select-item.is-selected { color: var(--primary); font-weight: 600; }
+/* 「密码锁」滚轮（迭代 8 / F-57）：读取位 = 中间行；**一条**浅灰高亮带横跨时/分两列；
+   数字本身没有背景框与边框；侧边滚动条一律隐藏（改值靠滚轮 / 拖拽 / 方向键 / 点选）。 */
+.dp-wheels { display: flex; align-items: center; justify-content: center; gap: 4px; }
+/* 分隔冒号必须**压在高亮带之上**：带子是定位元素（z-index:0），非定位的内联元素会被它盖住 */
+.dp-wheel-sep, .dp-lock-sep { position: relative; z-index: 1; font-weight: 700; color: var(--text-2); }
+.dp-wheels, .dp-lock { position: relative; }
+.dp-wheels::before, .dp-lock::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: var(--wheel-item-height);
+  transform: translateY(-50%);
+  background: var(--surface-3);
+  border-radius: var(--radius-xs);
+  pointer-events: none;
+  z-index: 0;
+}
+.dp-wheel {
+  position: relative;
+  z-index: 1;
+  width: 56px;
+  height: calc(var(--wheel-item-height) * var(--wheel-visible-rows));
+  /* 上下留白 = (可见行数 − 1) / 2 × 条目高：让首/末项也能滚到正中间（中间行 = 读取位） */
+  padding: calc((var(--wheel-visible-rows) - 1) / 2 * var(--wheel-item-height)) 0;
+  overflow-y: auto;
+  scroll-snap-type: y mandatory;
+  overscroll-behavior: contain;
+  background: transparent;
+  border: 0;
+  text-align: center;
+  cursor: grab;
+  scrollbar-width: none;          /* 去掉侧边进度条 */
+  -ms-overflow-style: none;
+}
+.dp-wheel::-webkit-scrollbar { width: 0; height: 0; display: none; }
+/* 迭代 10 反馈（条11/条12/条13）：**只有按住拖动**才关 scroll-snap。
+   mandatory 会在每次程序化 scrollTop 之后回吸到最近条目 —— 拖动时就是「走一下被拽回去」。
+   真正的开关是 JS 写的**内联** scroll-snap-type（build() 里内联 'y mandatory' 优先于本规则），
+   本规则兜底 + 提供拖拽光标。滚轮/触控板**不走这条路**：条13 起由 JS 按整格消化
+   （preventDefault + 累加器），全程保持 'y mandatory'，落点永远是条目高的整数倍。 */
+.dp-wheel.is-drag-scroll { scroll-snap-type: none; cursor: grabbing; }
+.dp-wheel-item {
+  height: var(--wheel-item-height);
+  line-height: var(--wheel-item-height);
+  scroll-snap-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+  user-select: none;
+}
+/* 读取位只由那条高亮带表示：数字没有背景框（R-49） */
+.dp-wheel-item.is-active { color: var(--primary); font-weight: 700; }
+
+/* 日历簿（迭代 8 / F-55：类名与 picker 实际产出一一对齐）
+   picker 产出：.dp-calendar > .dp-cal-head(> .dp-cal-prev / .dp-cal-title / .dp-cal-next / .dp-cal-today)
+                > .dp-cal-weekdays > span.dp-cal-wd ×7 > .dp-cal-grid > button.dp-cal-day */
+.dp-cal-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 8px; }
+.dp-cal-title { font-weight: 600; font-size: 13px; cursor: pointer; flex: 1; text-align: center; }
+.dp-cal-prev, .dp-cal-next, .dp-cal-today {
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--surface-2);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.2;
+  padding: 3px 10px;
+  cursor: pointer;
+  color: var(--text);
+  transition: background var(--ease);
+}
+.dp-cal-prev:hover, .dp-cal-next:hover, .dp-cal-today:hover { background: var(--surface-3); }
+/* 关键（用户条目 3）：星期表头与日期格必须用**完全相同的网格参数**才能逐列对齐 */
+.dp-cal-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+  margin-bottom: 2px;
+}
+.dp-cal-wd {
+  text-align: center;
+  font-size: 10px;
+  color: var(--text-3);
+  line-height: 20px;
+}
+.dp-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.dp-cal-day {
+  border: 0;
+  background: transparent;
+  border-radius: 50%;
+  height: 26px;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--text);
+}
+.dp-cal-day:hover { background: var(--surface-3); }
+.dp-cal-day.is-outside { opacity: .35; }
+.dp-cal-day.is-today { color: var(--primary); font-weight: 800; }
+.dp-cal-day.is-active { background: var(--primary); color: #fff; }
+.dp-cal-day.is-focus { outline: 2px solid var(--primary); outline-offset: -2px; }
+.field-error { color: var(--danger); font-size: 12px; margin-top: 3px; min-height: 15px; }
+.form-error {
+  background: var(--danger-weak);
+  border: 1px solid transparent;
+  color: var(--danger);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+.fieldset {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  margin: 0 0 12px;
+}
+.fieldset legend { font-size: 12px; font-weight: 600; color: var(--text-2); padding: 0 4px; }
+.inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.hint { color: var(--text-3); font-size: 12px; margin-top: 4px; }
+
+.weekdays { display: flex; gap: 4px; flex-wrap: wrap; }
+.weekday-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--ease);
+}
+.weekday-chip input { margin: 0; accent-color: var(--primary); }
+.weekday-chip.is-on { background: var(--primary-weak); color: var(--primary); font-weight: 600; }
+
+/* 详情 */
+.detail-row { display: flex; gap: 10px; padding: 5px 0; border-bottom: 1px dashed var(--border); }
+.detail-row:last-child { border-bottom: 0; }
+.detail-key { width: 72px; color: var(--text-3); font-size: 12px; flex: none; }
+.detail-val { flex: 1; word-break: break-word; }
+.pill { display: inline-block; border-radius: 999px; padding: 1px 9px; font-size: 12px; color: #fff; }
+
+/* Toast */
+.toast-wrap {
+  position: fixed;
+  left: 50%;
+  bottom: 26px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 80;
+  align-items: center;
+}
+.toast {
+  background: rgba(29, 29, 31, .85);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  color: #fff;
+  border-radius: 999px;
+  padding: 9px 18px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: var(--shadow-lg);
+  animation: toast-in .25s cubic-bezier(.4, 0, .2, 1);
+}
+.toast .btn { color: #7cc4ff; border-color: transparent; background: transparent; padding: 0 4px; font-weight: 600; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* 类别设置列表（规范 12 / LA-5：行高 ≥44px）
+   2026-10-21（用户反馈）：行改成与未排事项一致的白块 + 静止阴影 + 悬停抬升；整行拖动排序。 */
+.cat-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.cat-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-block);
+  cursor: grab;
+  transition: box-shadow var(--ease), transform var(--ease), background var(--ease), border-color var(--ease), opacity var(--ease);
+}
+.cat-item:hover { box-shadow: var(--shadow); transform: scale(1.02); z-index: 4; }
+.cat-item:active { cursor: grabbing; }
+.cat-item:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.cat-item.is-urgent { cursor: default; }
+.cat-item.is-dragging { opacity: .5; }
+.cat-item.is-drop-before::after,
+.cat-item.is-drop-after::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--primary);
+}
+.cat-item.is-drop-before::after { top: -5px; }
+.cat-item.is-drop-after::after { bottom: -5px; }
+.cat-swatch { width: 14px; height: 14px; border-radius: 5px; flex: none; border: 1px solid rgba(0,0,0,.1); }
+/* 2026-10-20：紧急类别的颜色固定，色块退化成「不可点的标记」——虚线边框 + 禁止光标，
+   让「这只是标识，不是按钮」一眼可辨，而不是点了没反应。 */
+.cat-swatch.is-locked {
+  cursor: not-allowed;
+  /* 虚线用 --text-3：rgba(0,0,0,.12) 在红块边缘几乎看不见，"锁定感"等于没做出来 */
+  border: 1px dashed var(--text-3);
+}
+.cat-name { flex: 1; min-width: 0; font-weight: 600; }
+.cat-name input { width: 100%; }
+/* 色板：19 色按 8 列网格排（红→紫→蓝→绿→黄→橙→棕→中性），最后一个落单也不参差 */
+.color-grid { display: grid; grid-template-columns: repeat(8, 22px); gap: 6px; }
+.color-dot {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+}
+.color-dot:hover { transform: scale(1.1); }
+.color-dot:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.color-dot.is-on { border-color: var(--text); box-shadow: 0 0 0 2px var(--surface); }
+
+.settings-section { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
+.settings-section:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
+.settings-section h3 { font-size: 13px; margin: 0 0 8px; }
+
+/* 无障碍：屏幕阅读器专用 */
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}

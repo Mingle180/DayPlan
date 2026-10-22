@@ -1,0 +1,292 @@
+/* ============================================================
+ * DayPlan · 周视图样式（迭代 4，ADR-27 三分后的独立写域）
+ *   归属：T38 建立基线，T47（迭代 4）扩展。
+ *   契约：docs/spec/07-iteration-4-delta.md DM-22 / DM-25 / DM-26 R-5·R-6·R-7、
+ *         F-29 / F-30 / US-24 / US-26 / US-28 / US-29
+ *   单一几何源（ADR-20）：纵向坐标由 JS 从 layoutWeek() 返回值写入内联样式，
+ *   本文件不含任何 pxPerHour / 时间刻度换算。
+ * ============================================================ */
+
+.week-view { display: flex; flex-direction: column; gap: 14px; }
+/* 迭代 8（F-52）：整周总宽可超过容器 → 横向滚动区（与日视图的横向滚动同性质） */
+.week-grid-scroll { overflow-x: auto; overflow-y: hidden; }
+.week-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+/* 迭代 10 批次 4（条8）：标题「日期-日期」字号加大，且与日视图标题同大（22px） */
+.week-title { font-size: 22px; font-weight: 600; margin: 0; letter-spacing: -.2px; font-variant-numeric: tabular-nums; }
+/* 规范 12 / LA-3：左上角与表头同款毛玻璃（week.js 写了内联底色，覆盖需 !important） */
+.wk-corner {
+  background: var(--glass) !important;
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+.week-scroll {
+  overflow: auto;
+  max-height: calc(100vh - 260px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  /* 迭代 10 反馈：表格底色与日视图 .timeline-scroll 同款浅灰（原为毛玻璃近透明） */
+  background: var(--surface-2);
+  box-shadow: var(--shadow);
+}
+/* 列宽由 JS 以内联 grid-template-columns 写入（迭代 8 / F-52 起为内容驱动的像素宽：
+ * 52px 轴列 + 每天「各构成类别列宽之和」；总宽可超过容器 → 由 .week-scroll 横向滚动）。
+ * 下面的静态规则只是 JS 未运行时的兜底（等宽 84px 起），运行时始终被内联样式覆盖。 */
+.week-grid { display: grid; grid-template-columns: 52px repeat(7, minmax(84px, 1fr)); }
+/* 规范 12 / LA-3：表头毛玻璃置顶（内容从其下滚过时呈毛玻璃通透） */
+.week-grid .wk-head {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  /* 迭代 10 批次 4（条8）：去掉表头下横线（区域级灰线），靠玻璃层次分区 */
+  padding: 6px 4px;
+  text-align: center;
+  font-size: 12px;
+  cursor: pointer;
+}
+/* 迭代 10 批次 2（条3）：表头只留星期（日期/农历下线，完整日期在 title/aria-label） */
+.wk-head .wk-dow { font-weight: 600; }
+/* 2026-10-21 用户口径：今天不再铺浅蓝底，只把「周几」标红 */
+.wk-head.is-today .wk-dow { color: var(--danger); }
+.wk-head:hover { background: var(--surface-3); }
+/* 列体：空白处可点（US-22.2 进入日视图），故整列 cursor:pointer；
+ * 事项块自身仍是折叠/展开（JS 阻止冒泡）。 */
+.wk-col { position: relative; border-left: 1px solid var(--border); cursor: pointer; }
+.wk-col:hover { background: rgba(120, 120, 128, .06); }
+/* 迭代 10 批次 1 二轮反馈：时间轴列用白底（与日视图刻度行的白面一致），
+ * 表格其余区域仍由 .week-scroll 的 --surface-2 提供浅灰 */
+.wk-axis { position: relative; background: var(--surface); }
+.wk-axis-tick {
+  position: absolute;
+  right: 4px;
+  font-size: 10px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  transform: translateY(-50%);
+}
+.wk-hourline {
+  position: absolute;
+  left: 0; right: 0;
+  border-top: 1px solid var(--border);
+  pointer-events: none;
+}
+/* 首末空闲折叠窄带（迭代 6 / F-38）：与日视图 .tl-idle 同口径，但在纵向轴上是横向带。
+ * 轴列与 7 个日列各渲染一条（同位同高 → 拼成整行连续带）；日列窄带不参与点击。 */
+.wk-idle {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: rgba(120, 120, 128, .05);
+  border-top: 1px dashed var(--border-strong);
+  border-bottom: 1px dashed var(--border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  font-size: 10px;
+  pointer-events: none;
+  user-select: none;
+  /* z-index:0：与事项块同为「定位元素 + 同层」→ 按 DOM 顺序绘制（窄带在前、块在后），
+     避免极短事项块（高度下限 22px）越出 end 时被窄带盖住；展开卡另有 z-index:7 兜底。 */
+  z-index: 0;
+}
+.wk-idle.is-lead { border-top: 0; }
+.wk-idle.is-trail { border-bottom: 0; }
+/* 轴列窄带：宽度小，用悬停提示完整区间 */
+.wk-axis .wk-idle { pointer-events: auto; cursor: help; }
+.wk-item {
+  position: absolute;
+  background: var(--glass);
+  /* 2026-10-20（用户反馈）：展开面板的宽度下限（按钮要放得下、填满、居中）。
+     值只在 .wk-item 上定义一次，省略态的展开覆盖引用同一变量。 */
+  --wk-expanded-min-w: 150px;
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border-radius: var(--radius-sm);
+  /* 迭代 10 批次 1 反馈：常态投影（hover 时抬升到 --shadow） */
+  box-shadow: var(--shadow-block);
+  padding: 2px 6px;
+  overflow: hidden;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1.25;
+  transition: box-shadow var(--ease);
+}
+.wk-item:hover { box-shadow: var(--shadow); }
+.wk-item.is-done { opacity: .5; }
+.wk-item.is-done .wk-title { text-decoration: line-through; }
+/* 美化迭代 10 / 2026-10-20（用户裁定）：标题行 = [省略号] + 标题；类别胶囊取**首字**
+ * 并**固定在本块右上角**（绝对定位，不再挤在标题后面）→ 窄列也一定看得到类型。 */
+.wk-item .wk-titlerow { display: flex; align-items: center; gap: 4px; min-width: 0; padding-right: 17px; }
+.wk-item .wk-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: left;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 省略号：仅省略态可见 */
+.wk-item .wk-dots {
+  display: none;
+  flex: 0 0 auto;
+  font-size: 13px;
+  line-height: 1;
+  font-weight: 700;
+  color: var(--text-3);
+}
+.wk-chip {
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  flex: 0 0 auto;
+  font-size: 9px;
+  line-height: 1;
+  font-weight: 600;
+  padding: 1px 3px;
+  border-radius: 999px;
+  color: var(--cat, var(--text-2));
+  background: var(--cat-bg, var(--surface-2));
+  white-space: nowrap;
+  pointer-events: none;
+}
+.wk-item .wk-time {
+  color: var(--text-3);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  line-height: 1.25;
+}
+/* 美化迭代 5（用户裁定）：紧急 = 标题文字变红，不再有左侧色条与淡红底 */
+.wk-item.is-urgent .wk-title { color: var(--danger); }
+/* 折叠态备注（迭代 8 / F-52）：列宽/块宽由内容决定，备注自然换行完整显示；
+   **不再有块内滚动条**（用户裁定去掉「块内滚动备注」） */
+.wk-item .wk-note {
+  margin-top: 1px;
+  font-size: 10px;
+  line-height: 1.25;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: visible;
+}
+/* 迭代 8（F-53）：周视图放不下时间/标题 → 折叠态只留色块；点击后展开卡显示全部 */
+.wk-item.is-tiny > .wk-time,
+.wk-item.is-tiny > .wk-titlerow,
+.wk-item.is-tiny > .wk-note { display: none; }
+.wk-item.is-expanded.is-tiny > .wk-time,
+.wk-item.is-expanded.is-tiny > .wk-note { display: block; }
+.wk-item.is-expanded.is-tiny > .wk-titlerow { display: flex; }
+
+/* ============================================================
+ * 2026-10-20（用户裁定）：**省略态** —— 放不下时间/标题时只显示「…」+ 类型首字，
+ *   而不是什么都不显示；连「…」+首字都放不下（更矮/更窄）才退回 .is-tiny。
+ * ============================================================ */
+.wk-item.is-omitted { display: flex; align-items: center; padding: 1px 4px; }
+/* 省略态只留「…」+ 首字：标题在 .wk-titlerow 内，必须用后代选择器（不能用 >） */
+.wk-item.is-omitted .wk-title,
+.wk-item.is-omitted > .wk-time,
+.wk-item.is-omitted > .wk-note { display: none; }
+.wk-item.is-omitted .wk-dots { display: block; }
+/* 2026-10-20（用户反馈）：省略号居中 —— 周视图的省略块可能只有 26px 高，
+   纵向居中会与右上角胶囊相撞，所以**只横向居中**，并且居中范围是
+   「块内宽 − 胶囊让位 15px」这块真正空着的区域。 */
+.wk-item.is-omitted .wk-titlerow { width: 100%; padding-right: 15px; justify-content: center; }
+/* 展开态要给按钮留可读宽度（同 .wk-item 上的变量）—— 仅限折叠时被省略/只剩色块的块，
+   普通块展开必须与原块完全重叠（2026-10-21 用户裁定）。 */
+.wk-item.is-expanded.is-expanded-grow,
+.wk-item.is-expanded.is-omitted,
+.wk-item.is-expanded.is-tiny {
+  height: auto !important;
+  min-height: var(--block-h, 30px);
+  min-width: var(--wk-expanded-min-w);
+}
+
+/* ============================================================
+ * 2026-10-20（用户裁定）：**悬停预览** —— 光标移到省略/微块上时自动展开，
+ *   按内容自然尺寸（宽高可超出原块），移开复原。由 itemcard 加/移除 .is-peek。
+ *   ① display:block：省略态是 display:flex（让「…」垂直居中），预览若沿用行布局，
+ *      .wk-time 会被挤出块外再被 overflow:hidden 裁掉（用户截图「悬停没有时间」），
+ *      标题也被挤成两行；预览必须回到「标题行在上、时间在下」的块布局。
+ *   ② min-height:0：高度按内容走，不再取原块高（--block-h），否则高块会撑出一片空白
+ *      （用户截图「用了不必要的高度」）。宽度下限由 CSS 给；
+ *      原块比下限更宽时，itemcard 用内联 min-width 兜住「仍覆盖原块」。
+ * ============================================================ */
+.wk-item.is-peek {
+  display: block;
+  width: auto !important;
+  min-width: 120px;
+  max-width: 240px;
+  height: auto !important;
+  min-height: 0;
+  z-index: 9;
+  padding: 3px 6px;
+  box-shadow: var(--shadow-lg);
+}
+.wk-item.is-peek > .wk-titlerow { display: flex !important; padding-right: 20px !important; }
+.wk-item.is-peek > .wk-time { display: block !important; }
+.wk-item.is-peek > .wk-note { display: block !important; max-height: 4em; overflow: hidden; }
+.wk-item.is-peek .wk-dots { display: none !important; }
+.wk-item.is-peek .wk-title {
+  display: block;
+  flex: 1 1 auto;
+  white-space: normal;          /* 预览时标题按自然宽度换行，不再单行省略 */
+}
+.wk-item .item-detail { flex: 1 1 auto; padding: 2px 0; gap: 4px; border-top: 0; background: transparent; justify-content: center; animation: dp-detail-in .16s cubic-bezier(.4, 0, .2, 1); }
+/* 迭代 7（F-44 / R-26）：展开态只留按钮。
+ * 2026-10-20（用户反馈）：用「flex 列 + align-items:stretch」——
+ *   省略态是 display:flex + align-items:center，展开后 .item-detail 会缩成按钮文字宽。
+ * 2026-10-21（用户裁定）：**非省略块展开后与原块完全重叠** —— 不再 height:auto、
+ *   不再 min-width；只有 .is-expanded-grow（折叠时省略或只剩色块）才允许放大。
+ * 2026-10-21（用户反馈）：周视图按钮**一律竖排，并铺满整个块高** ——
+ *   不再按宽高挑横排/四宫格；窄块把按钮压成竖排文字的问题由此根除。 */
+.wk-item.is-expanded {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  z-index: 7;
+}
+.wk-item.is-expanded > .wk-time,
+.wk-item.is-expanded > .wk-titlerow,
+.wk-item.is-expanded > .wk-note { display: none; }
+.wk-item.is-expanded .item-actions {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  gap: 3px;
+  flex: 1 1 auto;          /* 占满 .item-detail 的剩余高度 */
+  min-height: 0;
+}
+.wk-item.is-expanded .item-actions .btn {
+  width: 100%;
+  flex: 1 1 0;             /* 每颗均分块高（竖排铺满） */
+  min-height: 0;
+  padding: 1px 4px;
+  line-height: 1.15;
+  justify-content: center;
+  text-align: center;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 省略 / 微块展开是 height:auto（按内容定高），按钮保底 24px，避免被 flex:1 压扁 */
+.wk-item.is-expanded.is-expanded-grow .item-actions .btn { min-height: 24px; }
+/* US-24 / DM-25：被 overlay 临时 pin 成 position:fixed 的展开卡（脱离 .week-scroll 的裁切） */
+.wk-item.is-pinned-expand {
+  z-index: 60;
+  box-shadow: var(--shadow-lg);
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+/* 列宽权重刻度提示（可选，便于人眼核对 US-29） */
+.week-grid-legend { font-size: 11px; color: var(--text-3); }
+
+@media (max-width: 900px) {
+  .week-scroll { max-height: none; }
+}
