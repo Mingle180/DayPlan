@@ -94,8 +94,14 @@
 }
 .wk-idle.is-lead { border-top: 0; }
 .wk-idle.is-trail { border-bottom: 0; }
-/* 轴列窄带：宽度小，用悬停提示完整区间 */
-.wk-axis .wk-idle { pointer-events: auto; cursor: help; }
+/* 轴列窄带：宽度小，用悬停提示完整区间。
+ * 2026-10-22 用户裁定：左侧时间刻度列不画折叠窄带的虚线边界（只保留 7 个日列上的分段提示）。 */
+.wk-axis .wk-idle {
+  pointer-events: auto;
+  cursor: help;
+  border-top: 0;
+  border-bottom: 0;
+}
 .wk-item {
   position: absolute;
   background: var(--glass);

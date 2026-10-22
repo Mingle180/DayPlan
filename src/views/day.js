@@ -45,7 +45,8 @@
   var LABEL_PAD_PX = 8;
   var OVERFLOW_OFFSET_STEP = 8;
   var RULER_TICK_TOP = 4;
-  var GRIDLINE_STEP_MINUTES = 30;
+  /* 刻度贴边阈值：半个「00:00」标签约 15px；小于它就把标签改为贴边对齐 */
+  var RULER_TICK_EDGE_PAD = 16;
   var URGENT_CATEGORY_ID = 'urgent';
 
   /**
@@ -684,7 +685,7 @@
 
       els.track.style.height = contentHeight + 'px';
 
-      /* 小时 / 半小时竖线（横向轴专用，逐条由 JS 放置） */
+      /* 整点竖线（横向轴专用，逐条由 JS 放置） */
       renderGridlines(geometry, rate);
 
       /* 首末空闲段：竖直窄带，覆盖全部行组高度（US-25.3）；inner 坐标系 */
@@ -793,15 +794,23 @@
         ? Layout.axisTicks(geometry, { stepMinutes: 60 })
         : [];
       if (!ticks || !ticks.length) ticks = wholeDayTicks(geometry);
+      var axisLen = Number(geometry && geometry.axisLength);
+      if (!isFinite(axisLen) || axisLen <= 0) axisLen = 1440 * rate / 60;
       ticks.forEach(function (t) {
         if (t.minute >= 1440) return;
         if (t.outside) return;                 // 压缩区不绘制刻度线
+        var x = tickX(geometry, t);
+        /* 2026-10-22：标签由 CSS 以 translateX(-50%) 居中到刻度线；
+           贴着轴首尾的标签改贴边，避免滚出 / 被滚动容器裁掉。 */
+        var cls = 'ruler-tick';
+        if (x < RULER_TICK_EDGE_PAD) cls += ' is-edge-start';
+        else if (axisLen - x < RULER_TICK_EDGE_PAD) cls += ' is-edge-end';
         els.ruler.appendChild((function () {
           var tick = el('span', {
-            class: 'ruler-tick',
+            class: cls,
             text: (t.minute < 600 ? '0' : '') + Math.floor(t.minute / 60) + ':00'
           });
-          setPx(tick, 'left', labelWidth + tickX(geometry, t));
+          setPx(tick, 'left', labelWidth + x);
           setPx(tick, 'top', RULER_TICK_TOP);
           return tick;
         })());
@@ -824,12 +833,14 @@
       return out;
     }
 
-    /** 小时 / 半小时竖线（.tl-gridline，整点加 is-hour）；压缩区内不画（US-25.1）。 */
+    /** 整点竖线（.tl-gridline）：只画整点（2026-10-22 用户裁定删去半小时线）；
+     *  data-minute 供探针 / 冒烟核对；压缩区内不画（US-25.1）。 */
     function renderGridlines(geometry) {
-      for (var m = 0; m < 1440; m += GRIDLINE_STEP_MINUTES) {
+      for (var m = 0; m < 1440; m += 60) {
         if (isOutsideAxis(geometry, m)) continue;
         var line = el('div', {
-          class: 'tl-gridline' + (m % 60 === 0 ? ' is-hour' : ''),
+          class: 'tl-gridline',
+          'data-minute': String(m),
           'aria-hidden': 'true'
         });
         setPx(line, 'left', axisX(geometry, m));

@@ -193,16 +193,16 @@
 .tl-idle.is-lead { border-left: 0; }
 .tl-idle.is-trail { border-right: 0; }
 
-/* 小时/半小时竖线（由 JS 逐条放置，横向轴专用） */
+/* 整点竖线（由 JS 逐条放置，横向轴专用）。
+ * 2026-10-22 用户裁定：删去非整点（半小时）细线，只保留整点线。 */
 .tl-gridline {
   position: absolute;
   top: 0;
   bottom: 0;
   width: 0;
-  border-left: 1px solid var(--border);
+  border-left: 1px solid var(--border-strong);
   pointer-events: none;
 }
-.tl-gridline.is-hour { border-left-color: var(--border-strong); }
 
 /* ---------- 事项卡：折叠态补充 + 展开区（F-14 / F-26） ---------- */
 .item-star { color: var(--warn); font-size: 12px; line-height: 1; flex: none; }

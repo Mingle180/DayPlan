@@ -647,7 +647,7 @@ html[data-theme='dark'] .btn-add-round:hover { background: rgba(88, 88, 90, .92)
   -webkit-backdrop-filter: var(--glass-blur);
   backdrop-filter: var(--glass-blur);
   /* 迭代 4（US-25）：整日 repeating-linear-gradient 底纹已删除 —— 压缩轴下它是错的；
-     刻度与小时/半小时竖线改由 JS 按 computeAxisGeometry().getX() 逐条放置（.tl-gridline）。 */
+     刻度与整点竖线改由 JS 按 computeAxisGeometry().getX() 逐条放置（.tl-gridline）。 */
 }
 .ruler-tick {
   position: absolute;
@@ -655,9 +655,13 @@ html[data-theme='dark'] .btn-add-round:hover { background: rgba(88, 88, 90, .92)
   font-size: 11px;
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
-  transform: translateX(3px);
+  /* 2026-10-22 用户裁定：刻度文字的中心与对应整点竖线重合（原为从线右侧 3px 起排） */
+  transform: translateX(-50%);
   pointer-events: none;
 }
+/* 首 / 末刻度贴着时间轴边界：改为贴边对齐，避免半个标签被滚动容器裁掉 */
+.ruler-tick.is-edge-start { transform: none; }
+.ruler-tick.is-edge-end { transform: translateX(-100%); }
 
 .timeline-track {
   position: relative;
