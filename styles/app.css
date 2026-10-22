@@ -163,6 +163,7 @@ button { font: inherit; color: inherit; }
 .brand {
   display: inline-flex;
   align-items: center;
+  gap: 8px;
   height: 32px;
   padding: 0 12px;
   border: 0;
@@ -174,6 +175,14 @@ button { font: inherit; color: inherit; }
 }
 .brand:hover { box-shadow: var(--shadow); transform: scale(1.02); }
 .brand:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.brand-logo {
+  display: block;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  pointer-events: none;
+}
+html[data-theme='dark'] .brand-logo { filter: invert(1); }
 .brand-name { font-weight: 600; font-size: 17px; letter-spacing: .2px; line-height: 20px; }
 
 .header-right { display: flex; align-items: center; gap: 10px; }
