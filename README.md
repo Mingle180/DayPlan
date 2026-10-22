@@ -4,7 +4,7 @@ DayPlan 是一个离线优先的个人日程应用，提供日 / 周 / 月三种
 
 ## 在线访问
 
-https://limengpku.github.io/DayPlan/
+https://mingle180.github.io/DayPlan/
 
 `main` 分支根目录直接由 GitHub Pages 发布，无需构建步骤。
 
