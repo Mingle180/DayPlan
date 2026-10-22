@@ -287,6 +287,15 @@
 /* 列宽权重刻度提示（可选，便于人眼核对 US-29） */
 .week-grid-legend { font-size: 11px; color: var(--text-3); }
 
+/* 2026-10-22 二十九轮（用户反馈）：页面缩放会同时压低视口高度，但桌面宽屏在
+ * 150% 缩放下宽度仍可能 >900px —— 旧的宽度断点接不住，周表被
+ * `calc(100vh - 260px)` 裁到约 369px（200% 下约 190px），时间表只剩几小时。
+ * 矮视口（≤720px）不再给周表设 max-height：周表按内容自然展开，由页面滚动；
+ * 100% / 高视口仍保留视口内滚动。 */
+@media (max-height: 720px) {
+  .week-scroll { max-height: none; }
+}
+
 @media (max-width: 900px) {
   .week-scroll { max-height: none; }
 }
