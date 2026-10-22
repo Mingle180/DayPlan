@@ -149,6 +149,19 @@
   function timeText(occ) { return occ.time ? text(occ.time.start) + '–' + text(occ.time.end) : ''; }
 
   /**
+   * 触屏模式：右键不可用 → 展开区补一颗可见的「完成 / 取消完成」。
+   * 优先用调用方注入的 ctx.touch（测试用），否则读 (hover:none)/(pointer:coarse)。
+   * 桌面鼠标环境保持原状（右键切换完成），行动按钮数不变。
+   */
+  function touchMode(ctx) {
+    if (ctx && typeof ctx.touch === 'boolean') return ctx.touch;
+    try {
+      return !!(root && typeof root.matchMedia === 'function'
+        && root.matchMedia('(hover: none), (pointer: coarse)').matches);
+    } catch (e) { return false; }
+  }
+
+  /**
    * 「恢复默认」是否可渲染（迭代 7 / F-45 第 6 条，用户裁定 R-23）。
    * 优先用视图注入的读纯函数 `ctx.hasNonUrgentOverride(occ)`；未注入时退回 `occ.dirty === true`，
    * 保持本组件可脱离视图独立使用（既有用例不依赖该回调）。
@@ -250,6 +263,9 @@
    */
   function bindHoverPeek(node, ctx) {
     if (typeof node.addEventListener !== 'function') return;
+    /* 触屏没有真正的悬停：mouseenter 会在点按后黏住 → 省略块一碰就停在预览态。
+       展开本身已经给出完整内容，触屏不再挂悬停预览。 */
+    if (touchMode(ctx)) return;
     var on = false;
     function enter() {
       if (on || ctx.expanded) return;
@@ -393,6 +409,23 @@
     var actions = el('div', { class: 'item-actions' });
     var urgent = isUrgent(occ);
     var urgentLabel = urgentName(ctx);
+    var touch = touchMode(ctx);
+
+    /* 触屏没有右键：把完成做成展开区里看得见的第一颗按钮。 */
+    if (touch) {
+      actions.appendChild(el('button', {
+        class: 'btn is-complete' + (occ.done ? ' is-on' : ''),
+        type: 'button',
+        text: occ.done ? '取消完成' : '完成',
+        title: occ.done ? '取消完成（回到未完成）' : '标记完成',
+        'aria-label': occ.done ? '取消完成' : '标记完成',
+        'aria-pressed': occ.done ? 'true' : 'false',
+        onclick: function (e) {
+          e.stopPropagation();
+          if (typeof ctx.onToggleDone === 'function') ctx.onToggleDone(occ);
+        }
+      }));
+    }
 
     // 1) 紧急（迭代 4 / AC-27.5）：文案跟随类别名（设置里可改名），优先回调 ctx.onToggleUrgent
     actions.appendChild(el('button', {
@@ -430,8 +463,10 @@
 
     // 迭代 7 / F-45：不再渲染「收起」按钮（收起改由「点展开区空白 / 点卡片外部」完成）
 
-    /* 迭代 10 批次 3（条7）：三按钮并排、四按钮四宫格 —— 由样式按 is-quad 切换两行两列 */
-    if (actions.querySelectorAll && actions.querySelectorAll('button').length === 4) {
+    /* 迭代 10 批次 3（条7）：三按钮并排、四按钮四宫格 —— 由样式按 is-quad 切换两行两列。
+       触屏追加的「完成」不参与四宫格判定，后台排布仍与桌面一致。 */
+    var actionButtons = actions.querySelectorAll ? actions.querySelectorAll('button').length : 0;
+    if (actionButtons - (touch ? 1 : 0) === 4) {
       actions.classList.add('is-quad');
     }
 
@@ -635,7 +670,9 @@
   function titleFor(occ, ctx) {
     var base = (occ.time ? timeText(occ) + ' ' : '') + text(occ.title);
     if (isUrgent(occ)) base = '【' + urgentName(ctx) + '】' + base;
-    /* 迭代 6（F-39）：完成标记改为右键，折叠态用 tooltip 提示可发现性 */
+    /* 迭代 6（F-39）：完成标记改为右键，折叠态用 tooltip 提示可发现性。
+       触屏没有右键 → 提示改为「点开后可标记完成」。 */
+    if (touchMode(ctx)) return base + '（点开后可标记完成）';
     return base + (occ.done ? '（右键单击取消完成）' : '（右键单击标记完成）');
   }
 

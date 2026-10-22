@@ -263,6 +263,9 @@
   color: var(--danger);
   font-weight: 700;
 }
+/* 触屏专用：右键不可用，展开区的第一颗按钮是「完成 / 取消完成」 */
+.item-actions .btn.is-complete { color: var(--primary); }
+.item-actions .btn.is-complete.is-on { color: var(--danger); }
 
 /* 展开态的时段块：只留按钮区（迭代 7 / F-44：折叠态的时间/标题/备注在展开态隐藏）
  * 迭代 10 批次 3（条7）：展开后与原块同宽同高；去白色长方形底。

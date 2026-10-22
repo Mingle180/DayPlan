@@ -90,10 +90,13 @@
   cursor: pointer;
   transition: box-shadow var(--ease), transform var(--ease);
 }
-.month-col:hover {
-  box-shadow: var(--shadow);
-  transform: scale(1.02);
-  z-index: 4;
+/* 悬停只在支持 hover 的设备生效：触屏点按后不留下整卡缩放 */
+@media (hover: hover) {
+  .month-col:hover {
+    box-shadow: var(--shadow);
+    transform: scale(1.02);
+    z-index: 4;
+  }
 }
 /* 面板打开时卡内已有可交互内容：不再整体缩放（避免面板与条目跟着抖动）。 */
 .month-col.is-plan-open:hover { box-shadow: var(--shadow-block); transform: none; }
@@ -250,11 +253,13 @@
 }
 /* 2026-10-22 二十三轮（用户反馈）：横块浮出时文字跟随同步放大，
    整行（背景、日期、农历、标记）作为一个整体从月卡里浮出。 */
-.month-week-row:hover {
-  background-color: var(--surface);
-  box-shadow: var(--shadow);
-  transform: scale(1.02);
-  z-index: 2;
+@media (hover: hover) {
+  .month-week-row:hover {
+    background-color: var(--surface);
+    box-shadow: var(--shadow);
+    transform: scale(1.02);
+    z-index: 2;
+  }
 }
 .month-week-row:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 .month-cell {
@@ -347,10 +352,19 @@
 /*
  * 窄窗口降级（BR-33 / AC-23.2「每行 3–6 个」）：
  * auto-fill 在容器宽不足时会退到 1–2 列（320px 时 180px 只排得下 1 列），
- * 与 monthColumnsFor 的 min=3 夹取口径不一致，故在 ≤640px 起显式固定为 3 列。
- *   ≤640px：3 列（320px 视口 → 约 99px/列，仍可容纳「日 + 农历小字」）
- *   >640px：auto-fill/minmax（572px 起自然 ≥3 列，1440px → 6 列，最多 6 列）
+ * 与 monthColumnsFor 的 min=3 夹取口径不一致，故在 ≤640px 起显式固定。
+ *   ≤640px：**单列单月**（手机竖屏 3 列时每格仅约 100px，日期 / 农历挤成一条）；
+ *   >640px：auto-fill/minmax（572px 起自然 ≥3 列，1440px → 6 列，最多 6 列）。
+ * src/views/month.js 的 monthColumns() 用同一 640px 阈值返回 1，
+ * 保证 data-month-cols 与 CSS 实际列数一致。
  */
 @media (max-width: 640px) {
-  .month-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .month-list { grid-template-columns: minmax(0, 1fr); }
+  .month-col { padding: 8px; }
+  .month-col-head { min-height: 44px; align-items: center; font-size: 14px; }
+  .month-grid { gap: 2px 0; }
+  .month-cell { min-height: 56px; gap: 2px; }
+  .mc-day { font-size: 14px; }
+  .mc-lunar { font-size: 10px; }
+  .month-dow { font-size: 11px; line-height: 24px; }
 }

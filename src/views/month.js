@@ -59,6 +59,8 @@
   var ANCHOR_ADJUST_GUARD = 64;  /* 锚点补偿上限（宽松），防止异常测量导致跳变 */
   var MONTH_COL_ESTIMATE_PX = 200; /* F-40：无布局引擎时按月列行高的估计值（垫片/测试用） */
   var LIST_GAP_PX = 12;          /* .month-list 的 grid gap（styles/month.css） */
+  /* 手机单列口径：与 styles/month.css 的 ≤640 断点同值（改一处必须同步另一处） */
+  var MOBILE_MAX_PX = 640;
 
   /** 默认落点颜色（无类别色时）。 */
   var DEFAULT_DOT_COLOR = '#94a3b8';
@@ -1023,14 +1025,17 @@
 
     /* ---------------- 窗口 ---------------- */
 
-    /** 列数口径（BR-33）：优先用容器实测宽，退化为 window.innerWidth。 */
+    /** 列数口径（BR-33）：手机（≤640px）固定单列，其余按容器宽 3–6 列。 */
     function monthColumns(widthPx) {
+      var wide = numOption(widthPx, 0) > MOBILE_MAX_PX;
       if (CG && typeof CG.monthColumnsFor === 'function') {
         return CG.monthColumnsFor(widthPx, {
-          min: CG.MONTH_COL_MIN, max: CG.MONTH_COL_MAX, colPx: CG.MONTH_COL_PX
+          min: wide ? CG.MONTH_COL_MIN : 1,
+          max: wide ? CG.MONTH_COL_MAX : 1,
+          colPx: CG.MONTH_COL_PX
         });
       }
-      return 3;
+      return wide ? 3 : 1;
     }
 
     /** 以 centerYM 为中心重置窗口（BR-32）；appendCount 归零。 */

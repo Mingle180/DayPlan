@@ -172,7 +172,10 @@ button { font: inherit; color: inherit; }
   cursor: pointer;
   transition: box-shadow var(--ease), transform var(--ease);
 }
-.brand:hover { box-shadow: var(--shadow); transform: scale(1.02); }
+/* 悬停只在真正支持 hover 的设备生效：触屏点按后 :hover 会黏住，整块缩放不还原 */
+@media (hover: hover) {
+  .brand:hover { box-shadow: var(--shadow); transform: scale(1.02); }
+}
 .brand:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .brand-name { font-weight: 600; font-size: 17px; letter-spacing: .2px; line-height: 20px; }
 
@@ -614,15 +617,19 @@ html[data-theme='dark'] .side-rail { background: var(--surface-2); }
   box-shadow: 0 1px 2px rgba(0, 0, 0, .06), inset 0 1px 0 rgba(255, 255, 255, .75);
   transition: background var(--ease), box-shadow var(--ease), transform var(--ease);
 }
-.btn-add-round:hover {
-  background: rgba(255, 255, 255, .92);
-  box-shadow: 0 3px 10px rgba(0, 0, 0, .12), inset 0 1px 0 #fff;
-  transform: translateY(-1px);
+@media (hover: hover) {
+  .btn-add-round:hover {
+    background: rgba(255, 255, 255, .92);
+    box-shadow: 0 3px 10px rgba(0, 0, 0, .12), inset 0 1px 0 #fff;
+    transform: translateY(-1px);
+  }
 }
 .btn-add-round:active { transform: translateY(0) scale(.96); }
 .btn-add-round:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16); }
-html[data-theme='dark'] .btn-add-round:hover { background: rgba(88, 88, 90, .92); }
+@media (hover: hover) {
+  html[data-theme='dark'] .btn-add-round:hover { background: rgba(88, 88, 90, .92); }
+}
 
 /* 时间轴 */
 .timeline-section { margin-bottom: 16px; }
@@ -726,7 +733,9 @@ html[data-theme='dark'] .btn-add-round:hover { background: rgba(88, 88, 90, .92)
   gap: 2px;
   transition: box-shadow var(--ease), transform var(--ease);
 }
-.tl-block:hover { box-shadow: var(--shadow); transform: scale(1.02); z-index: 4; }
+@media (hover: hover) {
+  .tl-block:hover { box-shadow: var(--shadow); transform: scale(1.02); z-index: 4; }
+}
 .tl-block:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; z-index: 4; }
 /* 美化迭代 10：标题行 = [省略号] + 标题（不省略、可换行）；右侧 22px 让给右上角的胶囊 */
 .tl-block .tl-titlerow {
@@ -928,8 +937,10 @@ html[data-theme='dark'] .btn-add-round:hover { background: rgba(88, 88, 90, .92)
   transition: box-shadow var(--ease), transform var(--ease), background var(--ease), border-color var(--ease);
 }
 /* 悬停高亮整行：内层 .ui-main 不再单独高亮（否则只有文字区变色） */
-.untimed-item:hover { box-shadow: var(--shadow); transform: scale(1.02); z-index: 4; }
-.untimed-item:hover .ui-main { background: none; }
+@media (hover: hover) {
+  .untimed-item:hover { box-shadow: var(--shadow); transform: scale(1.02); z-index: 4; }
+  .untimed-item:hover .ui-main { background: none; }
+}
 .untimed-item.is-done { opacity: .5; }
 .untimed-item.is-done .ui-title { text-decoration: line-through; }
 /* 拖动排序：来源淡出，目标位置画一条主色落点线 */
@@ -1447,7 +1458,9 @@ html[data-theme='dark'] .btn-add-round:hover { background: rgba(88, 88, 90, .92)
   cursor: grab;
   transition: box-shadow var(--ease), transform var(--ease), background var(--ease), border-color var(--ease), opacity var(--ease);
 }
-.cat-item:hover { box-shadow: var(--shadow); transform: scale(1.02); z-index: 4; }
+@media (hover: hover) {
+  .cat-item:hover { box-shadow: var(--shadow); transform: scale(1.02); z-index: 4; }
+}
 .cat-item:active { cursor: grabbing; }
 .cat-item:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .cat-item.is-urgent { cursor: default; }
@@ -1483,7 +1496,9 @@ html[data-theme='dark'] .btn-add-round:hover { background: rgba(88, 88, 90, .92)
   cursor: pointer;
   padding: 0;
 }
-.color-dot:hover { transform: scale(1.1); }
+@media (hover: hover) {
+  .color-dot:hover { transform: scale(1.1); }
+}
 .color-dot:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 .color-dot.is-on { border-color: var(--text); box-shadow: 0 0 0 2px var(--surface); }
 
@@ -1496,6 +1511,106 @@ html[data-theme='dark'] .btn-add-round:hover { background: rgba(88, 88, 90, .92)
   position: absolute; width: 1px; height: 1px;
   padding: 0; margin: -1px; overflow: hidden;
   clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* ------------------------------------------------------------------ *
+ * 手机竖屏（≤640px）：P0 先让页面「能用」——
+ *   页头紧凑 / 触控控件 44px / 日周头部换行 / 表单单列 + 16px 输入 /
+ *   弹窗底部抽屉 + 内部滚动 / 刘海与底部安全区
+ * ------------------------------------------------------------------ */
+@media (max-width: 640px) {
+  .app-header {
+    gap: 8px;
+    padding: calc(8px + env(safe-area-inset-top)) 10px 8px;
+  }
+  .brand { height: 44px; padding: 0 10px; }
+  .brand-name { font-size: 16px; }
+  .header-right { gap: 8px; min-width: 0; }
+  .today-chip { display: none; }
+  .view-switch-btn { min-width: 44px; min-height: 44px; padding: 0 10px; font-size: 14px; }
+  .header-right > .btn { min-height: 44px; padding: 0 12px; }
+
+  .app-body {
+    gap: 10px;
+    padding: 10px calc(10px + env(safe-area-inset-left))
+      calc(10px + env(safe-area-inset-bottom)) calc(10px + env(safe-area-inset-right));
+  }
+  .panel-day { padding: 14px; border-radius: var(--radius); }
+  .view-body { gap: 12px; }
+
+  /* 日 / 周头部：标题一行、导航 + 新建换到第二行，控件统一 44px 热区 */
+  .day-head, .week-head { flex-wrap: wrap; row-gap: 10px; }
+  .day-head .head-actions, .week-head .head-actions {
+    --date-nav-h: 44px;
+    width: 100%;
+    justify-content: space-between;
+  }
+  .day-head .date-nav, .week-head .date-nav { flex: 1 1 auto; }
+  .date-nav-btn { min-width: 44px; }
+  .date-nav-btn.is-current { min-width: 84px; padding: 0 14px; }
+  .date-nav-arrow { width: 44px; min-width: 44px; }
+
+  /* 表单：单列堆叠；输入 16px（iOS 聚焦不放大页面）；控件 44px 热区 */
+  .field-row { flex-wrap: wrap; gap: 0; }
+  .field-row > .field { flex: 1 1 100%; }
+  .field input[type="text"],
+  .field input[type="date"],
+  .field input[type="time"],
+  .field select,
+  .field textarea { font-size: 16px; min-height: 44px; }
+  .field textarea { min-height: 96px; }
+  .dp-date-btn, .dp-time-btn, .dp-select-btn { font-size: 16px; min-height: 44px; }
+  .notes-input { font-size: 16px; }
+  .switch { min-height: 44px; }
+
+  /* 日期 / 时间浮层：铺满字段宽，日期格放大到可点 */
+  .dp-pop { left: 0; right: 0; min-width: 0; }
+  .dp-cal-day { height: 38px; font-size: 14px; }
+  .dp-cal-wd { font-size: 11px; line-height: 24px; }
+  .dp-cal-prev, .dp-cal-next, .dp-cal-today { min-height: 36px; font-size: 13px; }
+  .dp-select-pop { left: 0; right: 0; }
+  .dp-select-item { padding: 11px 12px; font-size: 16px; }
+
+  /* 弹窗：底部抽屉 + 内部滚动，底部按钮避开 Home 指示条 */
+  .modal-backdrop {
+    align-items: flex-end;
+    padding: 0;
+    overflow: hidden;
+  }
+  .modal-backdrop[class~="is-centered"] { align-items: flex-end; }
+  .modal {
+    max-width: none;
+    max-height: calc(100vh - 8px);
+    max-height: calc(100dvh - 8px);
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .modal-head { flex: none; padding: 14px 16px; }
+  .modal-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 16px;
+  }
+  .modal-foot {
+    flex: none;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+    border-radius: 0;
+  }
+  .modal.modal-wide { max-width: none; }
+
+  .side-rail { padding: 12px; gap: 12px; }
+}
+
+/* ------------------------------------------------------------------ *
+ * 触屏设备：去掉只在鼠标悬停时成立的位移 / 缩放，避免点按后黏住；
+ * 月计划的删除 × 常显（触屏没有 hover 可揭示）
+ * ------------------------------------------------------------------ */
+@media (hover: none), (pointer: coarse) {
+  .month-plan .mp-del { opacity: 1; width: 32px; height: 32px; line-height: 32px; }
+  .item-actions .btn.is-complete { min-height: 36px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

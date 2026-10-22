@@ -120,7 +120,9 @@
   line-height: 1.25;
   transition: box-shadow var(--ease);
 }
-.wk-item:hover { box-shadow: var(--shadow); }
+@media (hover: hover) {
+  .wk-item:hover { box-shadow: var(--shadow); }
+}
 .wk-item.is-done { opacity: .5; }
 .wk-item.is-done .wk-title { text-decoration: line-through; }
 /* 美化迭代 10 / 2026-10-20（用户裁定）：标题行 = [省略号] + 标题；类别胶囊取**首字**
