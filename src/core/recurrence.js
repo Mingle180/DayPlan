@@ -111,6 +111,17 @@
     return !!repeat && repeat.excludeHolidays === true;
   }
 
+  /** 该规则是否要求排除周六 / 周日（只有显式 true 才生效） */
+  function excludesWeekends(repeat) {
+    return !!repeat && repeat.excludeWeekends === true;
+  }
+
+  /** 周六 / 周日（ISO 星期 6、7）；调休补班日仍按周末处理（与字面「周末」同口径）。 */
+  function isWeekend(iso) {
+    var wd = dt.isoWeekday(iso);
+    return wd === 6 || wd === 7;
+  }
+
   /* ------------------------------------------------------------------ *
    * 日期比较辅助
    *
@@ -368,11 +379,16 @@
     var dates = EXPANDERS[repeat.type](repeat, from, to);
 
     // F-47 / R-28：excludeHolidays 对五种重复方式全部生效，且与 seriesMayHit 同口径。
-    // 过滤必须在截断之前，否则被跳过的法定假日会白占 max 配额。
-    if (excludesHolidays(repeat)) {
+    // 2026-10-23 三十四轮：excludeWeekends（周六 / 周日）同样在截断之前过滤。
+    if (excludesHolidays(repeat) || excludesWeekends(repeat)) {
+      var skipHolidays = excludesHolidays(repeat);
+      var skipWeekends = excludesWeekends(repeat);
       var kept = [];
       for (var f = 0; f < dates.length; f++) {
-        if (!isExcludedHoliday(dates[f])) kept.push(dates[f]);
+        var date = dates[f];
+        if (skipWeekends && isWeekend(date)) continue;
+        if (skipHolidays && isExcludedHoliday(date)) continue;
+        kept.push(date);
       }
       dates = kept;
     }
@@ -402,6 +418,7 @@
     // F-47 / SC-49b：与 expandSeries 同口径 —— 被排除的法定放假日直接判 false，
     // 否则同一天会出现「展开不产出、快速判定却命中」的分叉。
     if (excludesHolidays(repeat) && isExcludedHoliday(dateISO)) return false;
+    if (excludesWeekends(repeat) && isWeekend(dateISO)) return false;
 
     switch (repeat.type) {
       case 'daily': {
@@ -610,9 +627,15 @@
     }
     var label = head + tail;
     if (meta && meta.origin === 'weekPlan') label = '周计划 · ' + label;
+    else if (meta && meta.origin === 'monthPlan') label = '月计划 · ' + label;
     // F-47.6：开启该规则时在文案末尾如实标注；不含该键（或非 true）时输出逐字节不变。
     // 未注入 resolver 也照样标注 —— 文案描述的是规则本身，不是本次运行是否生效。
-    if (excludesHolidays(repeat)) label += '（不含法定节假日）';
+    // 三十四轮：节假日 + 周末同时开启时合并为一条，避免两个括号叠在一起。
+    var skipHol = excludesHolidays(repeat);
+    var skipWkd = excludesWeekends(repeat);
+    if (skipHol && skipWkd) label += '（不含节假日和周末）';
+    else if (skipHol) label += '（不含法定节假日）';
+    else if (skipWkd) label += '（不含周末）';
     return label;
   }
 
@@ -639,6 +662,9 @@
     seriesMayHit: seriesMayHit,
     /** 迭代 7（F-47 / R-31）：注入式节假日解析器（覆盖式；传 null 清除） */
     setHolidayResolver: setHolidayResolver,
+    excludesHolidays: excludesHolidays,
+    excludesWeekends: excludesWeekends,
+    isWeekend: isWeekend,
     occurrencesForDate: occurrencesForDate,
     occurrencesInRange: occurrencesInRange,
     monthMarkers: monthMarkers,

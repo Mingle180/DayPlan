@@ -331,6 +331,11 @@
       && typeof repeat.excludeHolidays !== 'boolean') {
       errors.push(err(path + '.excludeHolidays', '不含法定节假日需为布尔值'));
     }
+    // 2026-10-23 三十四轮（DM-6 增量）：excludeWeekends 可选布尔，口径同上。
+    if (repeat.excludeWeekends !== undefined && repeat.excludeWeekends !== null
+      && typeof repeat.excludeWeekends !== 'boolean') {
+      errors.push(err(path + '.excludeWeekends', '不含周末需为布尔值'));
+    }
     return errors;
   }
 

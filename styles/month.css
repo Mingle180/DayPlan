@@ -229,6 +229,14 @@
 .mp-item:hover .mp-del,
 .mp-item:focus-within .mp-del { opacity: 1; }
 .mp-del:hover { color: var(--danger); background: var(--danger-weak); }
+/* 三十四轮：按天同步的月计划在条目右侧显示完成进度（n/N），旧版清单条目不显示 */
+.mp-progress {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.mp-item.is-done .mp-progress { color: var(--primary); }
 .mp-foot { display: flex; justify-content: center; flex: none; margin-top: auto; padding-top: 10px; }
 .mp-add { border-radius: 999px; padding: 5px 16px; }
 .plan-edit-foot { margin-top: 2px; }
@@ -367,4 +375,46 @@
   .mc-day { font-size: 14px; }
   .mc-lunar { font-size: 10px; }
   .month-dow { font-size: 11px; line-height: 24px; }
+
+  /* 三十四轮：双指捏合由 JS 处理；禁止浏览器把双指手势当页面缩放 / 横向平移 */
+  .month-view { touch-action: pan-y; }
+
+  /* 三个月缩略：只留数字（星期 / 农历 / 节假日 / 记录点全部隐藏） */
+  .month-view.is-compact-3m .month-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .month-view.is-compact-3m .month-col {
+    padding: 4px;
+    border-radius: var(--radius-sm);
+  }
+  .month-view.is-compact-3m .month-col-head {
+    min-height: 24px;
+    padding: 0 0 3px;
+    margin-bottom: 3px;
+    gap: 2px;
+    font-size: 10px;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+  .month-view.is-compact-3m .month-col-head .ym-m { font-size: 10px; }
+  .month-view.is-compact-3m .month-col-head .mch-plan { display: none; }
+  .month-view.is-compact-3m .month-dow-row { display: none; }
+  .month-view.is-compact-3m .month-grid { gap: 0; }
+  .month-view.is-compact-3m .month-week-row { gap: 0; }
+  .month-view.is-compact-3m .month-cell {
+    min-height: 0;
+    padding: 0;
+    gap: 0;
+    aspect-ratio: 1 / 1;
+    justify-content: center;
+    border-radius: 2px;
+  }
+  .month-view.is-compact-3m .month-cell.is-outside { visibility: hidden; }
+  .month-view.is-compact-3m .mc-dayrow { gap: 0; }
+  .month-view.is-compact-3m .mc-day { font-size: 10px; font-weight: 500; }
+  .month-view.is-compact-3m .month-cell.is-today .mc-day { font-weight: 800; }
+  .month-view.is-compact-3m .mc-flag,
+  .month-view.is-compact-3m .mc-lunar,
+  .month-view.is-compact-3m .mc-marks { display: none; }
 }

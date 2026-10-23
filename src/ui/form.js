@@ -714,10 +714,14 @@
           lunarDay: parseInt(lunarDayInput.value, 10) || 1,
           leap: !!leapCheck.checked,
           /* 迭代 7（F-47）：只在开启时写 true，其余不写该键（保持旧数据形状） */
-          excludeHolidays: holidaySkipCheck.checked === true
+          excludeHolidays: holidaySkipCheck.checked === true,
+          /* 三十四轮：周 / 月计划的「不含节假日和周末」在这里没有独立控件；
+             编辑此类序列时原样保留该键，避免通用表单静默丢掉规则。 */
+          excludeWeekends: !!(repeat && repeat.excludeWeekends === true)
         };
         if (t === 'yearly') repeatOut.day = parseInt(yearDayInput.value, 10) || 1;
         if (!repeatOut.excludeHolidays) delete repeatOut.excludeHolidays;
+        if (!repeatOut.excludeWeekends) delete repeatOut.excludeWeekends;
       }
       var urgentNow = isUrgentId(catSelect.value);
       var prevCat = urgentNow
@@ -880,12 +884,19 @@
 
     /** DM-6.3 / ADR-11：周计划的规则形状（不新增 rule type） */
     function fixedRepeat() {
-      return { type: 'daily', interval: 1, startDate: weekStart, endDate: D.addDays(weekStart, 7) };
+      var repeat = { type: 'daily', interval: 1, startDate: weekStart, endDate: D.addDays(weekStart, 7) };
+      if (skipLongCheck.checked) {
+        repeat.excludeHolidays = true;
+        repeat.excludeWeekends = true;
+      }
+      return repeat;
     }
 
     var rangeLabel = weekStart + ' ~ ' + D.addDays(weekStart, 6);
     var errors = {};
     var form = el('div', { class: 'item-form week-plan-form' });
+    /* 三十四轮：周计划固定 7 天，可选「不含节假日和周末」（同时写两个 repeat 键） */
+    var skipLongCheck = el('input', { type: 'checkbox', 'aria-label': '不含节假日和周末' });
 
     /* ---------------- 标题（必填） ---------------- */
     var titleInput = el('input', {
@@ -955,14 +966,24 @@
     /* ---------------- 重复方式 + 日期范围：只读锁定（F-20.1） ----------------
      * 刻意只渲染纯文本（div）：DOM 内没有重复方式 select / radio / button，
      * 也没有单日日期输入，用户无法更改重复方式。 */
+    var weekRepeatText = el('div', { class: 'readonly-text', text: '每天（该周 7 天）', 'aria-label': '重复方式（只读）' });
+    skipLongCheck.addEventListener('change', function () {
+      weekRepeatText.textContent = skipLongCheck.checked
+        ? '每天（该周 7 天，跳过节假日和周末）'
+        : '每天（该周 7 天）';
+    });
     form.appendChild(el('div', { class: 'fieldset week-plan-repeat' }, [
       el('div', { class: 'field' }, [
         el('label', { class: 'field-label', text: '重复' }),
-        el('div', { class: 'readonly-text', text: '每天（该周 7 天）', 'aria-label': '重复方式（只读）' })
+        weekRepeatText
       ]),
       el('div', { class: 'field' }, [
         el('label', { class: 'field-label', text: '日期范围' }),
         el('div', { class: 'readonly-text', text: rangeLabel, 'aria-label': '日期范围（只读）' })
+      ]),
+      el('div', { class: 'field week-plan-skip' }, [
+        el('label', { class: 'switch' }, [skipLongCheck, el('span', { text: '不含节假日和周末' })]),
+        el('div', { class: 'hint', text: '周六、周日与法定放假日一律跳过（调休补班日若落在周末也跳过）。' })
       ]),
       el('div', { class: 'hint', text: '周计划固定覆盖该周 7 天（含周一至周日），重复方式不可修改。' })
     ]));
@@ -1026,6 +1047,186 @@
   }
 
   /**
+   * 构建月计划表单（三十四轮 / 用户需求）。
+   *
+   * 与周计划表单同形：重复方式锁定为「每天（该月 N 天）」并**按天同步到日视图**；
+   * 新增「不含节假日和周末」选项（同时写 repeat.excludeHolidays / excludeWeekends）。
+   * `opts.item` 存在时用于编辑既有月计划序列，预填标题 / 类别 / 时段 / 备注 / 排除选项。
+   */
+  function createMonthPlanForm(opts) {
+    opts = opts || {};
+    var categories = (opts.categories || []).slice();
+    var monthStart = D.isValidDate(opts.monthStart)
+      ? D.startOfMonth(opts.monthStart)
+      : ((typeof opts.ym === 'string' && D.isValidDate(opts.ym + '-01'))
+        ? opts.ym + '-01'
+        : D.startOfMonth(D.isValidDate(opts.date) ? opts.date : D.todayISO()));
+    var monthEnd = D.addMonths(monthStart, 1);
+    var ymd = D.parseYearMonth(monthStart);
+    var dayCount = D.daysInMonth(ymd.year, ymd.month);
+    var rangeLabel = monthStart + ' ~ ' + D.endOfMonth(monthStart);
+    var item = opts.item || null;
+    var errors = {};
+    var form = el('div', { class: 'item-form month-plan-form' });
+    var skipLongCheck = el('input', { type: 'checkbox', 'aria-label': '不含节假日和周末' });
+    if (item && item.repeat && (item.repeat.excludeHolidays === true || item.repeat.excludeWeekends === true)) {
+      skipLongCheck.checked = true;
+    }
+
+    /** 三十四轮：整月 daily 序列；排除项同时落到两个键上。 */
+    function fixedRepeat() {
+      var repeat = { type: 'daily', interval: 1, startDate: monthStart, endDate: monthEnd };
+      if (skipLongCheck.checked) {
+        repeat.excludeHolidays = true;
+        repeat.excludeWeekends = true;
+      }
+      return repeat;
+    }
+
+    /* ---------------- 标题（必填） ---------------- */
+    var titleInput = el('input', {
+      type: 'text', maxlength: String(S.TITLE_MAX), 'aria-label': '标题'
+    });
+    if (item) titleInput.value = item.title || '';
+    var titleErr = el('div', { class: 'field-error' });
+    form.appendChild(el('div', { class: 'field' }, [
+      el('label', { class: 'field-label', text: '标题' }), titleInput, titleErr
+    ]));
+
+    /* ---------------- 类别 ---------------- */
+    var defaultCategoryId = (item && item.categoryId) || opts.defaultCategoryId
+      || (categories[0] && categories[0].id) || 'cat_short_task';
+    var catOptions = ensureUrgentOption(categories);
+    var catSelect = el('select', { 'aria-label': '类别' });
+    catOptions.forEach(function (c) {
+      var o = el('option', { value: c.id, text: c.name });
+      if (c.id === defaultCategoryId) o.selected = true;
+      catSelect.appendChild(o);
+    });
+    var preUrgentCategoryId = isUrgentId(defaultCategoryId)
+      ? ((item && item.meta && item.meta.previousCategoryId) || firstNonUrgentId(catOptions) || defaultCategoryId)
+      : defaultCategoryId;
+    catSelect.addEventListener('change', function () {
+      if (catSelect.value !== URGENT_ID) preUrgentCategoryId = catSelect.value;
+    });
+    form.appendChild(el('div', { class: 'field' }, [
+      el('label', { class: 'field-label', text: '类别' }), selectFieldControl(catSelect).wrap
+    ]));
+
+    /* ---------------- 时段（可选；默认 09:00–10:00） ---------------- */
+    var timeToggle = el('input', { type: 'checkbox', 'aria-label': '设置起止时间' });
+    var startCtl = timeFieldControl({ value: (item && item.time && item.time.start) || '09:00', 'aria-label': '开始时间' });
+    var endCtl = timeFieldControl({ value: (item && item.time && item.time.end) || '10:00', 'aria-label': '结束时间' });
+    var startInput = startCtl.input;
+    var endInput = endCtl.input;
+    var timeRow = el('div', { class: 'field-row' }, [
+      el('div', { class: 'field' }, [el('label', { class: 'field-label', text: '开始时间' }), startCtl.wrap]),
+      el('div', { class: 'field' }, [el('label', { class: 'field-label', text: '结束时间' }), endCtl.wrap])
+    ]);
+    var timeErr = el('div', { class: 'field-error' });
+
+    function syncTimeVisibility() {
+      timeRow.style.display = timeToggle.checked ? '' : 'none';
+      if (!timeToggle.checked) timeErr.textContent = '';
+    }
+    timeToggle.checked = !!(item && item.time);
+    timeToggle.addEventListener('change', syncTimeVisibility);
+    syncTimeVisibility();
+    form.appendChild(el('div', { class: 'fieldset' }, [
+      el('div', { class: 'inline' }, [
+        el('label', { class: 'switch' }, [timeToggle, el('span', { text: '设置起止时间' })])
+      ]),
+      timeRow, timeErr
+    ]));
+
+    /* ---------------- 备注 ---------------- */
+    var noteInput = el('textarea', { maxlength: String(S.NOTE_MAX), 'aria-label': '备注' });
+    noteInput.value = (item && typeof item.note === 'string') ? item.note
+      : (typeof opts.note === 'string' ? opts.note : '');
+    form.appendChild(el('div', { class: 'field' }, [
+      el('label', { class: 'field-label', text: '备注' }), noteInput
+    ]));
+
+    /* ---------------- 重复方式 + 日期范围：只读锁定 ---------------- */
+    var monthRepeatText = el('div', {
+      class: 'readonly-text',
+      text: '每天（该月 ' + dayCount + ' 天）',
+      'aria-label': '重复方式（只读）'
+    });
+    function syncRepeatText() {
+      monthRepeatText.textContent = skipLongCheck.checked
+        ? '每天（该月 ' + dayCount + ' 天，跳过节假日和周末）'
+        : '每天（该月 ' + dayCount + ' 天）';
+    }
+    skipLongCheck.addEventListener('change', syncRepeatText);
+    syncRepeatText();
+    form.appendChild(el('div', { class: 'fieldset month-plan-repeat' }, [
+      el('div', { class: 'field' }, [
+        el('label', { class: 'field-label', text: '重复' }), monthRepeatText
+      ]),
+      el('div', { class: 'field' }, [
+        el('label', { class: 'field-label', text: '日期范围' }),
+        el('div', { class: 'readonly-text', text: rangeLabel, 'aria-label': '日期范围（只读）' })
+      ]),
+      el('div', { class: 'field month-plan-skip' }, [
+        el('label', { class: 'switch' }, [skipLongCheck, el('span', { text: '不含节假日和周末' })]),
+        el('div', { class: 'hint', text: '周六、周日与法定放假日一律跳过（调休补班日若落在周末也跳过）。' })
+      ]),
+      el('div', { class: 'hint', text: '月计划固定覆盖该月每一天，并按天同步到日视图；重复方式不可修改。' })
+    ]));
+
+    /* ---------------- 取值 / 校验 ---------------- */
+    function collect() {
+      var urgentNow = isUrgentId(catSelect.value);
+      var meta = metaFor(item, urgentNow, urgentNow
+        ? (preUrgentCategoryId || firstNonUrgentId(catOptions) || defaultCategoryId)
+        : null);
+      meta.origin = 'monthPlan';
+      meta.month = monthStart.slice(0, 7);
+      return {
+        title: titleInput.value.trim(),
+        categoryId: catSelect.value,
+        time: timeToggle.checked ? { start: startInput.value, end: endInput.value } : null,
+        note: noteInput.value,
+        meta: meta,
+        repeat: fixedRepeat()
+      };
+    }
+
+    function validate() {
+      var v = collect();
+      errors = {};
+      titleErr.textContent = '';
+      timeErr.textContent = '';
+
+      if (!v.title) { errors.title = '请填写标题'; flashFieldError(titleErr, 'mp-title', errors.title); }
+      else if (v.title.length > S.TITLE_MAX) {
+        errors.title = '标题不能超过 ' + S.TITLE_MAX + ' 字';
+        flashFieldError(titleErr, 'mp-title', errors.title);
+      }
+      if (v.time) {
+        var te = S.validateTime(v.time, 'time');
+        if (te.length) { errors.time = te[0].message; flashFieldError(timeErr, 'mp-time', errors.time); }
+      }
+      if (v.note.length > S.NOTE_MAX) errors.note = '备注不能超过 ' + S.NOTE_MAX + ' 字';
+      var re = S.validateRepeat(v.repeat, 'repeat');
+      if (re.length) errors.repeat = re[0].message;
+
+      var first = errors.title || errors.time || errors.note || errors.repeat;
+      return { ok: !first, values: v, message: (errors.note || errors.repeat) || '' };
+    }
+
+    return {
+      element: form,
+      getValues: collect,
+      values: collect,
+      validate: validate,
+      scope: function () { return 'all'; },
+      focus: function () { titleInput.focus(); if (titleInput.select) titleInput.select(); }
+    };
+  }
+
+  /**
    * 颜色的中文名（用于 title / aria-label）；未知颜色回退为 `#rrggbb` 本身。
    * @param {string} hex
    * @returns {string}
@@ -1054,6 +1255,7 @@
   root.DayPlan.form = {
     createItemForm: createItemForm,
     createWeekPlanForm: createWeekPlanForm,
+    createMonthPlanForm: createMonthPlanForm,
     selectFieldControl: selectFieldControl,
     COLOR_PRESETS: COLOR_PRESETS,
     COLOR_NAMES: COLOR_NAMES,

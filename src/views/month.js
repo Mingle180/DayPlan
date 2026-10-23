@@ -47,6 +47,7 @@
   var Lunar = root.DayPlan.lunar;
   var M = root.DayPlan.modal;
   var Schema = root.DayPlan.schema;
+  var Form = root.DayPlan.form;
 
   var MIN_YM = (CG && CG.MIN_YM) || '1900-01';
   var MAX_YM = (CG && CG.MAX_YM) || '2100-12';
@@ -61,6 +62,11 @@
   var LIST_GAP_PX = 12;          /* .month-list 的 grid gap（styles/month.css） */
   /* 手机单列口径：与 styles/month.css 的 ≤640 断点同值（改一处必须同步另一处） */
   var MOBILE_MAX_PX = 640;
+  /* 三十四轮：手机双指捏合进入 / 退出三个月缩略图 */
+  var COMPACT_COLS = 3;
+  var PINCH_IN_RATIO = 0.78;    /* 两指距离缩到 78% 以下 → 进入缩略 */
+  var PINCH_OUT_RATIO = 1.28;   /* 两指距离回到 128% 以上 → 退出缩略 */
+  var PINCH_CLICK_GUARD_MS = 450;
 
   /** 默认落点颜色（无类别色时）。 */
   var DEFAULT_DOT_COLOR = '#94a3b8';
@@ -179,6 +185,14 @@
     var lastRunAt = 0;
     var destroyed = false;
     var unsubscribe = null;
+
+    /* 三十四轮：手机三个月缩略（pinch-in 进入 / pinch-out 退出） */
+    var compact = false;
+    var compactCenterYM = null;
+    var touchStartDist = 0;
+    var pinchGesture = false;
+    var pinchHandled = false;
+    var suppressClickUntil = 0;
 
     /* 标记点缓存：ym -> {version, map}，LRU ≤ MARKER_CACHE_LIMIT */
     var markerCache = Object.create(null);
@@ -392,10 +406,7 @@
       });
       head.appendChild(el('span', { class: 'mch-date', text: p.year + ' 年' }));
       head.appendChild(el('span', { class: 'ym-m', text: p.month + ' 月' }));
-      var planCount = 0;
-      if (store && typeof store.getMonthPlan === 'function') {
-        try { planCount = store.getMonthPlan(ym).length; } catch (e) { planCount = 0; }
-      }
+      var planCount = planItemsOf(ym).length;
       /* 2026-10-21（用户反馈）：没有计划的月份**不显示「本月计划」**；
          只有 N>0 时才渲染徽标。updatePlanBadge 负责之后增删。 */
       if (planCount) {
@@ -507,14 +518,190 @@
       return Math.max(0, Math.floor(idx / perRow) * (colH + LIST_GAP_PX));
     }
 
+    /* ---------------- 手机滚动 / 三个月缩略（三十四轮） ---------------- */
+
+    function isMobileWidth() {
+      var w = viewportWidth();
+      return w > 0 && w <= MOBILE_MAX_PX;
+    }
+
+    /** 当前生效的是 .month-scroll 自身滚动，还是整页滚动。 */
+    function internalScrolls() {
+      return (scrollEl.scrollHeight || 0) > (scrollEl.clientHeight || 0) + 4;
+    }
+
+    function pageScrollTop() {
+      if (typeof window === 'undefined') return 0;
+      return window.pageYOffset || (document.documentElement && document.documentElement.scrollTop) || 0;
+    }
+
+    function headerOffset() {
+      if (typeof document === 'undefined' || !document.querySelector) return 8;
+      var header = document.querySelector('.app-header');
+      if (!header || typeof header.getBoundingClientRect !== 'function') return 8;
+      var r = header.getBoundingClientRect();
+      return (r && r.height > 0 ? r.height : 0) + 8;
+    }
+
+    /**
+     * 把某个月份列滚到顶（给「今天」定位与退出缩略用）。
+     * 手机档 .month-scroll 没有固定高度、滚动的是页面，此时必须走 window.scrollTo；
+     * 否则 scrollTop 写不进去，会停在 2024 年第一列（用户反馈的「没回到今天」）。
+     */
+    function scrollColumnToTop(col) {
+      if (!col) return;
+      if (internalScrolls()) {
+        setScrollTop(Math.max(0, numOption(col.offsetTop, 0) - 12));
+        return;
+      }
+      if (typeof window === 'undefined' || typeof window.scrollTo !== 'function') return;
+      var rect = col.getBoundingClientRect ? col.getBoundingClientRect() : null;
+      if (!rect) return;
+      var y = pageScrollTop() + rect.top - headerOffset();
+      window.scrollTo(0, Math.max(0, y));
+    }
+
+    /** 缩略图很短：直接滚到月列表顶部。 */
+    function scrollListToTop() {
+      if (internalScrolls()) { setScrollTop(0); return; }
+      if (typeof window === 'undefined' || typeof window.scrollTo !== 'function') return;
+      var rect = listEl.getBoundingClientRect ? listEl.getBoundingClientRect() : null;
+      if (!rect) return;
+      window.scrollTo(0, Math.max(0, pageScrollTop() + rect.top - headerOffset()));
+    }
+
+    /** 视口顶部正在看的是哪个月（缩略图以它为中间列）。 */
+    function visibleMonthYM() {
+      var cols = listEl.querySelectorAll('.month-col');
+      if (!cols.length) return state.centerYM;
+      var top = headerOffset();
+      for (var i = 0; i < cols.length; i += 1) {
+        if (typeof cols[i].getBoundingClientRect !== 'function') continue;
+        var r = cols[i].getBoundingClientRect();
+        if (!r || (!r.width && !r.height)) continue; /* DOM 垫片无布局 */
+        if (r.bottom > top + 2) return cols[i].getAttribute('data-ym') || state.centerYM;
+      }
+      return state.centerYM;
+    }
+
+    function monthEntry(ym) {
+      var p = parseYM(ym);
+      if (!p) return null;
+      return { ym: ym, year: p.year, month: p.month, isYearStart: p.month === 1 };
+    }
+
+    function compactMonths() {
+      var center = clampYM(compactCenterYM || state.centerYM);
+      var out = [];
+      for (var i = -1; i <= 1; i += 1) {
+        var ym = addMonthsYM(center, i);
+        if (!ym || ym < MIN_YM || ym > MAX_YM) continue;
+        var entry = monthEntry(ym);
+        if (entry) out.push(entry);
+      }
+      return out;
+    }
+
+    /**
+     * 进入 / 退出手机三个月缩略。
+     * @param {boolean} on
+     * @param {string} [centerYM] 以该月为中间列（缺省取当前视口顶部月份）
+     * @returns {boolean} 状态是否改变
+     */
+    function setCompact(on, centerYM) {
+      on = !!on;
+      if (on && !isMobileWidth()) return false;
+      if (on === compact) return false;
+      if (on) {
+        var target = (centerYM && parseYM(centerYM)) ? clampYM(centerYM) : (visibleMonthYM() || state.centerYM);
+        closePlan(true);
+        compact = true;
+        compactCenterYM = target;
+        state.centerYM = target;
+        if (element.classList) element.classList.add('is-compact-3m');
+        render();
+        scrollListToTop();
+        return true;
+      }
+      compact = false;
+      if (centerYM && parseYM(centerYM)) compactCenterYM = clampYM(centerYM);
+      if (compactCenterYM) state.centerYM = compactCenterYM;
+      compactCenterYM = null;
+      if (element.classList) element.classList.remove('is-compact-3m');
+      resetWindow();
+      render();
+      scrollColumnToTop(findPlanColumn(state.centerYM));
+      return true;
+    }
+
+    function touchDistance(touches) {
+      if (!touches || touches.length < 2) return 0;
+      var a = touches[0], b = touches[1];
+      var dx = (a.clientX || a.pageX || 0) - (b.clientX || b.pageX || 0);
+      var dy = (a.clientY || a.pageY || 0) - (b.clientY || b.pageY || 0);
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    function onMonthTouchStart(e) {
+      if (!isMobileWidth() || !e || !e.touches || e.touches.length !== 2) {
+        touchStartDist = 0;
+        return;
+      }
+      touchStartDist = touchDistance(e.touches);
+      pinchGesture = touchStartDist > 0;
+      pinchHandled = false;
+      suppressClickUntil = Date.now() + PINCH_CLICK_GUARD_MS;
+    }
+
+    function onMonthTouchMove(e) {
+      if (!pinchGesture || !e || !e.touches || e.touches.length < 2) return;
+      var dist = touchDistance(e.touches);
+      if (!(dist > 0) || !(touchStartDist > 0)) return;
+      var ratio = dist / touchStartDist;
+      /* 双指期间不允许浏览器缩放 / 页面跟着手指滚；缩略切换只认第一下阈值 */
+      if (e.cancelable !== false && typeof e.preventDefault === 'function') e.preventDefault();
+      if (!pinchHandled && !compact && ratio <= PINCH_IN_RATIO) {
+        pinchHandled = true;
+        setCompact(true);
+        suppressClickUntil = Date.now() + PINCH_CLICK_GUARD_MS;
+      } else if (!pinchHandled && compact && ratio >= PINCH_OUT_RATIO) {
+        pinchHandled = true;
+        setCompact(false);
+        suppressClickUntil = Date.now() + PINCH_CLICK_GUARD_MS;
+      }
+    }
+
+    function onMonthTouchEnd(e) {
+      if (e && e.touches && e.touches.length >= 2) return;
+      touchStartDist = 0;
+      pinchGesture = false;
+      pinchHandled = false;
+      suppressClickUntil = Date.now() + PINCH_CLICK_GUARD_MS;
+    }
+
+    /** 捏合结束后浏览器仍可能补一次 click：在捕获阶段吞掉，避免误进周视图 / 误开计划。 */
+    function onMonthClickCapture(e) {
+      if (Date.now() >= suppressClickUntil) return;
+      if (e && typeof e.preventDefault === 'function') e.preventDefault();
+      if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+    }
+
+    element.addEventListener('touchstart', onMonthTouchStart, { passive: true });
+    try { element.addEventListener('touchmove', onMonthTouchMove, { passive: false }); }
+    catch (e) { element.addEventListener('touchmove', onMonthTouchMove); }
+    element.addEventListener('touchend', onMonthTouchEnd, { passive: true });
+    element.addEventListener('touchcancel', onMonthTouchEnd, { passive: true });
+    element.addEventListener('click', onMonthClickCapture, true);
+
     /**
      * 回到「今天」的位置（每次切到月视图时由 app 调用）：
-     * 窗口里没有今天则先把窗口重置到今天所在月；找到后滚动到该列并把目标记在
-     * `#view-month-root[data-today-scroll]`（诊断 / 断言用；无 container 时退化为视图根）。
+     * 窗口里没有今天则先把窗口重置到今天所在月；手机档改为滚页面（.month-scroll 不自滚），
+     * 并退出三个月缩略，保证「切到月视图 = 今天所在月的单列视图」。
      * @returns {boolean} 是否找到今天的日期格
      */
     function scrollToToday() {
       var mark = (container && typeof container.setAttribute === 'function') ? container : element;
+      if (compact) setCompact(false);
       var today = D.todayISO();
       var cell = todayCell();
       if (!cell) {
@@ -523,7 +710,7 @@
         resetWindow();
         render();
         /* 复核 D7：窗口被重置到「今天」时同步共享视图日期，否则 app.state.viewDate 会与
-           月视图窗口分叉（此后切回周/日视图仍停在旧日期，方向键还会把月份弹回去）。 */
+           月视图窗口分叉（此后切回周 / 日视图仍停在旧日期，方向键还会把月份弹回去）。 */
         if (typeof opts.onSelectDate === 'function') {
           try { opts.onSelectDate(today); } catch (e) { /* 通知失败不影响定位 */ }
         }
@@ -534,9 +721,17 @@
         mark.removeAttribute('data-today-scroll');
         return false;
       }
-      var target = todayScrollTarget(cell);
-      setScrollTop(target);
-      mark.setAttribute('data-today-scroll', String(Math.round(target)));
+      var todayYM = today.slice(0, 7);
+      if (state.centerYM !== todayYM) state.centerYM = todayYM;
+      var col = columnOfCell(cell);
+      if (internalScrolls()) {
+        var target = todayScrollTarget(cell);
+        setScrollTop(target);
+        mark.setAttribute('data-today-scroll', String(Math.round(target)));
+      } else {
+        scrollColumnToTop(col);
+        mark.setAttribute('data-today-scroll', String(Math.round(pageScrollTop())));
+      }
       return true;
     }
 
@@ -557,7 +752,8 @@
      *     随月列表一起滚动，不被裁切；
      *   · 入口 = 列头或列内任意空白处；日期格 / 整周行仍进周视图；
      *   · 点面板外、按 Esc、再点列头/空白都收起（与事项块展开一致）；
-     *   · 数据只存 monthPlans，不产生 items → 天然「不同步到每天」。
+     *   · 三十四轮起新建月计划是整月 daily 序列（按天同步）；旧版 monthPlans
+     *     纯文本清单只读改写、不再新增。
      * ------------------------------------------------------------------ */
 
     var PLAN_TEXT_MAX = (Schema && Schema.MONTH_PLAN_TEXT_MAX) || 80;
@@ -566,9 +762,56 @@
     var planColumn = null;   /* 锚点（月份列；面板以原尺寸覆盖它） */
     var planBound = false;
 
+    /**
+     * 三十四轮：本月计划改为「整月 daily 序列 + meta.origin=monthPlan」，按天同步到日视图。
+     * 旧版 monthPlans（纯文本清单）继续可读可编辑，避免历史数据消失。
+     */
+    function monthPlanSeriesOf(ym) {
+      var doc = safeDoc();
+      var items = Array.isArray(doc.items) ? doc.items : [];
+      return items.filter(function (it) {
+        return it && it.kind === 'series' && it.meta
+          && it.meta.origin === 'monthPlan' && it.meta.month === ym;
+      }).sort(function (a, b) {
+        var ao = typeof a.order === 'number' ? a.order : 0;
+        var bo = typeof b.order === 'number' ? b.order : 0;
+        if (ao !== bo) return ao - bo;
+        return String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
+      });
+    }
+
+    /** 序列在当月的完成进度（按 occurrences; 被删除的例外不计入总数）。 */
+    function seriesProgress(series, ym) {
+      if (!Recurrence || typeof Recurrence.expandSeries !== 'function') return { done: 0, total: 0 };
+      try {
+        var res = Recurrence.expandSeries(series, {
+          from: ym + '-01', to: D.addMonths(ym + '-01', 1), max: 31
+        });
+        var done = 0;
+        res.occurrences.forEach(function (o) { if (o.done) done += 1; });
+        return { done: done, total: res.occurrences.length };
+      } catch (e) {
+        return { done: 0, total: 0 };
+      }
+    }
+
     function planItemsOf(ym) {
-      if (!store || typeof store.getMonthPlan !== 'function') return [];
-      try { return store.getMonthPlan(ym) || []; } catch (e) { return []; }
+      var out = monthPlanSeriesOf(ym).map(function (it) {
+        var progress = seriesProgress(it, ym);
+        return {
+          type: 'series', id: it.id, text: it.title,
+          done: progress.total > 0 && progress.done === progress.total,
+          series: it, progress: progress
+        };
+      });
+      if (store && typeof store.getMonthPlan === 'function') {
+        try {
+          (store.getMonthPlan(ym) || []).forEach(function (entry) {
+            out.push(Object.assign({ type: 'legacy' }, entry));
+          });
+        } catch (e) { /* 旧数据异常时只显示序列 */ }
+      }
+      return out;
     }
 
     function monthLabel(ym) {
@@ -577,16 +820,29 @@
     }
 
     function buildPlanRow(entry, index, ym) {
+      var isSeries = entry.type === 'series';
+      var progress = entry.progress || null;
       var row = el('div', {
-        class: 'mp-item' + (entry.done ? ' is-done' : ''),
-        'data-plan-id': entry.id, 'data-done': entry.done ? 'true' : 'false',
+        class: 'mp-item' + (entry.done ? ' is-done' : '') + (isSeries ? ' is-series' : ''),
+        'data-plan-id': entry.id, 'data-plan-type': entry.type,
+        'data-done': entry.done ? 'true' : 'false',
         tabindex: '0', role: 'button',
-        title: entry.done
-          ? '已完成：' + entry.text + '（右键取消完成）'
-          : '点击修改「' + entry.text + '」；右键标记完成'
+        title: isSeries
+          ? '点击编辑「' + entry.text + '」；完成情况按天记录'
+          : (entry.done
+            ? '已完成：' + entry.text + '（右键取消完成）'
+            : '点击修改「' + entry.text + '」；右键标记完成')
       });
       row.appendChild(el('span', { class: 'mp-seq', text: String(index + 1) }));
       row.appendChild(el('span', { class: 'mp-text', text: entry.text }));
+      if (isSeries && progress && progress.total > 0) {
+        row.appendChild(el('span', {
+          class: 'mp-progress',
+          text: progress.done + '/' + progress.total,
+          title: '已完成 ' + progress.done + ' 天，共 ' + progress.total + ' 天',
+          'aria-label': '已完成 ' + progress.done + ' 天，共 ' + progress.total + ' 天'
+        }));
+      }
       row.appendChild(el('button', {
         class: 'mp-del', type: 'button', text: '✕',
         title: '删除「' + entry.text + '」', 'aria-label': '删除计划：' + entry.text,
@@ -597,12 +853,14 @@
         }
       }));
       row.addEventListener('click', function () { editPlan(ym, entry); });
-      row.addEventListener('contextmenu', function (e) {
-        if (e && e.preventDefault) e.preventDefault();
-        /* 右键 ✕ 不切换完成，交给按钮自身（浏览器菜单已屏蔽） */
-        if (e && e.target && closestBy(e.target, '.mp-del')) return;
-        togglePlanDone(ym, entry);
-      });
+      if (!isSeries) {
+        row.addEventListener('contextmenu', function (e) {
+          if (e && e.preventDefault) e.preventDefault();
+          /* 右键 ✕ 不切换完成，交给按钮自身（浏览器菜单已屏蔽） */
+          if (e && e.target && closestBy(e.target, '.mp-del')) return;
+          togglePlanDone(ym, entry);
+        });
+      }
       row.addEventListener('keydown', function (e) {
         /* 焦点在行内 ✕ 上时，键盘事件会冒泡到行；交给按钮自身（删除 / 空格），
            否则 Enter 会同时触发删除与编辑弹窗。 */
@@ -612,8 +870,8 @@
           editPlan(ym, entry);
           return;
         }
-        /* 键盘等价于右键：标准「菜单键」/ Shift+F10 */
-        if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
+        /* 键盘等价于右键：标准「菜单键」/ Shift+F10（仅旧版清单条目） */
+        if (!isSeries && (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10'))) {
           e.preventDefault();
           togglePlanDone(ym, entry);
         }
@@ -778,6 +1036,8 @@
     }
 
     function togglePlan(ym, col) {
+      /* 三十四轮：缩略态点击某月 = 退出缩略并回到该月的单列视图（面板太窄，不在此开启）。 */
+      if (compact) { setCompact(false, ym); return; }
       if (planPanel && planYM === ym) { closePlan(); return; }
       openPlan(ym, col);
     }
@@ -817,35 +1077,62 @@
       }
     }
 
+    function defaultCategoryIdOf(doc) {
+      return (doc && doc.settings && doc.settings.defaultCategoryId) || 'cat_short_task';
+    }
+
     function createPlan(ym) {
-      if (!store || typeof store.addMonthPlanItem !== 'function') return;
-      var input = el('input', {
-        type: 'text', maxlength: String(PLAN_TEXT_MAX)
-      });
-      var handle = M.open({
+      if (!store || typeof store.addItem !== 'function') return;
+      if (!Form || typeof Form.createMonthPlanForm !== 'function') {
+        M.toast('月计划表单尚未就绪');
+        return;
+      }
+      var doc = safeDoc();
+      var form = null;
+      try {
+        form = Form.createMonthPlanForm({
+          ym: ym,
+          categories: doc.categories || [],
+          defaultCategoryId: defaultCategoryIdOf(doc)
+        });
+      } catch (e) { form = null; }
+      if (!form || !form.element) { M.toast('月计划表单尚未就绪'); return; }
+
+      M.open({
         title: '创建本月计划',
-        body: el('div', {}, [
-          el('div', { class: 'field' }, [
-            el('label', { class: 'field-label', text: '计划内容' }), input
-          ])
-        ]),
+        body: form.element,
         submitLabel: '创建',
+        wide: true,
         onSubmit: function (ctx) {
+          var check = form.validate();
+          if (!check.ok) { ctx.setError(check.message); return false; }
+          var v = check.values || (typeof form.getValues === 'function' ? form.getValues() : null);
+          if (!v) { ctx.setError('表单取值失败'); return false; }
           try {
-            store.addMonthPlanItem(ym, input.value);
+            store.addItem({
+              kind: 'series',
+              title: v.title,
+              categoryId: v.categoryId,
+              time: v.time || null,
+              note: v.note || '',
+              repeat: v.repeat,
+              exceptions: {},
+              meta: v.meta
+            });
           } catch (e) {
-            ctx.setError(e.message);
+            ctx.setError(e.message || '创建失败');
             return false;
           }
-          handle.close();
           afterPlanChange();
+          M.toast('已创建本月计划（按天同步）');
           return true;
         }
       });
-      if (input && input.focus) { try { input.focus(); } catch (e) {} }
+      if (typeof form.focus === 'function') form.focus();
     }
 
     function editPlan(ym, entry) {
+      if (entry && entry.type === 'series') { editSeriesPlan(ym, entry); return; }
       if (!store || typeof store.updateMonthPlanItem !== 'function') return;
       var input = el('input', { type: 'text', maxlength: String(PLAN_TEXT_MAX) });
       input.value = entry.text;
@@ -880,8 +1167,61 @@
       if (input && input.focus) { try { input.focus(); input.select(); } catch (e) {} }
     }
 
-    /** 切换完成态（右键 / 菜单键）；完成后条目加删除线，数据仍留在 monthPlans。 */
+    /** 三十四轮：编辑整月序列；改动会同步到该月每一天。 */
+    function editSeriesPlan(ym, entry) {
+      if (!store || typeof store.updateItem !== 'function') return;
+      if (!Form || typeof Form.createMonthPlanForm !== 'function') {
+        M.toast('月计划表单尚未就绪');
+        return;
+      }
+      var series = (typeof store.getItem === 'function') ? store.getItem(entry.id) : entry.series;
+      if (!series) return;
+      var doc = safeDoc();
+      var form = null;
+      try {
+        form = Form.createMonthPlanForm({
+          ym: ym,
+          item: series,
+          categories: doc.categories || [],
+          defaultCategoryId: defaultCategoryIdOf(doc)
+        });
+      } catch (e) { form = null; }
+      if (!form || !form.element) { M.toast('月计划表单尚未就绪'); return; }
+
+      M.open({
+        title: '编辑本月计划',
+        body: form.element,
+        submitLabel: '保存',
+        wide: true,
+        onSubmit: function (ctx) {
+          var check = form.validate();
+          if (!check.ok) { ctx.setError(check.message); return false; }
+          var v = check.values || (typeof form.getValues === 'function' ? form.getValues() : null);
+          if (!v) { ctx.setError('表单取值失败'); return false; }
+          try {
+            store.updateItem(entry.id, {
+              title: v.title,
+              categoryId: v.categoryId,
+              time: v.time || null,
+              note: v.note || '',
+              repeat: v.repeat,
+              meta: v.meta
+            });
+          } catch (e) {
+            ctx.setError(e.message || '保存失败');
+            return false;
+          }
+          afterPlanChange();
+          M.toast('已保存');
+          return true;
+        }
+      });
+      if (typeof form.focus === 'function') form.focus();
+    }
+
+    /** 切换完成态（右键 / 菜单键）；仅旧版清单条目。序列的完成按天记录在日视图。 */
     function togglePlanDone(ym, entry) {
+      if (entry && entry.type === 'series') return;
       if (!store || typeof store.toggleMonthPlanItemDone !== 'function') return;
       var done;
       try {
@@ -896,9 +1236,14 @@
 
     /** 直接删除（行内 ✕）：不弹确认。 */
     function removePlanNow(ym, entry) {
-      if (!store || typeof store.removeMonthPlanItem !== 'function') return;
       try {
-        store.removeMonthPlanItem(ym, entry.id);
+        if (entry && entry.type === 'series') {
+          if (!store || typeof store.removeItem !== 'function') return;
+          store.removeItem(entry.id);
+        } else {
+          if (!store || typeof store.removeMonthPlanItem !== 'function') return;
+          store.removeMonthPlanItem(ym, entry.id);
+        }
       } catch (e) {
         M.toast(e.message);
         return;
@@ -909,8 +1254,12 @@
 
     /** 编辑弹窗里的「删除这条计划」仍走确认，避免误删。 */
     function deletePlan(ym, entry) {
+      var isSeries = entry && entry.type === 'series';
       M.confirm({
-        title: '删除计划', message: '确定删除「' + entry.text + '」？',
+        title: '删除计划',
+        message: isSeries
+          ? '确定删除「' + entry.text + '」？该月已同步到每天的事项会一并移除。'
+          : '确定删除「' + entry.text + '」？',
         confirmLabel: '删除', danger: true
       }).then(function (ok) {
         if (ok) removePlanNow(ym, entry);
@@ -919,10 +1268,14 @@
 
     /* ---------------- 渲染 ---------------- */
 
-    /** 依据当前 state.months 全量重绘列表（含年分隔）。 */
+    /** 依据当前 state.months 全量重绘列表（含年分隔）；手机缩略只画中间月 ±1。 */
     function renderList() {
       var context = renderContext();
       listEl.innerHTML = '';
+      if (compact) {
+        compactMonths().forEach(function (m) { listEl.appendChild(buildColumn(m.ym, context)); });
+        return;
+      }
       renderAppended(context, 0);
     }
 
@@ -931,6 +1284,7 @@
      * 追加分支复用它 → 只创建新月份的 DOM（不重绘已有列）。
      */
     function renderAppended(context, fromIndex) {
+      if (compact) return fromIndex;
       var i = fromIndex;
       for (; i < state.months.length; i += 1) {
         var m = state.months[i];
@@ -942,6 +1296,7 @@
 
     function render() {
       if (destroyed) return;
+      if (compact && planPanel) closePlan(true);
       renderList();
       updateStatus();
       syncDiagnostics();
@@ -969,8 +1324,14 @@
       return planHeadOf(findPlanColumn(ym));
     }
 
-    /** 边界提示与缺年份提示（AC-23.5 / 数据集边界）。 */
+    /** 边界提示与缺年份提示（AC-23.5 / 数据集边界）；缩略态不显示滚动边界提示。 */
     function updateStatus() {
+      if (compact) {
+        state.boundaryMsg = '';
+        boundaryEl.hidden = true;
+        boundaryEl.textContent = '';
+        return;
+      }
       var range = state.range || { startYM: MIN_YM, endYM: MAX_YM };
       var msg = '';
       if (range.startYM <= MIN_YM && range.endYM >= MAX_YM) {
@@ -991,8 +1352,12 @@
       element.setAttribute('data-append-count', String(state.appendCount));
       element.setAttribute('data-range-start', state.range ? state.range.startYM : '');
       element.setAttribute('data-range-end', state.range ? state.range.endYM : '');
+      element.setAttribute('data-month-compact', compact ? 'true' : 'false');
+      if (compact) element.setAttribute('data-compact-center', compactCenterYM || '');
+      else element.removeAttribute('data-compact-center');
       if (typeof window !== 'undefined' && window.innerWidth) {
-        element.setAttribute('data-month-cols', String(monthColumns(viewportWidth())));
+        element.setAttribute('data-month-cols',
+          String(compact ? COMPACT_COLS : monthColumns(viewportWidth())));
       }
     }
 
@@ -1080,6 +1445,7 @@
      * @returns {boolean} 是否真的追加了月份
      */
     function extend(direction) {
+      if (compact) return false;
       if (!state.range || !CG || typeof CG.extendRange !== 'function') return false;
       var beforeCount = state.months.length;
       var next = CG.extendRange(state.range, direction, { years: CG.MONTH_EXTEND_YEARS });
@@ -1158,7 +1524,7 @@
     /* ---------------- 滚动追加 ---------------- */
 
     function handleScroll() {
-      if (suppressScroll || destroyed) return;
+      if (suppressScroll || destroyed || compact) return;
       var m = scrollMetrics();
       var top = m.scrollTop;
       var previous = lastScrollTop;
@@ -1204,7 +1570,7 @@
 
     /** 无原生滚动行程（视口极高）时的滚轮兜底。 */
     function onWheel(e) {
-      if (destroyed) return;
+      if (destroyed || compact) return;
       if (scrollEl.scrollHeight > scrollEl.clientHeight + 4) return; /* 有原生行程 → 交给 scroll */
       /* 窄屏档（浏览器缩放到 200% 时常见）由页面的滚动条负责滚动；此时若仍
          preventDefault 去追加年份，滚轮会被吞掉、页面完全滚不动。 */
@@ -1241,6 +1607,7 @@
       var ym = clampYM(iso.slice(0, 7));
       var changed = ym !== state.centerYM;
       state.centerYM = ym;
+      if (compact) compactCenterYM = ym;
       resetWindow();
       if (changed) setScrollTop(0);
       render();
@@ -1251,6 +1618,7 @@
     function navigate(delta) {
       var d = delta < 0 ? -1 : (delta > 0 ? 1 : 0);
       if (!d) return false;
+      if (compact) setCompact(false);
       var target = addMonthsYM(state.centerYM, d);
       if (!target) return false;
       if (target < MIN_YM) { state.centerYM = MIN_YM; resetWindow(); render(); return false; }
@@ -1279,6 +1647,11 @@
       unsubscribe = null;
       scrollEl.removeEventListener('scroll', onScroll);
       scrollEl.removeEventListener('wheel', onWheel);
+      element.removeEventListener('touchstart', onMonthTouchStart);
+      element.removeEventListener('touchmove', onMonthTouchMove);
+      element.removeEventListener('touchend', onMonthTouchEnd);
+      element.removeEventListener('touchcancel', onMonthTouchEnd);
+      element.removeEventListener('click', onMonthClickCapture, true);
       if (element.parentNode) element.parentNode.removeChild(element);
     }
 
@@ -1301,6 +1674,10 @@
       getMonth: getMonth,
       /* 迭代 6（F-40）：切到月视图时回到「今天」的位置（app 调用） */
       scrollToToday: scrollToToday,
+      /* 三十四轮：手机三个月缩略（pinch 手势 / 测试可直接调用） */
+      setCompact: setCompact,
+      isCompact: function () { return compact; },
+      getCompactCenter: function () { return compactCenterYM; },
       destroy: destroy,
       /* 诊断用（ST-58 / SC-24）：不改变冻结签名，仅追加只读访问器 */
       getRange: function () { return state.range ? { startYM: state.range.startYM, endYM: state.range.endYM } : null; },
