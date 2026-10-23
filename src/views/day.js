@@ -1462,10 +1462,17 @@
       if (opts2.notify !== false && opts.onSelectDate) opts.onSelectDate(iso);
       compute();
       renderAll();
+      /* 三十九轮（用户口径）：前移 / 后移也要左右滑入，与切档同一套观感。 */
+      if (opts2.slide) {
+        var motion = root.DayPlan.motion;
+        if (motion && typeof motion.slidePanel === 'function') motion.slidePanel(els.panel, opts2.slide);
+      }
     }
 
     function shiftDate(days) {
-      setDate(D.addDays(state.date, days));
+      var dir = days < 0 ? -1 : (days > 0 ? 1 : 0);
+      if (!dir) return;
+      setDate(D.addDays(state.date, days), { slide: dir });
     }
 
     els.prev.addEventListener('click', function () { shiftDate(-1); });

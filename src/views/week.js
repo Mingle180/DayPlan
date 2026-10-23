@@ -916,6 +916,10 @@
       var doc = docOf();
       var stale = dataStamp(doc) !== lastRenderStamp;
       if (changed || o.force || stale) render();
+      if (changed && o.slide) {
+        var motion = root.DayPlan.motion;
+        if (motion && typeof motion.slidePanel === 'function') motion.slidePanel(rootEl, o.slide);
+      }
       if (o.notify !== false && opts.onSelectDate) opts.onSelectDate(next);
     }
 
@@ -931,7 +935,7 @@
       if (!weeks) return;
       /* app 传 days/7：±1 天与 ±7 天都按「相邻一周」处理（周视图不按天移动） */
       var steps = weeks > 0 ? Math.max(1, Math.round(weeks)) : Math.min(-1, Math.round(weeks));
-      setWeekStart(D.addDays(base, steps * 7), { notify: true });
+      setWeekStart(D.addDays(base, steps * 7), { notify: true, slide: steps > 0 ? 1 : -1 });
     }
 
     function getWeekStart() { return state.monday; }

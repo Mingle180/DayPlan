@@ -98,8 +98,10 @@
     z-index: 4;
   }
 }
-/* 面板打开时卡内已有可交互内容：不再整体缩放（避免面板与条目跟着抖动）。 */
-.month-col.is-plan-open:hover { box-shadow: var(--shadow-block); transform: none; }
+@media (hover: hover) {
+  /* 面板打开时卡内已有可交互内容：不再整体缩放（避免面板与条目跟着抖动）。 */
+  .month-col.is-plan-open:hover { box-shadow: var(--shadow-block); transform: none; }
+}
 .month-col-head {
   /* 2026-10-20 六轮（用户需求）：列头 = 月份卡片的「非日期部分」，点击进入本月计划。
      改成 button 后必须把原生外观彻底重置，否则会出现灰底 + 居中失效。 */
@@ -185,7 +187,11 @@
   cursor: pointer;
   transition: background-color var(--ease);
 }
-.mp-item:hover { background: var(--surface-3); }
+@media (hover: hover) {
+  .mp-item:hover { background: var(--surface-3); }
+  .mp-item:hover .mp-del { opacity: 1; }
+  .mp-del:hover { color: var(--danger); background: var(--danger-weak); }
+}
 .mp-item:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 .mp-seq {
   flex: none;
@@ -226,9 +232,7 @@
   opacity: 0;
   transition: opacity var(--ease), color var(--ease), background-color var(--ease);
 }
-.mp-item:hover .mp-del,
 .mp-item:focus-within .mp-del { opacity: 1; }
-.mp-del:hover { color: var(--danger); background: var(--danger-weak); }
 /* 三十四轮：按天同步的月计划在条目右侧显示完成进度（n/N），旧版清单条目不显示 */
 .mp-progress {
   flex: none;
@@ -352,6 +356,22 @@
 .month-boundary { bottom: 10px; }
 .month-boundary[hidden] { display: none; }
 
+/* 月 ↔ 年 FLIP 期间整张列表被放大，超出的变换会让 .month-scroll 瞬时出现纵向滚动条，
+   列宽随之变化 → 年视图落点偏 ~21px 并且会闪一下。翻转期间关掉自身溢出
+   （clip 不建立滚动容器，动画结束移除类后恢复）。三十七轮起不再只限手机档：
+   桌面翻转同样会出现瞬时滚动条。 */
+.month-view.is-flipping .month-scroll { overflow: clip; }
+
+/* 翻转 / 切档期间页头改纯色底：半透明玻璃要实时采样下方正在 transform、滚动的巨大内容，
+   Chromium 会逐帧重算导致页头闪；过渡结束后移除类自动恢复。
+   三十八轮（用户反馈）：不只年 ↔ 月 FLIP，月 / 周 / 日左右滑入期间同样要关。 */
+body.is-year-flipping .app-header,
+body.is-view-switching .app-header {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background: var(--surface);
+}
+
 @media (max-width: 900px) {
   .month-view { height: auto; max-height: none; min-height: 0; }
   .month-list { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
@@ -376,45 +396,93 @@
   .mc-lunar { font-size: 10px; }
   .month-dow { font-size: 11px; line-height: 24px; }
 
-  /* 三十四轮：双指捏合由 JS 处理；禁止浏览器把双指手势当页面缩放 / 横向平移 */
+  /* 禁止浏览器把双指手势当页面缩放 / 横向平移（三十七轮起年视图不再由捏合切换） */
   .month-view { touch-action: pan-y; }
+}
 
-  /* 三个月缩略：只留数字（星期 / 农历 / 节假日 / 记录点全部隐藏） */
-  .month-view.is-compact-3m .month-list {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 6px;
+/* ------------------------------------------------------------------ *
+ * 年视图（二十六轮前称「缩略」）：一年 = 3 列 × 4 行，可纵向滚到相邻年份。
+ * 2026-10-23 三十七轮（用户口径）：入口只保留手机端分段控件的「年」（桌面不提供），
+ * 入口去掉后仍是同一份 DOM / 同一套 3 列规则。
+ * 只显示日号：星期 / 农历 / 节假日 / 记录点 / 卡头年份全部隐藏。
+ * ------------------------------------------------------------------ */
+.month-view.is-year-view .month-list {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+.month-view.is-year-view .month-year-sep {
+  margin: 16px 0 2px;
+  padding-bottom: 4px;
+  font-size: 22px;
+  letter-spacing: -.3px;
+}
+.month-view.is-year-view .month-year-sep .sep-note { display: none; }
+.month-view.is-year-view .month-col {
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  cursor: zoom-in;
+}
+.month-view.is-year-view .month-col-head {
+  min-height: 28px;
+  padding: 0 0 4px;
+  margin-bottom: 4px;
+  gap: 2px;
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+/* 年份由整行分隔条标示，卡头只留「N 月」 */
+.month-view.is-year-view .month-col-head .mch-date,
+.month-view.is-year-view .month-col-head .mch-plan { display: none; }
+.month-view.is-year-view .month-dow-row { display: none; }
+.month-view.is-year-view .month-grid,
+.month-view.is-year-view .month-week-row { gap: 0; }
+.month-view.is-year-view .month-cell {
+  min-height: 0;
+  height: 18px;
+  padding: 0;
+  gap: 0;
+  justify-content: center;
+  border-radius: 2px;
+}
+.month-view.is-year-view .month-cell.is-outside { visibility: hidden; }
+.month-view.is-year-view .mc-dayrow { gap: 0; }
+.month-view.is-year-view .mc-day { font-size: 11px; font-weight: 500; }
+.month-view.is-year-view .month-cell.is-today .mc-day { font-weight: 800; }
+.month-view.is-year-view .mc-flag,
+.month-view.is-year-view .mc-lunar,
+.month-view.is-year-view .mc-marks { display: none; }
+/* 年视图里点月份 = 放大进入该月；关闭整卡缩放，避免点击瞬间抖动 */
+@media (hover: hover) {
+  .month-view.is-year-view .month-col:hover,
+  .month-view.is-year-view .month-col.is-plan-open:hover { box-shadow: var(--shadow-block); transform: none; }
+}
+/* 三十九轮（用户口径）：年视图不再用蓝框标出选中月 —— 以「该月滚到中央」表达落点。 */
+
+
+/* 月 ↔ 年 FLIP 进行中：整张列表由 WAAPI 统一变换，
+   卡片暂时不吃指针事件（避免半途点开计划 / 日期），结束后由 JS 移除。 */
+.month-view.is-flipping .month-col { pointer-events: none; }
+.month-view.is-flipping .month-list { will-change: transform, opacity; }
+
+@media (max-width: 640px) {
+  .month-view.is-year-view .month-list { gap: 6px; }
+  .month-view.is-year-view .month-year-sep {
+    margin: 8px 0 0;
+    padding-bottom: 3px;
+    font-size: 17px;
+    letter-spacing: -.2px;
   }
-  .month-view.is-compact-3m .month-col {
-    padding: 4px;
-    border-radius: var(--radius-sm);
-  }
-  .month-view.is-compact-3m .month-col-head {
-    min-height: 24px;
+  .month-view.is-year-view .month-col { padding: 4px; }
+  .month-view.is-year-view .month-col-head {
+    min-height: 22px;
     padding: 0 0 3px;
     margin-bottom: 3px;
-    gap: 2px;
     font-size: 10px;
-    line-height: 1.2;
-    white-space: nowrap;
   }
-  .month-view.is-compact-3m .month-col-head .ym-m { font-size: 10px; }
-  .month-view.is-compact-3m .month-col-head .mch-plan { display: none; }
-  .month-view.is-compact-3m .month-dow-row { display: none; }
-  .month-view.is-compact-3m .month-grid { gap: 0; }
-  .month-view.is-compact-3m .month-week-row { gap: 0; }
-  .month-view.is-compact-3m .month-cell {
-    min-height: 0;
-    padding: 0;
-    gap: 0;
+  .month-view.is-year-view .month-cell {
+    height: auto;
     aspect-ratio: 1 / 1;
-    justify-content: center;
-    border-radius: 2px;
   }
-  .month-view.is-compact-3m .month-cell.is-outside { visibility: hidden; }
-  .month-view.is-compact-3m .mc-dayrow { gap: 0; }
-  .month-view.is-compact-3m .mc-day { font-size: 10px; font-weight: 500; }
-  .month-view.is-compact-3m .month-cell.is-today .mc-day { font-weight: 800; }
-  .month-view.is-compact-3m .mc-flag,
-  .month-view.is-compact-3m .mc-lunar,
-  .month-view.is-compact-3m .mc-marks { display: none; }
+  .month-view.is-year-view .mc-day { font-size: 10px; }
 }

@@ -30,15 +30,8 @@
 .view-root { min-width: 0; }
 .view-root[hidden] { display: none !important; }
 
-/* 视图切换（2026-10-21）：仅用户换档时由 app.js 加类，纯透明度淡入。
-   不用 transform / filter —— 它们会成为 fixed 包含块，把展开卡的固定定位带偏。 */
-.view-root.is-view-entering {
-  animation: dp-view-enter 200ms cubic-bezier(.2, .8, .2, 1);
-}
-@keyframes dp-view-enter {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
+/* 视图切换（三十七轮）：改用 app.js 的 WAAPI 水平位移 + 轻透明度，
+   不再做整页 opacity 淡入 —— 淡入首帧透出页面底色，用户会看成「闪一下」。 */
 
 /* ---------- 视图切换控件（F-02.1；规范 12 / LA-1：iOS 分段控件） ---------- */
 .view-switch {
@@ -63,7 +56,9 @@
   transition: background var(--ease), color var(--ease), box-shadow var(--ease);
 }
 .view-switch-btn + .view-switch-btn { border-left: 0; }
-.view-switch-btn:hover { color: var(--text); }
+@media (hover: hover) {
+  .view-switch-btn:hover { color: var(--text); }
+}
 .view-switch-btn.is-active {
   background: var(--seg-active);
   color: var(--seg-active-text);
@@ -87,7 +82,10 @@
   box-shadow: 0 1px 4px rgba(0, 0, 0, .14);
   pointer-events: none;
   will-change: transform;
-  transition: transform var(--ease), width var(--ease), height var(--ease);
+  /* 三十七轮：四段控件里白块跟着视图一起左右滑，时长略放缓 */
+  transition: transform 360ms cubic-bezier(.22, 1, .36, 1),
+    width 360ms cubic-bezier(.22, 1, .36, 1),
+    height 360ms cubic-bezier(.22, 1, .36, 1);
 }
 .view-switch-thumb.is-dragging { transition: none; }
 
@@ -254,9 +252,11 @@
   border-radius: var(--radius-xs);
   box-shadow: 0 1px 2px rgba(16, 24, 40, .10), 0 2px 8px rgba(16, 24, 40, .08);
 }
-.item-actions .btn:hover {
-  background: var(--surface);
-  box-shadow: 0 2px 6px rgba(16, 24, 40, .16), 0 6px 16px rgba(16, 24, 40, .12);
+@media (hover: hover) {
+  .item-actions .btn:hover {
+    background: var(--surface);
+    box-shadow: 0 2px 6px rgba(16, 24, 40, .16), 0 6px 16px rgba(16, 24, 40, .12);
+  }
 }
 .item-actions .btn.is-on {
   border-color: transparent;

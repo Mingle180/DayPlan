@@ -50,11 +50,15 @@
 .wk-head .wk-dow { font-weight: 600; }
 /* 2026-10-21 用户口径：今天不再铺浅蓝底，只把「周几」标红 */
 .wk-head.is-today .wk-dow { color: var(--danger); }
-.wk-head:hover { background: var(--surface-3); }
+@media (hover: hover) {
+  .wk-head:hover { background: var(--surface-3); }
+}
 /* 列体：空白处可点（US-22.2 进入日视图），故整列 cursor:pointer；
  * 事项块自身仍是折叠/展开（JS 阻止冒泡）。 */
 .wk-col { position: relative; border-left: 1px solid var(--border); cursor: pointer; }
-.wk-col:hover { background: rgba(120, 120, 128, .06); }
+@media (hover: hover) {
+  .wk-col:hover { background: rgba(120, 120, 128, .06); }
+}
 /* 迭代 10 批次 1 二轮反馈：时间轴列用白底（与日视图刻度行的白面一致），
  * 表格其余区域仍由 .week-scroll 的 --surface-2 提供浅灰 */
 .wk-axis { position: relative; background: var(--surface); }

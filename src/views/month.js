@@ -62,11 +62,17 @@
   var LIST_GAP_PX = 12;          /* .month-list 的 grid gap（styles/month.css） */
   /* 手机单列口径：与 styles/month.css 的 ≤640 断点同值（改一处必须同步另一处） */
   var MOBILE_MAX_PX = 640;
-  /* 三十四轮：手机双指捏合进入 / 退出三个月缩略图 */
-  var COMPACT_COLS = 3;
-  var PINCH_IN_RATIO = 0.78;    /* 两指距离缩到 78% 以下 → 进入缩略 */
-  var PINCH_OUT_RATIO = 1.28;   /* 两指距离回到 128% 以上 → 退出缩略 */
-  var PINCH_CLICK_GUARD_MS = 450;
+  /* 年视图（三十六轮命名；此前称「缩略」）：一年 12 个月 3 列 × 4 行，可纵向滚到相邻年份。
+     三十七轮（用户口径）：入口只剩手机端分段控件的「年」，不再识别双指捏合，桌面也没有入口。 */
+  var YEAR_COLS = 3;
+  /* 月 ↔ 年 FLIP 过渡（参考 Apple 日历）：700ms 更缓，锚点月保持空间连续。
+     只对 .month-list 做 transform，不加整层 opacity —— 半透明会透出页面底色，像闪一下。 */
+  var FLIP_MS = 700;
+  var FLIP_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)';
+  var FLIP_FADE_MS = 260;       /* 其他月份辅助淡入（两个方向都从 0 淡入，避免重排跳变） */
+  var FLIP_FADE_STEP_MS = 16;   /* 错峰步长（同排 12 个月最多 128ms） */
+  var YEAR_EXTEND_TRIGGER_PX = 320; /* 年视图滚到距顶 / 底该距离时续载 1 年 */
+  var YEAR_EXTEND_THROTTLE_MS = 240;
 
   /** 默认落点颜色（无类别色时）。 */
   var DEFAULT_DOT_COLOR = '#94a3b8';
@@ -186,13 +192,12 @@
     var destroyed = false;
     var unsubscribe = null;
 
-    /* 三十四轮：手机三个月缩略（pinch-in 进入 / pinch-out 退出） */
-    var compact = false;
-    var compactCenterYM = null;
-    var touchStartDist = 0;
-    var pinchGesture = false;
-    var pinchHandled = false;
-    var suppressClickUntil = 0;
+    /* 年视图（三十七轮起只由手机端分段控件的「年」进入；捏合手势已移除） */
+    var yearMode = false;
+    var yearCenterYM = null;
+    var flipAnim = null;          /* 进行中的月 ↔ 年 FLIP 动画 */
+    var flipFades = [];           /* 其他月份的错峰淡入动画 */
+    var yearExtendAt = 0;
 
     /* 标记点缓存：ym -> {version, map}，LRU ≤ MARKER_CACHE_LIMIT */
     var markerCache = Object.create(null);
@@ -395,7 +400,8 @@
 
     function buildColumn(ym, ctx) {
       var p = parseYM(ym);
-      /* AC-23.1：无「选中」态 —— 不再有 is-center / .ym-badge / 「选中」文案 */
+      /* AC-23.1：无「选中」态 —— 不再有 is-center / .ym-badge / 「选中」文案。
+         三十九轮（用户口径）：年视图也不再描边标出选中月，落点靠滚到中央表达。 */
       var col = el('div', { class: 'month-col', 'data-ym': ym });
 
       /* 2026-10-20 六轮（用户需求）：月份卡片的「非日期部分」= 列头。点它进入「本月计划」；
@@ -456,6 +462,10 @@
          不再只认顶部列头。日期格 / 整周行仍进周视图（它们有自己的 click），
          列头与已展开的计划面板各自处理，避免一次点击来回开关。 */
       col.addEventListener('click', function (e) {
+        /* 年视图里整张卡都是「放大进入该月」的入口：日期数字没有自己的点击行为，
+           不能再按 .month-cell 放行，否则点数字没反应（真机探针抓到）。
+           周行 / 列头已在上方先处理并退出年视图，此处再落到原来的分支。 */
+        if (yearMode) { togglePlan(ym, col); return; }
         var t = e && e.target;
         if (t && t !== col) {
           if (closestBy(t, '.month-week-row') || closestBy(t, '.month-cell')) return;
@@ -518,12 +528,7 @@
       return Math.max(0, Math.floor(idx / perRow) * (colH + LIST_GAP_PX));
     }
 
-    /* ---------------- 手机滚动 / 三个月缩略（三十四轮） ---------------- */
-
-    function isMobileWidth() {
-      var w = viewportWidth();
-      return w > 0 && w <= MOBILE_MAX_PX;
-    }
+    /* ---------------- 手机滚动 ---------------- */
 
     /** 当前生效的是 .month-scroll 自身滚动，还是整页滚动。 */
     function internalScrolls() {
@@ -550,159 +555,341 @@
      */
     function scrollColumnToTop(col) {
       if (!col) return;
+      /* 视图隐藏时 offsetTop 全为 0：此时滚动会把整页拉到顶部（切到周 / 日视图时跳动）。 */
+      if (container && container.hidden) return;
       if (internalScrolls()) {
         setScrollTop(Math.max(0, numOption(col.offsetTop, 0) - 12));
         return;
       }
       if (typeof window === 'undefined' || typeof window.scrollTo !== 'function') return;
-      var rect = col.getBoundingClientRect ? col.getBoundingClientRect() : null;
-      if (!rect) return;
-      var y = pageScrollTop() + rect.top - headerOffset();
-      window.scrollTo(0, Math.max(0, y));
-    }
-
-    /** 缩略图很短：直接滚到月列表顶部。 */
-    function scrollListToTop() {
-      if (internalScrolls()) { setScrollTop(0); return; }
-      if (typeof window === 'undefined' || typeof window.scrollTo !== 'function') return;
-      var rect = listEl.getBoundingClientRect ? listEl.getBoundingClientRect() : null;
-      if (!rect) return;
-      window.scrollTo(0, Math.max(0, pageScrollTop() + rect.top - headerOffset()));
-    }
-
-    /** 视口顶部正在看的是哪个月（缩略图以它为中间列）。 */
-    function visibleMonthYM() {
-      var cols = listEl.querySelectorAll('.month-col');
-      if (!cols.length) return state.centerYM;
-      var top = headerOffset();
-      for (var i = 0; i < cols.length; i += 1) {
-        if (typeof cols[i].getBoundingClientRect !== 'function') continue;
-        var r = cols[i].getBoundingClientRect();
-        if (!r || (!r.width && !r.height)) continue; /* DOM 垫片无布局 */
-        if (r.bottom > top + 2) return cols[i].getAttribute('data-ym') || state.centerYM;
-      }
-      return state.centerYM;
-    }
-
-    function monthEntry(ym) {
-      var p = parseYM(ym);
-      if (!p) return null;
-      return { ym: ym, year: p.year, month: p.month, isYearStart: p.month === 1 };
-    }
-
-    function compactMonths() {
-      var center = clampYM(compactCenterYM || state.centerYM);
-      var out = [];
-      for (var i = -1; i <= 1; i += 1) {
-        var ym = addMonthsYM(center, i);
-        if (!ym || ym < MIN_YM || ym > MAX_YM) continue;
-        var entry = monthEntry(ym);
-        if (entry) out.push(entry);
-      }
-      return out;
+      /* offsetTop 链不依赖当前滚动位置：月 ↔ 年重排后 pageYOffset 可能仍是旧值，
+         旧算法（pageScrollTop + rect.top）会越界并被夹到列表底部。 */
+      window.scrollTo(0, clampPageScroll(documentTopOf(col) - headerOffset()));
     }
 
     /**
-     * 进入 / 退出手机三个月缩略。
-     * @param {boolean} on
-     * @param {string} [centerYM] 以该月为中间列（缺省取当前视口顶部月份）
-     * @returns {boolean} 状态是否改变
+     * 把某个月份列滚到可视区中央（三十八轮：年 → 月放大的落点）。
+     * 用户口径：选中的月份要出现在页面中央，而不是贴着页头顶部。
+     * 手机档 .month-scroll 不自滚，滚的是页面；桌面滚 .month-scroll。
      */
-    function setCompact(on, centerYM) {
-      on = !!on;
-      if (on && !isMobileWidth()) return false;
-      if (on === compact) return false;
-      if (on) {
-        var target = (centerYM && parseYM(centerYM)) ? clampYM(centerYM) : (visibleMonthYM() || state.centerYM);
-        closePlan(true);
-        compact = true;
-        compactCenterYM = target;
-        state.centerYM = target;
-        if (element.classList) element.classList.add('is-compact-3m');
-        render();
-        scrollListToTop();
-        return true;
-      }
-      compact = false;
-      if (centerYM && parseYM(centerYM)) compactCenterYM = clampYM(centerYM);
-      if (compactCenterYM) state.centerYM = compactCenterYM;
-      compactCenterYM = null;
-      if (element.classList) element.classList.remove('is-compact-3m');
-      resetWindow();
-      render();
-      scrollColumnToTop(findPlanColumn(state.centerYM));
-      return true;
-    }
-
-    function touchDistance(touches) {
-      if (!touches || touches.length < 2) return 0;
-      var a = touches[0], b = touches[1];
-      var dx = (a.clientX || a.pageX || 0) - (b.clientX || b.pageX || 0);
-      var dy = (a.clientY || a.pageY || 0) - (b.clientY || b.pageY || 0);
-      return Math.sqrt(dx * dx + dy * dy);
-    }
-
-    function onMonthTouchStart(e) {
-      if (!isMobileWidth() || !e || !e.touches || e.touches.length !== 2) {
-        touchStartDist = 0;
+    function scrollColumnToCenter(col) {
+      if (!col) return;
+      if (container && container.hidden) return;
+      if (internalScrolls()) {
+        var top = numOption(col.offsetTop, 0);
+        var h = numOption(col.offsetHeight, 0);
+        var viewH = numOption(container.clientHeight, 0);
+        setScrollTop(Math.max(0, top - Math.max(0, (viewH - h) / 2)));
         return;
       }
-      touchStartDist = touchDistance(e.touches);
-      pinchGesture = touchStartDist > 0;
-      pinchHandled = false;
-      suppressClickUntil = Date.now() + PINCH_CLICK_GUARD_MS;
-    }
-
-    function onMonthTouchMove(e) {
-      if (!pinchGesture || !e || !e.touches || e.touches.length < 2) return;
-      var dist = touchDistance(e.touches);
-      if (!(dist > 0) || !(touchStartDist > 0)) return;
-      var ratio = dist / touchStartDist;
-      /* 双指期间不允许浏览器缩放 / 页面跟着手指滚；缩略切换只认第一下阈值 */
-      if (e.cancelable !== false && typeof e.preventDefault === 'function') e.preventDefault();
-      if (!pinchHandled && !compact && ratio <= PINCH_IN_RATIO) {
-        pinchHandled = true;
-        setCompact(true);
-        suppressClickUntil = Date.now() + PINCH_CLICK_GUARD_MS;
-      } else if (!pinchHandled && compact && ratio >= PINCH_OUT_RATIO) {
-        pinchHandled = true;
-        setCompact(false);
-        suppressClickUntil = Date.now() + PINCH_CLICK_GUARD_MS;
+      if (typeof window === 'undefined' || typeof window.scrollTo !== 'function') return;
+      var rect = typeof col.getBoundingClientRect === 'function' ? col.getBoundingClientRect() : null;
+      var height = rect && rect.height ? rect.height : numOption(col.offsetHeight, 0);
+      var vh = numOption(window.innerHeight, 0);
+      /* 页头下方才是可见区；用「页头底 → 视口底」的中线作为卡片中心。 */
+      var topEdge = headerOffset() - 8;
+      var centerY = topEdge + Math.max(0, (vh - topEdge - height) / 2);
+      var place = function () {
+        scrollPageTo(clampPageScroll(documentTopOf(col) - centerY));
+      };
+      place();
+      /* 重排后的首帧高度可能还没稳定（字体 / 滚动条），下一帧再夹取一次。 */
+      if (typeof window.requestAnimationFrame === 'function') {
+        window.requestAnimationFrame(function () {
+          if (container && !container.hidden) place();
+        });
       }
     }
 
-    function onMonthTouchEnd(e) {
-      if (e && e.touches && e.touches.length >= 2) return;
-      touchStartDist = 0;
-      pinchGesture = false;
-      pinchHandled = false;
-      suppressClickUntil = Date.now() + PINCH_CLICK_GUARD_MS;
+    /**
+     * 月视图里「居于可视区中央」的月份（三十九轮）。
+     * 用户口径：月 → 年时选中的应是屏幕上正中间那个月，而不是顶部那个。
+     * 桌面滚 .month-scroll，取它的可视框；手机滚页面，取「页头底 → 视口底」。
+     */
+    function centeredMonthYM() {
+      var cols = listEl.querySelectorAll ? listEl.querySelectorAll('.month-col') : [];
+      if (!cols.length) return state.centerYM;
+      var top = null;
+      var bottom = null;
+      if (internalScrolls() && typeof scrollEl.getBoundingClientRect === 'function') {
+        var box = scrollEl.getBoundingClientRect();
+        if (box && box.height > 0) { top = box.top; bottom = box.bottom; }
+      }
+      if (typeof top !== 'number') {
+        top = headerOffset();
+        var vh = (typeof window !== 'undefined' && window.innerHeight) || 0;
+        bottom = vh > top ? vh : top;
+      }
+      var mid = (top + bottom) / 2;
+      var best = null;
+      var bestDist = Infinity;
+      for (var i = 0; i < cols.length; i += 1) {
+        if (typeof cols[i].getBoundingClientRect !== 'function') continue;
+        var r = cols[i].getBoundingClientRect();
+        if (!r || (!r.width && !r.height)) continue;
+        if (r.bottom <= top || r.top >= bottom) continue;
+        var d = Math.abs((r.top + r.bottom) / 2 - mid);
+        if (d < bestDist) { bestDist = d; best = cols[i]; }
+      }
+      return (best && best.getAttribute('data-ym')) || state.centerYM;
     }
 
-    /** 捏合结束后浏览器仍可能补一次 click：在捕获阶段吞掉，避免误进周视图 / 误开计划。 */
-    function onMonthClickCapture(e) {
-      if (Date.now() >= suppressClickUntil) return;
-      if (e && typeof e.preventDefault === 'function') e.preventDefault();
-      if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+    /* ---------------- 缩放过渡（参考 Apple 日历） ---------------- */
+
+    function prefersReducedMotion() {
+      if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
+      try { return !!window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; }
     }
 
-    element.addEventListener('touchstart', onMonthTouchStart, { passive: true });
-    try { element.addEventListener('touchmove', onMonthTouchMove, { passive: false }); }
-    catch (e) { element.addEventListener('touchmove', onMonthTouchMove); }
-    element.addEventListener('touchend', onMonthTouchEnd, { passive: true });
-    element.addEventListener('touchcancel', onMonthTouchEnd, { passive: true });
-    element.addEventListener('click', onMonthClickCapture, true);
+    function scrollPageTo(y) {
+      if (typeof window === 'undefined' || typeof window.scrollTo !== 'function') return;
+      window.scrollTo(0, Math.max(0, y));
+    }
+
+    /** 节点在文档中的纵向位置（offsetTop 链，不依赖当前滚动位置）。 */
+    function documentTopOf(node) {
+      var y = 0;
+      var n = node;
+      while (n && n !== document.body && n !== document.documentElement) {
+        y += numOption(n.offsetTop, 0);
+        n = n.offsetParent;
+      }
+      return y;
+    }
+
+    function maxPageScroll() {
+      var root = (typeof document !== 'undefined')
+        ? (document.scrollingElement || document.documentElement) : null;
+      var h = (root && root.scrollHeight) || 0;
+      var vh = (typeof window !== 'undefined' && window.innerHeight) || 0;
+      return Math.max(0, h - vh);
+    }
+
+    function clampPageScroll(y) {
+      return Math.max(0, Math.min(maxPageScroll(), numOption(y, 0)));
+    }
+
+    /** 元素视口矩形；无布局引擎（DOM 垫片）时返回 null。 */
+    function rectOf(node) {
+      if (!node || typeof node.getBoundingClientRect !== 'function') return null;
+      var r = node.getBoundingClientRect();
+      if (!r || (!r.width && !r.height)) return null;
+      return { left: r.left, top: r.top, width: r.width, height: r.height };
+    }
+
+    /**
+     * 翻转期间关掉页头的 backdrop-filter：半透明玻璃要实时采样下方被 transform 的
+     * 巨大列表，Chromium 在滚动 + 缩放同时发生时会闪。换纯色底只持续这次过渡。
+     */
+    function setFlipChrome(on) {
+      if (typeof document === 'undefined' || !document.body || !document.body.classList) return;
+      document.body.classList.toggle('is-year-flipping', !!on);
+    }
+
+    function clearListFlip() {
+      if (listEl.style) {
+        listEl.style.transform = '';
+        listEl.style.transformOrigin = '';
+        listEl.style.opacity = '';
+        listEl.style.transition = '';
+      }
+      if (element.classList) element.classList.remove('is-flipping');
+      setFlipChrome(false);
+    }
+
+    function cancelFades() {
+      for (var i = 0; i < flipFades.length; i += 1) {
+        try { flipFades[i].cancel(); } catch (e) { /* 已结束 */ }
+      }
+      flipFades = [];
+    }
+
+    /**
+     * 其他月份错峰淡入：只动 opacity，不逐格做布局动画。
+     * 两个方向都从 0 淡入 —— 退出年视图时列表已重排成单列，若让其他月份「淡出」，
+     * 结束后取消动画会把它们瞬间弹回 opacity:1（用户看到的「非选中月闪烁」）。
+     */
+    function playFades(anchorYM) {
+      cancelFades();
+      if (prefersReducedMotion() || typeof listEl.animate !== 'function') return;
+      var cols = listEl.querySelectorAll('.month-col');
+      for (var i = 0; i < cols.length; i += 1) {
+        var col = cols[i];
+        if (col.getAttribute('data-ym') === anchorYM) continue;
+        if (typeof col.animate !== 'function') continue;
+        var delay = Math.min(8, i % 12) * FLIP_FADE_STEP_MS;
+        try {
+          flipFades.push(col.animate(
+            [{ opacity: 0 }, { opacity: 1 }],
+            { duration: FLIP_FADE_MS, delay: delay, easing: 'ease-out', fill: 'both' }
+          ));
+        } catch (e) { /* 个别元素不支持 WAAPI：跳过即可 */ }
+      }
+    }
+
+    function endFlip(anim) {
+      if (flipAnim !== anim) return;
+      flipAnim = null;
+      cancelFades();
+      clearListFlip();
+      /* fill:'both' 的动画结束后仍挂在元素上（getAnimations 可见、identity 变换也算计算样式），
+         这里主动 cancel 清掉；内联样式已清空，取消不会造成视觉跳变。 */
+      if (anim) {
+        try { anim.cancel(); } catch (e) { /* 已取消 */ }
+      }
+    }
+
+    /**
+     * FLIP：锚点月在切换前后的视口矩形不同。先把整个列表按反向 transform 摆回
+     * 切换前的视觉位置（锚点月精确重合），再在 700ms 内归位 —— 用户看到的是
+     * 同一个月连续缩放，其余月份随容器一起就位。只对 .month-list 做一次变换；
+     * 不给列表加 opacity（半透明会透出页面底色，视觉上像闪一下）。
+     */
+    function runFlip(first, last, anchorYM) {
+      clearListFlip();
+      if (!first || !last) return;
+      if (prefersReducedMotion() || typeof listEl.animate !== 'function') return;
+      var listRect = rectOf(listEl);
+      if (!listRect) return;
+      var scale = first.width / last.width;
+      if (!(scale > 0.05) || !(scale < 20)) scale = 1;
+      /* origin 取锚点月在「目标布局」里的列表坐标：此点经 translate 后精确落到 first */
+      var ox = last.left - listRect.left;
+      var oy = last.top - listRect.top;
+      var dx = first.left - last.left;
+      var dy = first.top - last.top;
+      listEl.style.transformOrigin = ox + 'px ' + oy + 'px';
+      if (element.classList) element.classList.add('is-flipping');
+      setFlipChrome(true);
+      var anim = listEl.animate([
+        { transform: 'translate(' + dx + 'px, ' + dy + 'px) scale(' + scale + ')' },
+        { transform: 'translate(0px, 0px) scale(1)' }
+      ], { duration: FLIP_MS, easing: FLIP_EASING, fill: 'both' });
+      flipAnim = anim;
+      playFades(anchorYM);
+      if (anim.finished && typeof anim.finished.then === 'function') {
+        anim.finished.then(function () { endFlip(anim); }, function () { /* 被后续切换取消 */ });
+      } else if ('onfinish' in anim) {
+        anim.onfinish = function () { endFlip(anim); };
+      } else {
+        endFlip(anim);
+      }
+    }
+
+    /** 取消进行中的过渡并恢复静止布局：快速连续切换不累积冲突动画。 */
+    function cancelFlip() {
+      var anim = flipAnim;
+      flipAnim = null;
+      if (anim) {
+        try { anim.cancel(); } catch (e) { /* 已完成 */ }
+      }
+      cancelFades();
+      clearListFlip();
+    }
+
+    /** 把某年的年份分隔条带到页头下方（年视图进入 / 切换年份时落位）。 */
+    function scrollYearToTop(year) {
+      var sep = null;
+      var seps = listEl.querySelectorAll('.month-year-sep');
+      for (var i = 0; i < seps.length; i += 1) {
+        if (seps[i].getAttribute('data-year') === String(year)) { sep = seps[i]; break; }
+      }
+      if (!sep) {
+        scrollColumnToTop(findPlanColumn(String(year) + '-01'));
+        return;
+      }
+      if (internalScrolls()) {
+        setScrollTop(Math.max(0, numOption(sep.offsetTop, 0) - 12));
+        return;
+      }
+      scrollPageTo(clampPageScroll(documentTopOf(sep) - headerOffset()));
+      if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+        window.requestAnimationFrame(function () {
+          if (yearMode) scrollPageTo(clampPageScroll(documentTopOf(sep) - headerOffset()));
+        });
+      }
+    }
+
+    function notifyYearMode(on) {
+      if (typeof opts.onYearModeChange !== 'function') return;
+      try { opts.onYearModeChange(on); } catch (e) { /* 通知失败不影响视图 */ }
+    }
+
+    /**
+     * 进入年视图：一年 12 个月 3 列 × 4 行，选中月滚到可视区中央。
+     * 三十九轮（用户口径）：原来落在年份分隔条（顶部），进入后看到的是「上面的月份」；
+     * 改为把即将放大的目标月卡居中，FLIP 的起点与终点也就对齐在同一视觉中心。
+     */
+    function enterYearView(target, instant) {
+      cancelFlip();
+      var first = instant ? null : rectOf(findPlanColumn(target));
+      closePlan(true);
+      yearMode = true;
+      yearCenterYM = target;
+      state.centerYM = target;
+      if (element.classList) element.classList.add('is-year-view');
+      /* 先关页头毛玻璃再重排：否则重排那一帧会带着半透明页头画出来，用户看到闪一下。 */
+      if (!instant) setFlipChrome(true);
+      render();
+      scrollColumnToCenter(findPlanColumn(target));
+      if (instant) { notifyYearMode(true); return; }
+      var last = rectOf(findPlanColumn(target));
+      runFlip(first, last, target);
+      notifyYearMode(true);
+    }
+
+    /** 退出年视图并放大到某个月（缺省回到进入时的锚点月）。instant=true 时不做 FLIP（切走时视图已隐藏）。 */
+    function exitYearView(centerYM, instant) {
+      cancelFlip();
+      var target = (centerYM && parseYM(centerYM)) ? clampYM(centerYM)
+        : (yearCenterYM || state.centerYM);
+      var first = instant ? null : rectOf(findPlanColumn(target));
+      yearMode = false;
+      yearCenterYM = null;
+      state.centerYM = target;
+      if (element.classList) element.classList.remove('is-year-view');
+      if (!instant) setFlipChrome(true);
+      resetWindow();
+      render();
+      /* 三十八轮（用户口径）：年 → 月放大后，选中月落在页面中央而不是页头下方。 */
+      scrollColumnToCenter(findPlanColumn(target));
+      if (instant) { notifyYearMode(false); return; }
+      var last = rectOf(findPlanColumn(target));
+      runFlip(first, last, target);
+      notifyYearMode(false);
+    }
+
+    /**
+     * 进入 / 退出年视图（3 列 × 一年 12 个月，可纵向滚到相邻年份）。
+     * @param {boolean} on
+     * @param {string} [centerYM] 进入时以该月所在年为落点；退出时放大到该月
+     * @param {{instant?: boolean}} [o] instant：跳过过渡（视图已不可见 / 直接滑入年视图时）
+     * @returns {boolean} 状态是否改变
+     */
+    function setYearView(on, centerYM, o) {
+      on = !!on;
+      if (on === yearMode) return false;
+      var instant = !!(o && o.instant);
+      if (on) {
+        enterYearView((centerYM && parseYM(centerYM)) ? clampYM(centerYM)
+          : (centeredMonthYM() || state.centerYM), instant);
+      } else {
+        exitYearView(centerYM || null, instant);
+      }
+      return true;
+    }
 
     /**
      * 回到「今天」的位置（每次切到月视图时由 app 调用）：
      * 窗口里没有今天则先把窗口重置到今天所在月；手机档改为滚页面（.month-scroll 不自滚），
-     * 并退出三个月缩略，保证「切到月视图 = 今天所在月的单列视图」。
+     * 并退出年视图，保证「切到月视图 = 今天所在月的单列视图」。
      * @returns {boolean} 是否找到今天的日期格
      */
     function scrollToToday() {
       var mark = (container && typeof container.setAttribute === 'function') ? container : element;
-      if (compact) setCompact(false);
       var today = D.todayISO();
+      /* 三十九轮（用户口径）：在年视图里点「月」= 回到今天所在月，不再回到进入年的那个月。 */
+      if (yearMode) setYearView(false, today.slice(0, 7));
       var cell = todayCell();
       if (!cell) {
         state.selected = today;
@@ -735,10 +922,24 @@
       return true;
     }
 
+    /**
+     * 年视图 → 今天的月份（三十九轮：分段「月」的直接落点）。
+     * 先把今天的月卡在年列表里滚到中央，再放大——否则锚点矩形可能在屏外，
+     * FLIP 会从很远的坐标起跳。已在月视图时等价于 scrollToToday。
+     */
+    function exitToToday() {
+      var ym = D.todayISO().slice(0, 7);
+      if (!yearMode) { scrollToToday(); return; }
+      scrollColumnToCenter(findPlanColumn(ym));
+      setYearView(false, ym);
+    }
+
     /* ---------------- 交互 ---------------- */
 
     function openWeek(iso) {
       if (!D.isValidDate(iso)) iso = state.selected;
+      /* 年视图里整周行（含日期格）不可下钻：点任意位置都是放大进入该月。 */
+      if (yearMode) { setYearView(false, iso.slice(0, 7)); return; }
       if (typeof opts.onOpenWeek === 'function') opts.onOpenWeek(iso);
     }
 
@@ -1037,7 +1238,7 @@
 
     function togglePlan(ym, col) {
       /* 三十四轮：缩略态点击某月 = 退出缩略并回到该月的单列视图（面板太窄，不在此开启）。 */
-      if (compact) { setCompact(false, ym); return; }
+      if (yearMode) { setYearView(false, ym); return; }
       if (planPanel && planYM === ym) { closePlan(); return; }
       openPlan(ym, col);
     }
@@ -1268,14 +1469,14 @@
 
     /* ---------------- 渲染 ---------------- */
 
-    /** 依据当前 state.months 全量重绘列表（含年分隔）；手机缩略只画中间月 ±1。 */
+    /**
+     * 依据当前 state.months 全量重绘列表（含年分隔）。
+     * 三十五轮：缩略视图与单列视图共用同一份 DOM，只由 .is-year-view 改样式与列数，
+     * 因此缩略里是**窗口内全部月份**（可上下滚动），不再只画中心月 ±1。
+     */
     function renderList() {
       var context = renderContext();
       listEl.innerHTML = '';
-      if (compact) {
-        compactMonths().forEach(function (m) { listEl.appendChild(buildColumn(m.ym, context)); });
-        return;
-      }
       renderAppended(context, 0);
     }
 
@@ -1284,7 +1485,6 @@
      * 追加分支复用它 → 只创建新月份的 DOM（不重绘已有列）。
      */
     function renderAppended(context, fromIndex) {
-      if (compact) return fromIndex;
       var i = fromIndex;
       for (; i < state.months.length; i += 1) {
         var m = state.months[i];
@@ -1296,7 +1496,7 @@
 
     function render() {
       if (destroyed) return;
-      if (compact && planPanel) closePlan(true);
+      if (yearMode && planPanel) closePlan(true);
       renderList();
       updateStatus();
       syncDiagnostics();
@@ -1326,7 +1526,7 @@
 
     /** 边界提示与缺年份提示（AC-23.5 / 数据集边界）；缩略态不显示滚动边界提示。 */
     function updateStatus() {
-      if (compact) {
+      if (yearMode) {
         state.boundaryMsg = '';
         boundaryEl.hidden = true;
         boundaryEl.textContent = '';
@@ -1352,12 +1552,12 @@
       element.setAttribute('data-append-count', String(state.appendCount));
       element.setAttribute('data-range-start', state.range ? state.range.startYM : '');
       element.setAttribute('data-range-end', state.range ? state.range.endYM : '');
-      element.setAttribute('data-month-compact', compact ? 'true' : 'false');
-      if (compact) element.setAttribute('data-compact-center', compactCenterYM || '');
-      else element.removeAttribute('data-compact-center');
+      element.setAttribute('data-month-year', yearMode ? 'true' : 'false');
+      if (yearMode) element.setAttribute('data-year-center', yearCenterYM || '');
+      else element.removeAttribute('data-year-center');
       if (typeof window !== 'undefined' && window.innerWidth) {
         element.setAttribute('data-month-cols',
-          String(compact ? COMPACT_COLS : monthColumns(viewportWidth())));
+          String(yearMode ? YEAR_COLS : monthColumns(viewportWidth())));
       }
     }
 
@@ -1445,7 +1645,7 @@
      * @returns {boolean} 是否真的追加了月份
      */
     function extend(direction) {
-      if (compact) return false;
+      if (yearMode) return false;
       if (!state.range || !CG || typeof CG.extendRange !== 'function') return false;
       var beforeCount = state.months.length;
       var next = CG.extendRange(state.range, direction, { years: CG.MONTH_EXTEND_YEARS });
@@ -1524,7 +1724,9 @@
     /* ---------------- 滚动追加 ---------------- */
 
     function handleScroll() {
-      if (suppressScroll || destroyed || compact) return;
+      if (suppressScroll || destroyed) return;
+      /* 年视图也按滚动续年：桌面滚的是 .month-scroll，手机滚的是页面（见 onWindowScroll）。 */
+      if (yearMode) { maybeExtendYearView(); return; }
       var m = scrollMetrics();
       var top = m.scrollTop;
       var previous = lastScrollTop;
@@ -1570,7 +1772,7 @@
 
     /** 无原生滚动行程（视口极高）时的滚轮兜底。 */
     function onWheel(e) {
-      if (destroyed || compact) return;
+      if (destroyed || yearMode) return;
       if (scrollEl.scrollHeight > scrollEl.clientHeight + 4) return; /* 有原生行程 → 交给 scroll */
       /* 窄屏档（浏览器缩放到 200% 时常见）由页面的滚动条负责滚动；此时若仍
          preventDefault 去追加年份，滚轮会被吞掉、页面完全滚不动。 */
@@ -1586,6 +1788,89 @@
     scrollEl.addEventListener('scroll', onScroll, { passive: true });
     try { scrollEl.addEventListener('wheel', onWheel, { passive: false }); }
     catch (e) { scrollEl.addEventListener('wheel', onWheel); }
+
+    /* ---------------- 年视图：滚动续年（双口径） ---------------- */
+
+    /** 页面自身可滚高度（手机年视图滚的是页面）。 */
+    function documentScrollHeight() {
+      var root = (typeof document !== 'undefined') ? (document.scrollingElement || document.documentElement) : null;
+      return (root && root.scrollHeight) || 0;
+    }
+
+    /** 当前年视图滚的是 .month-scroll（桌面）还是整页（手机）。 */
+    function yearScrollMetrics() {
+      if (internalScrolls()) {
+        return {
+          internal: true,
+          top: scrollEl.scrollTop || 0,
+          height: scrollEl.scrollHeight || 0,
+          max: (scrollEl.scrollHeight || 0) - (scrollEl.clientHeight || 0)
+        };
+      }
+      var viewH = (typeof window !== 'undefined' && window.innerHeight) || 0;
+      return {
+        internal: false,
+        top: pageScrollTop(),
+        height: documentScrollHeight(),
+        max: documentScrollHeight() - viewH
+      };
+    }
+
+    /** 向指定方向续 1 年；前插后按内容高度增量补偿滚动位置（锚点不跳）。 */
+    function extendYearView(direction) {
+      if (!yearMode || !state.range || !CG || typeof CG.extendRange !== 'function') return false;
+      var beforeCount = state.months.length;
+      var next = CG.extendRange(state.range, direction, { years: CG.MONTH_EXTEND_YEARS });
+      if (!next || !next.months || next.months.length <= beforeCount) return false;
+
+      var scroller = yearScrollMetrics();
+      var oldHeight = scroller.height;
+      var oldTop = scroller.top;
+      state.range = { startYM: next.startYM, endYM: next.endYM };
+      state.months = next.months;
+      state.appendCount += 1;
+
+      var context = renderContext();
+      if (direction === 'ahead') {
+        renderAppended(context, beforeCount);
+      } else {
+        listEl.innerHTML = '';
+        renderAppended(context, 0);
+        var delta = yearScrollMetrics().height - oldHeight;
+        if (delta > 0) {
+          if (scroller.internal) setScrollTop(oldTop + delta);
+          else scrollPageTo(oldTop + delta);
+        }
+      }
+      updateStatus();
+      syncDiagnostics();
+      return true;
+    }
+
+    /** 年视图滚动到接近顶部 / 底部时续 1 年，保证相邻年份可一路翻。 */
+    function maybeExtendYearView() {
+      if (!yearMode || destroyed || flipAnim) return;
+      var now = Date.now();
+      if (now - yearExtendAt < YEAR_EXTEND_THROTTLE_MS) return;
+      var m = yearScrollMetrics();
+      if (!(m.max > 0)) return;
+      if (m.top >= m.max - YEAR_EXTEND_TRIGGER_PX) {
+        if (extendYearView('ahead')) yearExtendAt = now;
+      } else if (m.top <= 8) {
+        if (extendYearView('back')) yearExtendAt = now;
+      }
+    }
+
+    /** 手机年视图滚页面：滚的是 window，不是 .month-scroll。 */
+    function onWindowScroll() {
+      if (!yearMode || destroyed || flipAnim) return;
+      if (internalScrolls()) return;
+      maybeExtendYearView();
+    }
+
+    if (typeof window !== 'undefined' && window.addEventListener) {
+      window.addEventListener('scroll', onWindowScroll, { passive: true });
+    }
 
     /* ---------------- 对外 API（冻结签名） ---------------- */
 
@@ -1607,10 +1892,16 @@
       var ym = clampYM(iso.slice(0, 7));
       var changed = ym !== state.centerYM;
       state.centerYM = ym;
-      if (compact) compactCenterYM = ym;
+      if (yearMode) yearCenterYM = ym;
       resetWindow();
-      if (changed) setScrollTop(0);
-      render();
+      if (yearMode) {
+        /* 年视图里改日期 = 换到该月所在年，落位到年份分隔条，不跳回列表顶部。 */
+        render();
+        scrollYearToTop(ym.slice(0, 4));
+      } else {
+        if (changed) setScrollTop(0);
+        render();
+      }
       if (o.notify !== false && typeof opts.onSelectDate === 'function') opts.onSelectDate(iso);
     }
 
@@ -1618,7 +1909,7 @@
     function navigate(delta) {
       var d = delta < 0 ? -1 : (delta > 0 ? 1 : 0);
       if (!d) return false;
-      if (compact) setCompact(false);
+      if (yearMode) setYearView(false);
       var target = addMonthsYM(state.centerYM, d);
       if (!target) return false;
       if (target < MIN_YM) { state.centerYM = MIN_YM; resetWindow(); render(); return false; }
@@ -1643,15 +1934,14 @@
       if (planPanel) closePlan();
       if (throttleTimer) clearTimeout(throttleTimer);
       throttleTimer = 0;
+      cancelFlip();
+      if (typeof window !== 'undefined' && window.removeEventListener) {
+        window.removeEventListener('scroll', onWindowScroll);
+      }
       if (typeof unsubscribe === 'function') unsubscribe();
       unsubscribe = null;
       scrollEl.removeEventListener('scroll', onScroll);
       scrollEl.removeEventListener('wheel', onWheel);
-      element.removeEventListener('touchstart', onMonthTouchStart);
-      element.removeEventListener('touchmove', onMonthTouchMove);
-      element.removeEventListener('touchend', onMonthTouchEnd);
-      element.removeEventListener('touchcancel', onMonthTouchEnd);
-      element.removeEventListener('click', onMonthClickCapture, true);
       if (element.parentNode) element.parentNode.removeChild(element);
     }
 
@@ -1674,10 +1964,12 @@
       getMonth: getMonth,
       /* 迭代 6（F-40）：切到月视图时回到「今天」的位置（app 调用） */
       scrollToToday: scrollToToday,
-      /* 三十四轮：手机三个月缩略（pinch 手势 / 测试可直接调用） */
-      setCompact: setCompact,
-      isCompact: function () { return compact; },
-      getCompactCenter: function () { return compactCenterYM; },
+      /* 三十六轮：年视图（三十七轮起由手机端分段控件「年」调用；测试可直接调用） */
+      setYearView: setYearView,
+      /* 三十九轮：分段「月」= 回到今天所在月（年视图里先滚到目标月再放大） */
+      exitToToday: exitToToday,
+      isYearView: function () { return yearMode; },
+      getYearCenter: function () { return yearCenterYM; },
       destroy: destroy,
       /* 诊断用（ST-58 / SC-24）：不改变冻结签名，仅追加只读访问器 */
       getRange: function () { return state.range ? { startYM: state.range.startYM, endYM: state.range.endYM } : null; },
@@ -1689,6 +1981,9 @@
     createMonthView: createMonthView,
     APPEND_TRIGGER_PX: APPEND_TRIGGER_PX,
     MIN_YM: MIN_YM,
-    MAX_YM: MAX_YM
+    MAX_YM: MAX_YM,
+    /* 月 ↔ 年 FLIP 过渡参数（冒烟断言 / 后续调参的唯一事实源） */
+    YEAR_FLIP_MS: FLIP_MS,
+    YEAR_FLIP_EASING: FLIP_EASING
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

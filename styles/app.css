@@ -106,6 +106,14 @@ html, body {
    不预留槽位会让右侧「月/周/日」分段控件横向跳动；稳定槽位后各档几何一致。 */
 html { scrollbar-gutter: stable; }
 
+/* 2026-10-23 三十五轮（用户反馈）：触屏点按按钮不再闪出系统灰色高亮块。
+   三十八轮补：高亮色不向伪元素继承，且按钮原生外观在部分内核里仍会画出按下灰底，
+   故对所有元素与按钮统一关掉。 */
+html { -webkit-tap-highlight-color: transparent; }
+*, *::before, *::after { -webkit-tap-highlight-color: transparent; }
+button { -webkit-appearance: none; appearance: none; }
+
+
 /* 2026-10-22 二十六轮（用户反馈）：所有滚动条去掉白色背景条与两端箭头，只保留灰色滑块。
    Chromium 一旦命中下面这些伪元素就不再绘制原生滚动条；不要在别处补
    scrollbar-width / scrollbar-color —— Chromium 121+ 会转而忽略 webkit 伪元素。 */
@@ -129,7 +137,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-button { font: inherit; color: inherit; }
+button { font: inherit; color: inherit; text-align: center; }
 
 .muted { color: var(--text-3); font-size: 12px; }
 
@@ -189,6 +197,15 @@ button { font: inherit; color: inherit; }
   font-variant-numeric: tabular-nums;
 }
 
+/* 三十七轮（用户口径）：「年」并入手机端分段控件、位于「月」左侧；
+   桌面端不再提供年视图入口（顶栏独立按钮已删除）。 */
+/* 三十八轮（用户反馈）：「年」必须与其它段同款盒子。inline-flex 会让文字落到盒子左侧
+   （flex 容器默认 justify-content:flex-start），单字看起来明显不居中。 */
+.view-switch-year { display: none; }
+@media (max-width: 640px) {
+  .view-switch-year { display: inline-block; }
+}
+
 /* 迭代 4（S26 / ADR-26）：左侧迷你月历已删除 → 主区域单列铺满 */
 .app-body {
   flex: 1;
@@ -219,7 +236,6 @@ button { font: inherit; color: inherit; }
   transition: background var(--ease), box-shadow var(--ease), transform var(--ease);
   white-space: nowrap;
 }
-.btn:hover { background: var(--surface-3); }
 .btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 .btn[disabled] { opacity: .4; cursor: not-allowed; }
 
@@ -230,15 +246,21 @@ button { font: inherit; color: inherit; }
   font-weight: 600;
   min-width: 72px;
 }
-.btn-primary:hover { background: var(--primary); box-shadow: 0 4px 14px rgba(0, 122, 255, .35); }
 
 .btn-ghost { border-color: transparent; background: transparent; }
-.btn-ghost:hover { background: var(--surface-2); }
 
 .btn-icon { padding: 6px 11px; font-size: 16px; line-height: 1; }
 
 .btn-danger { border-color: transparent; color: var(--danger); background: var(--danger-weak); font-weight: 600; }
-.btn-danger:hover { background: rgba(255, 59, 48, .16); }
+
+/* 三十八轮（用户反馈）：触屏点按按钮不要闪灰。鼠标悬停的灰底只在真正支持 hover
+   的设备生效，否则触屏会先套用 :hover 再回弹，看起来像按钮闪了一下灰色。 */
+@media (hover: hover) {
+  .btn:hover { background: var(--surface-3); }
+  .btn-primary:hover { background: var(--primary); box-shadow: 0 4px 14px rgba(0, 122, 255, .35); }
+  .btn-ghost:hover { background: var(--surface-2); }
+  .btn-danger:hover { background: rgba(255, 59, 48, .16); }
+}
 
 .btn-sm { padding: 3px 10px; font-size: 12px; }
 
@@ -446,7 +468,9 @@ html[data-theme='dark'] .side-rail { background: var(--surface-2); }
   line-height: 1;
   cursor: pointer;
 }
-.dock-back:hover { background: var(--surface-3); color: var(--text); }
+@media (hover: hover) {
+  .dock-back:hover { background: var(--surface-3); color: var(--text); }
+}
 
 .dock-clock {
   font-size: 20px;
@@ -583,7 +607,9 @@ html[data-theme='dark'] .side-rail { background: var(--surface-2); }
   cursor: pointer;
   transition: background var(--ease), color var(--ease), box-shadow var(--ease);
 }
-.date-nav-btn:hover { background: rgba(120, 120, 128, .14); color: var(--text); }
+@media (hover: hover) {
+  .date-nav-btn:hover { background: rgba(120, 120, 128, .14); color: var(--text); }
+}
 .date-nav-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
 .date-nav-btn.is-current {
   min-width: 62px;
@@ -593,7 +619,9 @@ html[data-theme='dark'] .side-rail { background: var(--surface-2); }
   font-weight: 600;
   box-shadow: 0 1px 4px rgba(0, 0, 0, .14), inset 0 1px 0 rgba(255, 255, 255, .7);
 }
-.date-nav-btn.is-current:hover { background: var(--seg-active); }
+@media (hover: hover) {
+  .date-nav-btn.is-current:hover { background: var(--seg-active); }
+}
 .date-nav-arrow { min-width: 28px; width: 28px; padding: 0; font-size: 16px; line-height: 1; }
 
 .btn-add-round {
@@ -614,7 +642,7 @@ html[data-theme='dark'] .side-rail { background: var(--surface-2); }
   font-size: 21px;
   line-height: 1;
   cursor: pointer;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, .06), inset 0 1px 0 rgba(255, 255, 255, .75);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .12), 0 1px 2px rgba(0, 0, 0, .08), inset 0 1px 0 rgba(255, 255, 255, .75);
   transition: background var(--ease), box-shadow var(--ease), transform var(--ease);
 }
 @media (hover: hover) {
@@ -1212,7 +1240,9 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
   cursor: pointer;
   transition: background var(--ease);
 }
-.dp-date-btn:hover, .dp-time-btn:hover { background: var(--surface-3); }
+@media (hover: hover) {
+  .dp-date-btn:hover, .dp-time-btn:hover { background: var(--surface-3); }
+}
 .dp-date-btn:focus-visible, .dp-time-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: -1px; }
 /* 美化迭代 7：浮层改为**不透明**底（用户裁定：背后文字不得透过浮层），毛玻璃只留给背景层 */
 .dp-pop {
@@ -1247,7 +1277,9 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
   gap: 8px;
   transition: background var(--ease);
 }
-.dp-select-btn:hover { background: var(--surface-3); }
+@media (hover: hover) {
+  .dp-select-btn:hover { background: var(--surface-3); }
+}
 .dp-select-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: -1px; }
 .dp-select-label { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .dp-select-caret { color: var(--text-3); font-size: 10px; flex: none; }
@@ -1265,7 +1297,9 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
   cursor: pointer;
   transition: background var(--ease);
 }
-.dp-select-item:hover { background: var(--surface-2); }
+@media (hover: hover) {
+  .dp-select-item:hover { background: var(--surface-2); }
+}
 .dp-select-item.is-selected { color: var(--primary); font-weight: 600; }
 /* 「密码锁」滚轮（迭代 8 / F-57）：读取位 = 中间行；**一条**浅灰高亮带横跨时/分两列；
    数字本身没有背景框与边框；侧边滚动条一律隐藏（改值靠滚轮 / 拖拽 / 方向键 / 点选）。 */
@@ -1338,7 +1372,9 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
   color: var(--text);
   transition: background var(--ease);
 }
-.dp-cal-prev:hover, .dp-cal-next:hover, .dp-cal-today:hover { background: var(--surface-3); }
+@media (hover: hover) {
+  .dp-cal-prev:hover, .dp-cal-next:hover, .dp-cal-today:hover { background: var(--surface-3); }
+}
 /* 关键（用户条目 3）：星期表头与日期格必须用**完全相同的网格参数**才能逐列对齐 */
 .dp-cal-weekdays {
   display: grid;
@@ -1364,7 +1400,9 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
   cursor: pointer;
   color: var(--text);
 }
-.dp-cal-day:hover { background: var(--surface-3); }
+@media (hover: hover) {
+  .dp-cal-day:hover { background: var(--surface-3); }
+}
 .dp-cal-day.is-outside { opacity: .35; }
 .dp-cal-day.is-today { color: var(--primary); font-weight: 800; }
 .dp-cal-day.is-active { background: var(--primary); color: #fff; }
@@ -1522,6 +1560,13 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
   .app-header {
     gap: 8px;
     padding: calc(8px + env(safe-area-inset-top)) 10px 8px;
+    /* 三十九轮（用户反馈「顶栏依然有闪烁」）：手机端页头常驻实色。
+       半透明玻璃要把下方滚动 / 缩放中的大段内容逐帧重采样，月 ↔ 年切换时
+       页头会出现一帧「透出下方文字」的观感；手机上没有桌面那种静止背景，
+       实色底既稳定又看不出损失。 */
+    background: var(--surface);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
   }
   .brand { height: 44px; padding: 0 10px; }
   .brand-name { font-size: 16px; }
@@ -1545,7 +1590,9 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
     width: 100%;
     justify-content: space-between;
   }
-  .day-head .date-nav, .week-head .date-nav { flex: 1 1 auto; }
+  /* 三十九轮（用户反馈「灰色槽右部异常拉长」）：轨道按内容收窄，
+     不再用 flex-grow 吃掉剩余宽度；+ 仍由 space-between 停到右端。 */
+  .day-head .date-nav, .week-head .date-nav { flex: 0 0 auto; }
   .date-nav-btn { min-width: 44px; }
   .date-nav-btn.is-current { min-width: 84px; padding: 0 14px; }
   .date-nav-arrow { width: 44px; min-width: 44px; }
@@ -1602,6 +1649,12 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
   .modal.modal-wide { max-width: none; }
 
   .side-rail { padding: 12px; gap: 12px; }
+}
+
+/* 320–360px 窄屏：四段控件收窄按钮，避免把「设置」挤出页头。
+   必须排在 .view-switch-btn 44px 规则之后，否则被同权重的后置规则覆盖。 */
+@media (max-width: 360px) {
+  .view-switch-btn { min-width: 38px; padding: 0 7px; }
 }
 
 /* ------------------------------------------------------------------ *

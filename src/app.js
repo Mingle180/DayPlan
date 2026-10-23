@@ -154,6 +154,8 @@
         /* 迭代 6（F-42 / R-20）：月视图整周行（含日期格）→ 该周周视图；
            月视图不再下钻到日视图，故不再注入 onOpenDay（下钻到某天由周视图承担）。 */
         onOpenWeek: function (iso) { goWeek(iso, { animate: true }); },
+        /* 三十七轮：月 ↔ 年视图状态变化 → 分段控件「年」的选中态 / 白块跟随 */
+        onYearModeChange: function () { syncSwitchUI(); },
         onDataChanged: function () { onDataChanged(); }
       });
       return instances.month;
@@ -241,8 +243,11 @@
       setViewMode('month', opts);
     }
 
-    /* ---------------- 视图切换入场过渡 ---------------- */
+    /* ---------------- 视图切换过渡（三十七轮：左右滑入 + 年视图缩放） ---------------- */
 
+    var VIEW_ORDER = { year: 0, month: 1, week: 2, day: 3 };
+    var VIEW_SLIDE_MS = 420;
+    var switchToken = 0;
     var reducedMotionMql = null;
 
     function prefersReducedMotion() {
@@ -253,36 +258,135 @@
       return !!(reducedMotionMql && reducedMotionMql.matches);
     }
 
-    /** 纯透明度淡入。不用 transform / filter：它们会成为 fixed 后代的包含块，
-        把展开卡的固定定位带偏（overlay.js 依赖视口坐标）。 */
-    function playViewEnter(node) {
-      if (!node || !node.classList || prefersReducedMotion()) return;
-      node.classList.remove('is-view-entering');
-      void node.offsetWidth; // 同一视图连续切换时强制重启动画
-      node.classList.add('is-view-entering');
-      /* 离屏 / 未绘制窗口可能不派发 animationend；用定时器兜底清理类。
-         按节点保存句柄：A→B→A 时旧定时器不能剪断新一轮动画。 */
-      if (node.__viewEnterTimer) clearTimeout(node.__viewEnterTimer);
-      node.__viewEnterTimer = setTimeout(function () {
-        node.__viewEnterTimer = null;
-        node.classList.remove('is-view-entering');
-      }, 260);
-      node.addEventListener('animationend', function onEnd(e) {
-        if (e && e.target !== node) return;
-        if (node.__viewEnterTimer) {
-          clearTimeout(node.__viewEnterTimer);
-          node.__viewEnterTimer = null;
-        }
-        node.classList.remove('is-view-entering');
-        node.removeEventListener('animationend', onEnd);
-      });
+    /** 当前真正高亮的档位：年视图复用月视图的 DOM，但分段控件上算「年」。 */
+    function activeViewKey() {
+      if (state.viewMode === 'month' && instances.month &&
+        typeof instances.month.isYearView === 'function' && instances.month.isYearView()) {
+        return 'year';
+      }
+      return state.viewMode;
     }
+
+    function rootOf(key) {
+      if (key === 'month' || key === 'year') return els.monthRoot;
+      if (key === 'week') return els.weekRoot;
+      return els.dayPanel;
+    }
+
+    /** 清掉上一个视图的滑入动画与内联样式（快速连点时旧动画必须立刻让位）。 */
+    function clearViewSlide(node) {
+      if (!node) return;
+      if (node.__viewSlide) {
+        try { node.__viewSlide.cancel(); } catch (e) { /* 已结束 */ }
+        node.__viewSlide = null;
+      }
+      if (node.style) {
+        node.style.transform = '';
+        node.style.opacity = '';
+        node.style.visibility = '';
+      }
+    }
+
+    /**
+     * 切档期间把页头从毛玻璃临时改纯色（CSS 与 is-year-flipping 共用一条规则）。
+     * 半透明页头要在每一帧采样下方正在位移的内容，Chromium 会闪；
+     * 结束（或下一次切档接管）时恢复。
+     */
+    function setViewSwitchChrome(on) {
+      if (typeof document === 'undefined' || !document.body || !document.body.classList) return;
+      document.body.classList.toggle('is-view-switching', !!on);
+    }
+
+    /**
+     * 按分段顺序做水平滑入：切到更右的档位从右侧进来，切回更左的档位从左侧进来。
+     * 只动进入的视图（旧视图立即隐藏）——两个视图同时占位会把页面高度翻倍、挤压布局。
+     */
+    function playViewSlide(node, fromKey, toKey, done) {
+      if (!node) { if (done) done(); return; }
+      clearViewSlide(node);
+      if (prefersReducedMotion() || typeof node.animate !== 'function') {
+        if (done) done();
+        return;
+      }
+      var a = VIEW_ORDER[fromKey];
+      var b = VIEW_ORDER[toKey];
+      var dir = (typeof a === 'number' && typeof b === 'number' && b < a) ? -1 : 1;
+      var width = 0;
+      try { width = node.getBoundingClientRect().width || 0; } catch (e) { width = 0; }
+      var offset = Math.round(Math.max(28, Math.min(120, width * 0.28))) * dir;
+      var anim = node.animate([
+        { transform: 'translateX(' + offset + 'px)', opacity: 0.86 },
+        { transform: 'translateX(0px)', opacity: 1 }
+      ], { duration: VIEW_SLIDE_MS, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' });
+      node.__viewSlide = anim;
+      var finish = function () {
+        if (node.__viewSlide !== anim) return;   /* 已被下一次切换接管 */
+        node.__viewSlide = null;
+        try { anim.cancel(); } catch (e) { /* 已结束 */ }
+        if (node.style) {
+          node.style.transform = '';
+          node.style.opacity = '';
+          node.style.visibility = '';
+        }
+        if (done) done();
+      };
+      if (anim.finished && typeof anim.finished.then === 'function') {
+        anim.finished.then(finish, function () { /* 被后续切换取消 */ });
+      } else if ('onfinish' in anim) {
+        anim.onfinish = finish;
+      } else {
+        finish();
+      }
+    }
+
+    /**
+     * 日 / 周视图「前移 / 后移」的左右滑入（三十九轮）。
+     * 与切档不同：档位没变，只换日期，因此方向由调用方给出（+1 下一段，-1 上一段）。
+     * 复用 __viewSlide / clearViewSlide，快速连点不会叠加动画。
+     */
+    var DATE_SLIDE_MS = 320;
+    function slideDatePanel(node, dir, done) {
+      if (!node || !node.style) { if (done) done(); return; }
+      clearViewSlide(node);
+      if (prefersReducedMotion() || typeof node.animate !== 'function') {
+        if (done) done();
+        return;
+      }
+      var width = 0;
+      try { width = node.getBoundingClientRect().width || 0; } catch (e) { width = 0; }
+      var offset = Math.round(Math.max(24, Math.min(72, width * 0.16))) * (dir < 0 ? -1 : 1);
+      var anim = node.animate([
+        { transform: 'translateX(' + offset + 'px)', opacity: 0.9 },
+        { transform: 'translateX(0px)', opacity: 1 }
+      ], { duration: DATE_SLIDE_MS, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' });
+      node.__viewSlide = anim;
+      var finish = function () {
+        if (node.__viewSlide !== anim) return;
+        node.__viewSlide = null;
+        try { anim.cancel(); } catch (e) { /* 已结束 */ }
+        if (node.style) { node.style.transform = ''; node.style.opacity = ''; node.style.visibility = ''; }
+        if (done) done();
+      };
+      if (anim.finished && typeof anim.finished.then === 'function') {
+        anim.finished.then(finish, function () { /* 被下一次切换取消 */ });
+      } else if ('onfinish' in anim) {
+        anim.onfinish = finish;
+      } else {
+        finish();
+      }
+    }
+
+    /* 视图模块（日 / 周）在事件回调里取：模块加载顺序早于 app，不能在它们顶层捕获。 */
+    root.DayPlan.motion = { slidePanel: slideDatePanel };
 
     function setViewMode(mode, opts) {
       if (VIEW_MODES.indexOf(mode) < 0) return;
       opts = opts || {};
+      var prevKey = activeViewKey();
+      var prevRoot = rootOf(prevKey);
       var changed = state.viewMode !== mode;
       state.viewMode = mode;
+      var token = ++switchToken;
 
       /* 2026-10-21 用户口径：月视图的月份显示窗要顶满可用高度。
          档位写到 body 上，供 month.css 只在该档位拉直 #app → .month-view 的纵向链。 */
@@ -295,42 +399,104 @@
       else if (mode === 'week') weekView();
       else dayView();
 
-      /* 隐藏的视图收不到 animationend，类会残留；每次换档先清一遍。
-         切到当前档（changed=false）不动画，也不打断正在播放的入场。 */
-      if (changed) {
-        [els.monthRoot, els.weekRoot, els.dayPanel].forEach(function (n) {
-          if (n && n.classList) n.classList.remove('is-view-entering');
-        });
-      }
+      /* 快速连点：把上一次没跑完的滑入动画取消并清干净，避免两套变换叠加。 */
+      [els.monthRoot, els.weekRoot, els.dayPanel].forEach(clearViewSlide);
 
-      if (els.monthRoot) els.monthRoot.hidden = mode !== 'month';
-      if (els.weekRoot) els.weekRoot.hidden = mode !== 'week';
-      if (els.dayPanel) els.dayPanel.hidden = mode !== 'day';
+      var targetRoot = rootOf(mode);
+      var animate = changed && opts.animate === true && !prefersReducedMotion();
+      if (animate) setViewSwitchChrome(true);
+
+      /* 换档的关键顺序：先把新视图以「不可见但参与布局」的状态挂出来，
+         完成日期 / 窗口 / 滚动定位后再显示并滑入。
+         旧实现先显示再滚动，会画出中间帧（页头跳动、新视图先闪一下）。 */
+      if (targetRoot) {
+        targetRoot.hidden = false;
+        if (animate) targetRoot.style.visibility = 'hidden';
+      }
+      if (changed && prevRoot && prevRoot !== targetRoot) prevRoot.hidden = true;
 
       if (mode === 'month' && instances.month) {
         instances.month.setDate(state.viewDate, { notify: false });
-        /* 迭代 6（F-40）：每次切到月视图都回到「今天」的位置 */
-        if (typeof instances.month.scrollToToday === 'function') instances.month.scrollToToday();
+        if (opts.yearView && typeof instances.month.setYearView === 'function') {
+          /* 三十八轮（用户口径）：周 / 日 → 年不经过月视图。直接把月根节点
+             渲染成年视图布局（instant，无 FLIP），随后整块滑入。 */
+          instances.month.setYearView(true, state.viewDate.slice(0, 7), { instant: true });
+        } else if (typeof instances.month.scrollToToday === 'function') {
+          /* 迭代 6（F-40）：每次切到月视图都回到「今天」的位置 */
+          instances.month.scrollToToday();
+        }
+      } else if (mode !== 'month' && instances.month &&
+        typeof instances.month.isYearView === 'function' && instances.month.isYearView()) {
+        /* 离开月视图时静默退出年视图（不做 700ms 缩放，反正马上要被隐藏）。 */
+        instances.month.setYearView(false, null, { instant: true });
       }
       if (mode === 'week' && instances.week) instances.week.setDate(state.viewDate, { notify: false });
       if (mode === 'day' && instances.day) instances.day.setDate(state.viewDate, { notify: false });
 
+      /* 周 / 日视图不沿用月视图长列表的页面滚动位置（手机档滚的是 window）。 */
+      if (changed && mode !== 'month' && root && typeof root.scrollTo === 'function') {
+        root.scrollTo(0, 0);
+      }
+
       syncSwitchUI();
-      if (changed && opts.animate === true) {
-        playViewEnter(mode === 'month' ? els.monthRoot : mode === 'week' ? els.weekRoot : els.dayPanel);
+      if (changed && animate) {
+        if (targetRoot) targetRoot.style.visibility = '';
+        playViewSlide(targetRoot, prevKey, opts.yearView ? 'year' : mode, function () {
+          setViewSwitchChrome(false);
+          if (token !== switchToken) return;
+          if (typeof opts.afterSwitch === 'function') opts.afterSwitch();
+        });
+      } else {
+        if (targetRoot && targetRoot.style) targetRoot.style.visibility = '';
+        setViewSwitchChrome(false);
+        if (token === switchToken && typeof opts.afterSwitch === 'function') opts.afterSwitch();
       }
       if (opts.persist !== false) persistViewState();
     }
 
     function syncSwitchUI() {
       if (!els.viewSwitch) return;
+      var active = activeViewKey();
       Array.prototype.slice.call(els.viewSwitch.querySelectorAll('[data-view]')).forEach(function (b) {
-        var on = b.getAttribute('data-view') === state.viewMode;
+        var on = b.getAttribute('data-view') === active;
         b.classList.toggle('is-active', on);
         b.setAttribute('aria-pressed', on ? 'true' : 'false');
       });
       /* 迭代 10 批次 2（条6）：白块跟随当前档位（拖动结束后由 endDrag 再同步一次） */
       if (viewThumbSync) viewThumbSync();
+    }
+
+    /**
+     * 手机端「年」段：年在月视图的缩放下。
+     * 三十八轮（用户口径）：从周 / 日点「年」不再先滑入月视图、再缩成一年——
+     * 直接以年视图布局滑入（否则用户会看到「周/日 → 月 → 年」两段动画）。
+     * 月 → 年仍走 700ms FLIP 缩放。
+     */
+    function showYearView() {
+      var mv = monthView();
+      if (!mv || typeof mv.setYearView !== 'function') return;
+      if (mv.isYearView()) return;
+      if (state.viewMode !== 'month') {
+        setViewMode('month', { animate: true, yearView: true });
+        return;
+      }
+      mv.setYearView(true);
+    }
+
+    /** 段控 / 拖动落档的统一入口：年不是独立 viewMode，而是月视图的子状态。 */
+    function selectSwitchKey(key) {
+      if (key === 'year') { showYearView(); return; }
+      if (key === 'month' && instances.month
+        && typeof instances.month.isYearView === 'function' && instances.month.isYearView()) {
+        if (state.viewMode !== 'month') { setViewMode('month', { animate: true }); return; }
+        /* 三十九轮（用户口径）：直接点「月」= 回到今天所在月；
+           点某一月卡才放大到那个月（month.js exitYearView 走 iso 的月份）。 */
+        if (typeof instances.month.exitToToday === 'function') instances.month.exitToToday();
+        else instances.month.setYearView(false);
+        return;
+      }
+      if (VIEW_MODES.indexOf(key) < 0) return;
+      setViewMode(key, { animate: true });
     }
 
     /* ---------------- 全局设置入口（迭代 4：侧栏月历已删除，见 S26 / ADR-26） ---------------- */
@@ -428,8 +594,9 @@
       }
       function activeIndex() {
         var list = buttons();
+        var active = activeViewKey();
         for (var i = 0; i < list.length; i += 1) {
-          if (list[i].getAttribute('data-view') === state.viewMode) return i;
+          if (list[i].getAttribute('data-view') === active) return i;
         }
         return 0;
       }
@@ -534,7 +701,7 @@
              紧接着的真心点击），改为在 click 里按目标判定：目标不是按钮（被指针捕获
              重定向到容器）才忽略，落在按钮上就视为真实点击、照常切档。 */
           suppressSwitchClick = true;
-          setViewMode(list[target].getAttribute('data-view'), { animate: true });
+          selectSwitchKey(list[target].getAttribute('data-view'));
         }
         sync();
       }
@@ -556,7 +723,7 @@
           if (!btn) return;
         }
         if (!btn) return;
-        setViewMode(btn.getAttribute('data-view'), { animate: true });
+        selectSwitchKey(btn.getAttribute('data-view'));
       });
     }
 
@@ -614,7 +781,8 @@
           e.preventDefault();
           break;
         case 'm': case 'M':
-          setViewMode('month', { animate: true }); e.preventDefault(); break;
+          /* 年视图里按 M = 月段：走 selectSwitchKey，让选中月居中放大而不是跳回今天 */
+          selectSwitchKey('month'); e.preventDefault(); break;
         case 'w': case 'W':
           setViewMode('week', { animate: true }); e.preventDefault(); break;
         case 'd': case 'D':
