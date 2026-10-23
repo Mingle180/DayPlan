@@ -213,10 +213,11 @@
     }
 
     /** 切换共享视图日期（三视图同步）。 */
-    function setViewDate(iso) {
+    function setViewDate(iso, opts) {
       if (!D.isValidDate(iso)) return;
       state.viewDate = iso;
-      if (instances.day) instances.day.setDate(iso, { notify: false });
+      var slide = opts && opts.slide;
+      if (instances.day) instances.day.setDate(iso, { notify: false, slide: slide });
       if (instances.week) instances.week.setDate(iso, { notify: false });
       if (instances.month) instances.month.setDate(iso, { notify: false });
       persistViewState();
@@ -799,7 +800,10 @@
         return;
       }
       // 日视图与月视图都按自然日推进（月视图用 ↑↓ 时 days = ±7）
-      setViewDate(D.addDays(state.viewDate, days));
+      var dir = days < 0 ? -1 : (days > 0 ? 1 : 0);
+      /* 四十轮（用户口径）：键盘切日期与点前后按钮同一套左右滑入。 */
+      setViewDate(D.addDays(state.viewDate, days),
+        (state.viewMode === 'day' && dir) ? { slide: dir } : null);
     }
 
     /** Alt+↑/↓：调整当前日期下第一个（或末尾）无时事项次序。 */

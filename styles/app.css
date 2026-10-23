@@ -1560,13 +1560,8 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
   .app-header {
     gap: 8px;
     padding: calc(8px + env(safe-area-inset-top)) 10px 8px;
-    /* 三十九轮（用户反馈「顶栏依然有闪烁」）：手机端页头常驻实色。
-       半透明玻璃要把下方滚动 / 缩放中的大段内容逐帧重采样，月 ↔ 年切换时
-       页头会出现一帧「透出下方文字」的观感；手机上没有桌面那种静止背景，
-       实色底既稳定又看不出损失。 */
-    background: var(--surface);
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
+    /* 四十一轮（用户口径）：手机端顶栏恢复毛玻璃。切档 / 翻转期间的临时纯色
+       仍由 body.is-view-switching / .is-year-flipping 那一条规则负责。 */
   }
   .brand { height: 44px; padding: 0 10px; }
   .brand-name { font-size: 16px; }

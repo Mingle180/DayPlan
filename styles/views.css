@@ -30,6 +30,18 @@
 .view-root { min-width: 0; }
 .view-root[hidden] { display: none !important; }
 
+/* 四十轮（用户口径）：手机端切到周 / 日视图后，双指手势曾被浏览器当成整页缩放，
+   一次捏合就把页面放大，切回月视图也回不来。与月视图（month.css ≤640 的 pan-y）
+   同口径：视图内只允许平移，页面缩放不交给浏览器。 */
+@media (max-width: 640px) {
+  .view-root[data-view="week"],
+  .view-root[data-view="day"] { touch-action: pan-x pan-y; }
+  /* 四十一轮：滑入动画把整块视图往右推，右侧瞬时溢出 28～36px，
+     手机浏览器会把布局视口撑宽（390 → 418）再缩回，看起来就是「页面缩放」。
+     在视图容器上裁掉横向溢出（clip 不建立滚动容器，纵向滚动不受影响）。 */
+  .panel-main { overflow-x: clip; }
+}
+
 /* 视图切换（三十七轮）：改用 app.js 的 WAAPI 水平位移 + 轻透明度，
    不再做整页 opacity 淡入 —— 淡入首帧透出页面底色，用户会看成「闪一下」。 */
 
