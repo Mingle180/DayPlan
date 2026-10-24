@@ -180,7 +180,7 @@
   border-radius: var(--radius-sm);
   overflow: visible;
 }
-.tl-typegroup + .tl-typegroup { border-top: 1px dashed var(--border); }
+/* 四十四轮（用户裁定）：类别行组之间不画分隔虚线，靠留白与竖排类别名区分。 */
 
 /* 首末空闲窄带（BR-20 / F-16.4 / S29）：竖直窄带，位于时间轴两端
    美化迭代 4：斜条纹改为极浅纯色底（用户裁定：条纹太丑） */
@@ -310,6 +310,7 @@
   min-height: var(--blk-fit-min-h, var(--block-h, var(--block-height)));
 }
 .tl-block.is-expanded > .tl-time,
+.tl-block.is-expanded > .tl-repeat,
 .tl-block.is-expanded > .tl-titlerow,
 .tl-block.is-expanded > .tl-note { display: none; }
 .tl-block.is-expanded .item-detail {

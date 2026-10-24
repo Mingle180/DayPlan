@@ -305,6 +305,7 @@
    * @param {object|null} ex
    */
   function buildOccurrence(series, dateISO, ex) {
+    var label = repeatLabel(series.repeat, series.meta);
     var occ = {
       key: series.id + '@' + dateISO,
       seriesId: series.id,
@@ -319,7 +320,10 @@
       starred: !!series.starred,
       dirty: false,
       // 周计划（ADR-11 / DM-6.3）：meta.origin 仅影响文案与标识，不影响展开
-      repeatLabel: repeatLabel(series.repeat, series.meta),
+      repeatLabel: label,
+      /* 四十五轮：是否在事项上显示重复类型与起止日期。缺省显示（兼容旧数据 /
+         既有未排列表），只有显式 showLabel === false 才隐藏。 */
+      showRepeat: !!label && !(series.repeat && series.repeat.showLabel === false),
       origin: series.meta ? series.meta.origin : undefined
     };
     if (ex && ex.deleted !== true) {
@@ -350,6 +354,7 @@
       starred: !!item.starred,
       dirty: false,
       repeatLabel: null,
+      showRepeat: false,
       origin: item.meta ? item.meta.origin : undefined
     };
   }

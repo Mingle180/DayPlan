@@ -576,6 +576,11 @@
     }));
     block.appendChild(head);
     block.appendChild(el('div', { class: 'tl-time', text: timeText(occ) }));
+    /* 四十五轮：重复类型与起止日期按事项选项显示（缺省显示）。
+       折叠态单行省略，悬停 peek 时换行显示全文；完整文案同时放进 title。 */
+    if (occ.showRepeat && occ.repeatLabel) {
+      block.appendChild(el('div', { class: 'tl-repeat', text: occ.repeatLabel, title: occ.repeatLabel }));
+    }
     var note = noteNode(occ, 'block');
     if (note) block.appendChild(note);
     if ((tooNarrow || block.classList.contains('is-omitted')) && !expanded) {
@@ -604,7 +609,7 @@
       title: '类别：' + cat.name, 'aria-label': '类别：' + cat.name
     }));
     /* 迭代 7（F-43）：card 变体不再渲染第二个 ui-cat「改」标签（与右上角角标同源，一并下线） */
-    if (occ.repeatLabel) main.appendChild(el('span', { class: 'muted', text: occ.repeatLabel }));
+    if (occ.showRepeat && occ.repeatLabel) main.appendChild(el('span', { class: 'muted', text: occ.repeatLabel }));
     var uiNote = noteNode(occ, 'card');
     if (uiNote) main.appendChild(uiNote);
     li.appendChild(main);

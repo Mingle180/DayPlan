@@ -615,12 +615,22 @@
     var lunarDayInput = numberInput({ value: String((repeat && repeat.lunarDay) || 6), min: '1', max: '30', 'aria-label': '农历日期', style: 'width:70px' });
     var leapCheck = el('input', { type: 'checkbox' });
     if (repeat && repeat.leap) leapCheck.checked = true;
-    /* 迭代 7（F-47）：不含法定节假日（对 5 种重复方式全部适用，R-28） */
-    var holidaySkipCheck = el('input', { type: 'checkbox', 'aria-label': '不含法定节假日' });
-    if (repeat && repeat.excludeHolidays === true) holidaySkipCheck.checked = true;
+    /* 迭代 7（F-47）：节假日开关对 5 种重复方式全部适用（R-28）。
+       四十六轮（用户口径）：日视图与周 / 月计划统一为「不含节假日和周末」，
+       勾选时同时写 excludeHolidays / excludeWeekends。 */
+    var holidaySkipCheck = el('input', { type: 'checkbox', 'aria-label': '不含节假日和周末' });
+    if (repeat && (repeat.excludeHolidays === true || repeat.excludeWeekends === true)) {
+      holidaySkipCheck.checked = true;
+    }
     var rowHolidaySkip = el('div', { class: 'field' }, [
-      el('label', { class: 'switch' }, [holidaySkipCheck, el('span', { text: '不含法定节假日' })]),
-      el('div', { class: 'hint', text: '法定放假日自动跳过（调休补班日照常发生；2008–2026 有官方数据，之后的年份不推算）。' })
+      el('label', { class: 'switch' }, [holidaySkipCheck, el('span', { text: '不含节假日和周末' })])
+    ]);
+    /* 四十五轮：是否在事项上显示重复类型与起止日期（时间轴块 / 未排列表同口径）。
+       缺省显示；只有显式取消勾选才写 showLabel:false。 */
+    var showLabelCheck = el('input', { type: 'checkbox', 'aria-label': '显示重复类型和起止日期' });
+    if (!repeat || repeat.showLabel !== false) showLabelCheck.checked = true;
+    var rowShowLabel = el('div', { class: 'field' }, [
+      el('label', { class: 'switch' }, [showLabelCheck, el('span', { text: '显示重复类型和起止日期' })])
     ]);
     var endDateCtl = dateFieldControl({ value: normalizeDateText((repeat && repeat.endDate) || ''), 'aria-label': '结束日期（不含，YYYY-MM-DD）' });
     var endDateInput = endDateCtl.input;
@@ -634,8 +644,7 @@
       weekdayWrap
     ]);
     var rowMonthDay = el('div', { class: 'field' }, [
-      el('label', { class: 'field-label', text: '每月第几天' }), monthDayInput,
-      el('div', { class: 'hint', text: '该月没有这一天时会跳过（不会自动顺延到月末）。' })
+      el('label', { class: 'field-label', text: '每月第几天' }), monthDayInput
     ]);
     var rowLunar = el('div', { class: 'field' }, [
       el('label', { class: 'field-label', text: '农历日期' }),
@@ -643,21 +652,18 @@
         el('span', { text: '每年农历' }), lunarMonthInput, el('span', { text: '月' }),
         lunarDayInput, el('span', { text: '日' }),
         el('label', { class: 'switch', style: 'margin-left:8px' }, [leapCheck, el('span', { text: '闰月' })])
-      ]),
-      el('div', { class: 'hint', text: '例：农历八月初六 → 月填 8、日填 6。不勾「闰月」时取正常月；该年无此月则跳过。' })
+      ])
     ]);
     var rowYearly = el('div', { class: 'field' }, [
       el('label', { class: 'field-label', text: '公历日期' }),
       el('div', { class: 'inline' }, [
         el('span', { text: '每年' }), yearMonthInput, el('span', { text: '月' }),
         yearDayInput, el('span', { text: '日' })
-      ]),
-      el('div', { class: 'hint', text: '例：每年 10 月 14 日 → 月填 10、日填 14。选 2 月 29 日时仅闰年发生。' })
+      ])
     ]);
     var rowEndDate = el('div', { class: 'field' }, [
       el('label', { class: 'field-label', text: '结束日期（不含当天，可留空表示长期）' }),
-      endDateCtl.wrap,
-      el('div', { class: 'hint', text: '留空 = 一直重复（最多展开 1000 次）。填 2027-02-01 表示最后一天是 2027-01-31。' })
+      endDateCtl.wrap
     ]);
 
     var previewBox = el('div', { class: 'hint repeat-preview' });
@@ -691,6 +697,8 @@
       /* 迭代 7（F-47 / R-28）：5 种重复方式都提供「不含法定节假日」 */
       repeatParams.appendChild(rowHolidaySkip);
       repeatParams.appendChild(rowEndDate);
+      /* 四十五轮：显示开关排在结束日期之后，缺省勾选 */
+      repeatParams.appendChild(rowShowLabel);
       repeatParams.appendChild(previewBox);
       updatePreview();
     }
@@ -712,16 +720,16 @@
           month: parseInt(yearMonthInput.value, 10) || 1,
           lunarMonth: parseInt(lunarMonthInput.value, 10) || 1,
           lunarDay: parseInt(lunarDayInput.value, 10) || 1,
-          leap: !!leapCheck.checked,
-          /* 迭代 7（F-47）：只在开启时写 true，其余不写该键（保持旧数据形状） */
-          excludeHolidays: holidaySkipCheck.checked === true,
-          /* 三十四轮：周 / 月计划的「不含节假日和周末」在这里没有独立控件；
-             编辑此类序列时原样保留该键，避免通用表单静默丢掉规则。 */
-          excludeWeekends: !!(repeat && repeat.excludeWeekends === true)
+          leap: !!leapCheck.checked
         };
         if (t === 'yearly') repeatOut.day = parseInt(yearDayInput.value, 10) || 1;
-        if (!repeatOut.excludeHolidays) delete repeatOut.excludeHolidays;
-        if (!repeatOut.excludeWeekends) delete repeatOut.excludeWeekends;
+        /* 四十六轮：日视图与周 / 月计划同口径——勾选即同时跳过节假日与周末。 */
+        if (holidaySkipCheck.checked === true) {
+          repeatOut.excludeHolidays = true;
+          repeatOut.excludeWeekends = true;
+        }
+        /* 缺省显示（不写键）；取消勾选时显式写 false。 */
+        if (showLabelCheck.checked !== true) repeatOut.showLabel = false;
       }
       var urgentNow = isUrgentId(catSelect.value);
       var prevCat = urgentNow
@@ -809,8 +817,7 @@
         el('div', { class: 'inline' }, [
           el('label', { class: 'switch' }, [onlyRadio, el('span', { text: '仅此次' })]),
           el('label', { class: 'switch' }, [allRadio, el('span', { text: '此次及以后' })])
-        ]),
-        el('div', { class: 'hint', text: '「仅此次」只改这一天；「此次及以后」会把该序列从这天起拆成新序列。' })
+        ])
       ]));
     }
 
@@ -982,10 +989,8 @@
         el('div', { class: 'readonly-text', text: rangeLabel, 'aria-label': '日期范围（只读）' })
       ]),
       el('div', { class: 'field week-plan-skip' }, [
-        el('label', { class: 'switch' }, [skipLongCheck, el('span', { text: '不含节假日和周末' })]),
-        el('div', { class: 'hint', text: '周六、周日与法定放假日一律跳过（调休补班日若落在周末也跳过）。' })
-      ]),
-      el('div', { class: 'hint', text: '周计划固定覆盖该周 7 天（含周一至周日），重复方式不可修改。' })
+        el('label', { class: 'switch' }, [skipLongCheck, el('span', { text: '不含节假日和周末' })])
+      ])
     ]));
 
     /* ---------------- 取值 / 校验 ---------------- */
@@ -1169,10 +1174,8 @@
         el('div', { class: 'readonly-text', text: rangeLabel, 'aria-label': '日期范围（只读）' })
       ]),
       el('div', { class: 'field month-plan-skip' }, [
-        el('label', { class: 'switch' }, [skipLongCheck, el('span', { text: '不含节假日和周末' })]),
-        el('div', { class: 'hint', text: '周六、周日与法定放假日一律跳过（调休补班日若落在周末也跳过）。' })
-      ]),
-      el('div', { class: 'hint', text: '月计划固定覆盖该月每一天，并按天同步到日视图；重复方式不可修改。' })
+        el('label', { class: 'switch' }, [skipLongCheck, el('span', { text: '不含节假日和周末' })])
+      ])
     ]));
 
     /* ---------------- 取值 / 校验 ---------------- */

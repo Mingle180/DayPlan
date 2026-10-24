@@ -444,13 +444,17 @@
         });
         dates.forEach(function (iso) { row.appendChild(buildCell(iso, ym, markerMap, ctx)); });
         /* 迭代 6（F-42）：整周行任意位置（行本体 / 空白 / 日期格）→ 该周周视图；
-           日期格已在迭代 6 移除自身 click，故这里不再需要 .month-cell 判定。 */
+           日期格已在迭代 6 移除自身 click，故这里不再需要 .month-cell 判定。
+           四十六轮：年视图里整张月卡都是「放大该月」的入口，交给列处理器按卡自己的
+           ym 收口——首行常跨上月（如 9/28–10/4），按行首日期退出会跳错月份。 */
         row.addEventListener('click', function () {
+          if (yearMode) return;
           openWeek(dates[0]);
         });
         row.addEventListener('keydown', function (e) {
           if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
             e.preventDefault();
+            if (yearMode) { setYearView(false, ym); return; }
             openWeek(dates[0]);
           }
         });
@@ -1970,6 +1974,7 @@
       exitToToday: exitToToday,
       isYearView: function () { return yearMode; },
       getYearCenter: function () { return yearCenterYM; },
+      getCenter: function () { return state.centerYM; },
       destroy: destroy,
       /* 诊断用（ST-58 / SC-24）：不改变冻结签名，仅追加只读访问器 */
       getRange: function () { return state.range ? { startYM: state.range.startYM, endYM: state.range.endYM } : null; },

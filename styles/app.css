@@ -828,6 +828,19 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
   letter-spacing: .2px;
   line-height: 1.3;
 }
+/* 四十五轮：重复类型与起止日期（受事项选项控制）。折叠态固定一行，放不下省略；
+   悬停 peek 时恢复换行看全文，完整文案另有 title。 */
+.tl-block .tl-repeat {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  font-size: 10px;
+  color: var(--text-3);
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .tl-block.is-done { opacity: .5; }
 .tl-block.is-done .tl-title { text-decoration: line-through; }
 /* 2026-10-20（用户裁定）：窄块只放不下「时间」，类型胶囊仍固定右上角 —— 不再隐藏胶囊 */
@@ -837,8 +850,11 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
  * 时间明明放得下却被藏起来 →「又高又空还没有时间」。现在由 core/layout.js::dayBlockShowsTime
  * 按剩余高度判定，放不下才由 JS 打上 .is-time-hidden。 */
 .tl-block.is-time-hidden .tl-time { display: none; }
+/* 块高被外部封顶到连时间行都放不下时，重复信息一并让位（否则会把标题挤出块） */
+.tl-block.is-time-hidden .tl-repeat { display: none; }
 /* 窄块里的时间要能换行（"09:00–09:40" 在 40px 宽下是两行），字号略收 */
 .tl-block.is-narrow .tl-time { font-size: 10px; line-height: 1.25; }
+.tl-block.is-narrow .tl-repeat { font-size: 9px; }
 .tl-block.is-narrow .tl-title { font-size: 11px; }
 /* 2026-10-20（用户反馈）：窄块标题「一个字一行」——
    45px 宽的块内宽只有 37px，再让位 17px 给右上角胶囊，标题只剩 20px
@@ -882,9 +898,11 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
 /* 迭代 8（F-53）：窄到放不下内容（日视图 < 2 个汉字宽）→ 折叠态只留类别色块；
    点击后由展开卡（加宽到 220px+ / 浮出）显示全部内容，故展开态覆盖下面的隐藏规则 */
 .tl-block.is-tiny > .tl-time,
+.tl-block.is-tiny > .tl-repeat,
 .tl-block.is-tiny > .tl-titlerow,
 .tl-block.is-tiny > .tl-note { display: none; }
 .tl-block.is-expanded.is-tiny > .tl-time,
+.tl-block.is-expanded.is-tiny > .tl-repeat,
 .tl-block.is-expanded.is-tiny > .tl-note { display: block; }
 .tl-block.is-expanded.is-tiny > .tl-titlerow { display: flex; }
 
@@ -907,6 +925,7 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
 /* 省略态只留「…」+ 首字：标题在 .tl-titlerow 内，必须用后代选择器（不能用 >） */
 .tl-block.is-omitted .tl-title,
 .tl-block.is-omitted > .tl-time,
+.tl-block.is-omitted > .tl-repeat,
 .tl-block.is-omitted > .tl-note { display: none; }
 .tl-block.is-omitted .tl-dots { display: block; }
 /* 居中口径：让位归零（胶囊在上方，不占这一行的宽），省略号取块内真中心 */
@@ -941,6 +960,7 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
 }
 .tl-block.is-peek > .tl-titlerow { display: flex !important; padding-right: 22px !important; }
 .tl-block.is-peek > .tl-time { display: block !important; }
+.tl-block.is-peek > .tl-repeat { display: block !important; white-space: normal; overflow: visible; }
 .tl-block.is-peek > .tl-note { display: block !important; max-height: 3.8em; overflow: hidden; }
 .tl-block.is-peek .tl-dots { display: none !important; }
 .tl-block.is-peek .tl-title { display: block !important; font-size: 13px; }
@@ -1404,7 +1424,10 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
   border: 0;
   background: transparent;
   border-radius: 50%;
+  /* 四十六轮：宽高必须相等，否则 50% 圆角在 1fr 网格里会被拉成椭圆 */
+  width: 26px;
   height: 26px;
+  justify-self: center;
   padding: 0;
   font: inherit;
   font-size: 12px;
@@ -1619,7 +1642,7 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
 
   /* 日期 / 时间浮层：铺满字段宽，日期格放大到可点 */
   .dp-pop { left: 0; right: 0; min-width: 0; }
-  .dp-cal-day { height: 38px; font-size: 14px; }
+  .dp-cal-day { width: 38px; height: 38px; font-size: 14px; }
   .dp-cal-wd { font-size: 11px; line-height: 24px; }
   .dp-cal-prev, .dp-cal-next, .dp-cal-today { min-height: 36px; font-size: 13px; }
   .dp-select-pop { left: 0; right: 0; }

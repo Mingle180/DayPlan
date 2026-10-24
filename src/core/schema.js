@@ -336,6 +336,11 @@
       && typeof repeat.excludeWeekends !== 'boolean') {
       errors.push(err(path + '.excludeWeekends', '不含周末需为布尔值'));
     }
+    // 2026-10-24 四十五轮（DM-6 增量）：showLabel 可选布尔；缺省视为显示。
+    if (repeat.showLabel !== undefined && repeat.showLabel !== null
+      && typeof repeat.showLabel !== 'boolean') {
+      errors.push(err(path + '.showLabel', '显示重复类型和起止日期需为布尔值'));
+    }
     return errors;
   }
 

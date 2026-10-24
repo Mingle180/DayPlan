@@ -804,6 +804,8 @@
     } else {
       lines += Math.max(1, Math.ceil(title.units / perTitle));   /* 标题可多行（不省略） */
     }
+    /* 四十五轮：重复类型与起止日期固定占一行（折叠态单行省略，不换行）。 */
+    if (occ && occ.showRepeat && occ.repeatLabel) { lines += 1; }
     var note = textMetrics(occ ? occ.note : '', opts);
     if (!note.empty) {
       var avail = width - padX;
