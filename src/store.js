@@ -8,6 +8,9 @@
  * - 所有写操作走 mutate()：先克隆 -> 应用变更 -> 校验 -> 提交 -> 通知 -> 节流落盘。
  * - 校验失败抛 StoreError，且**不改变内存状态**（避免半截写入）。
  * - storage 可注入（localStorage / 内存），便于测试与隐私模式降级。
+ * - 数据作用域（Phase 1B）：默认游客；`options.scope` 可显式指定账号作用域，
+ *   否则启动时按 `dayplan.active.v1` 解析。所有落盘只写当前作用域的数据键。
+ * - 账号副本只能通过 `persistAccountCopy` 写入；切换作用域不会复制游客数据。
  * - `toggleStarred` 保留为内部兼容（迭代 3 数据迁移输入），迭代 4 起视图一律用 `toggleUrgent`。
  */
 (function (root, factory) {
@@ -15,7 +18,9 @@
   var api = factory(
     isNode ? require('./core/datetime.js') : root.DayPlan.datetime,
     isNode ? require('./core/schema.js') : root.DayPlan.schema,
-    isNode ? require('./core/id.js') : root.DayPlan.id
+    isNode ? require('./core/id.js') : root.DayPlan.id,
+    isNode ? require('./core/scope-storage.js') : root.DayPlan.scopeStorage,
+    isNode ? require('./core/sync-keys.js') : root.DayPlan.syncKeys
   );
   if (isNode) {
     module.exports = api;
@@ -23,7 +28,7 @@
     root.DayPlan = root.DayPlan || {};
     root.DayPlan.store = api;
   }
-})(typeof globalThis !== 'undefined' ? globalThis : this, function (dt, schema, idgen) {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (dt, schema, idgen, scopeStorage, K) {
   'use strict';
 
   var DB_KEY = 'dayplan.db.v1';
@@ -139,6 +144,30 @@
     var seeded = false;
     var storageDegraded = false;
 
+    var sessionUid = typeof options.sessionUid === 'string' ? options.sessionUid : null;
+    var scope;
+    var scopeInfo;
+    if (options.scope !== undefined && options.scope !== null) {
+      scope = normalizeScope(options.scope);
+      scopeInfo = { scope: scope, id: K.scopeId(scope), repaired: false, reason: 'explicit-scope', pointerWrite: null };
+    } else {
+      var boot = scopeStorage.resolveBootScope(storage, sessionUid);
+      scope = boot.scope;
+      scopeInfo = boot;
+    }
+    var dbKey = K.dbKeyForScope(scope);
+    var seedKey = K.seedKeyForScope(scope);
+
+    function normalizeScope(raw) {
+      if (typeof raw === 'string') {
+        var parsed = K.parseScopeId(raw);
+        if (!parsed.ok) throw StoreError('E_INVALID_SCOPE', '无法解析数据作用域：' + raw);
+        return parsed.scope;
+      }
+      if (!K.isValidScope(raw)) throw StoreError('E_INVALID_SCOPE', '数据作用域必须是 guest 或 user:<合法 uid>');
+      return raw.kind === 'guest' ? K.guestScope() : K.userScope(raw.uid);
+    }
+
     function detectLocalStorage() {
       try {
         if (typeof localStorage !== 'undefined' && localStorage) return localStorage;
@@ -148,39 +177,13 @@
 
     // ---------------- 读取 / 保存 ----------------
 
-    function load() {
-      lastWarnings = [];
-      var raw = null;
-      try {
-        raw = storage.getItem(DB_KEY);
-      } catch (e) {
-        raw = null;
-      }
-
-      if (raw === null || raw === undefined || raw === '') {
-        // 首次运行：按 BR-15 决定是否注入演示数据
-        var seedDone = false;
-        try { seedDone = storage.getItem(SEED_KEY) === 'done'; } catch (e) { seedDone = false; }
-        if (seedFactory && !seedDone) {
-          try {
-            var seededDoc = seedFactory();
-            var sres = schema.sanitizeDocument(seededDoc);
-            state = sres.doc;
-            seeded = true;
-            lastWarnings = lastWarnings.concat(sres.warnings);
-            // 演示数据必须立即落盘：否则用户注入后马上关闭页面就会丢失
-            commit(false);
-            saveNow();
-          } catch (e) {
-            lastWarnings.push({ path: '$', message: '演示数据注入失败：' + e.message });
-            state = schema.createEmptyDocument();
-          }
-        } else {
-          state = schema.createEmptyDocument();
-        }
-        return { ok: true, seeded: seeded, warnings: lastWarnings.slice(), recovered: false };
-      }
-
+    /**
+     * 解析一段数据键内容，不修改内存状态。
+     * @returns {{ok:boolean, doc:(object|null), warnings:Array, recovered?:boolean,
+     *            code?:string, error?:string, errors?:Array}}
+     */
+    function parseDocument(raw, opts) {
+      opts = opts || {};
       var parsed = null;
       var parseError = null;
       try {
@@ -190,19 +193,19 @@
       }
 
       if (parseError) {
-        backupCorrupt(raw, 'JSON 解析失败：' + parseError.message);
-        state = schema.createEmptyDocument();
-        return { ok: false, seeded: false, recovered: false, code: 'E_PARSE', error: parseError.message, warnings: lastWarnings.slice() };
+        if (opts.backup !== false) backupCorrupt(raw, 'JSON 解析失败：' + parseError.message);
+        return { ok: false, doc: null, recovered: false, code: 'E_PARSE', error: parseError.message, warnings: [] };
       }
 
       // 版本高于当前应用：不猜测、不降级写入，走损坏流程（保留原始串备份）
       if (parsed && typeof parsed === 'object' && typeof parsed.schemaVersion === 'number' && parsed.schemaVersion > schema.SCHEMA_VERSION) {
-        backupCorrupt(raw, '数据版本 ' + parsed.schemaVersion + ' 高于当前应用支持的 ' + schema.SCHEMA_VERSION);
-        state = schema.createEmptyDocument();
+        if (opts.backup !== false) {
+          backupCorrupt(raw, '数据版本 ' + parsed.schemaVersion + ' 高于当前应用支持的 ' + schema.SCHEMA_VERSION);
+        }
         return {
-          ok: false, seeded: false, recovered: false, code: 'E_INVALID',
+          ok: false, doc: null, recovered: false, code: 'E_INVALID',
           errors: [{ path: '$.schemaVersion', message: '数据版本高于当前应用支持' }],
-          warnings: lastWarnings.slice()
+          warnings: []
         };
       }
 
@@ -219,12 +222,11 @@
         migrated = schema.migrateDocument(parsed, versionWarnings);
       }
       if (!migrated) {
-        backupCorrupt(raw, '数据迁移失败：结构无法修复');
-        state = schema.createEmptyDocument();
+        if (opts.backup !== false) backupCorrupt(raw, '数据迁移失败：结构无法修复');
         return {
-          ok: false, seeded: false, recovered: false, code: 'E_MIGRATE',
+          ok: false, doc: null, recovered: false, code: 'E_MIGRATE',
           errors: [{ path: '$', message: '数据无法迁移到当前版本' }],
-          warnings: lastWarnings.slice()
+          warnings: []
         };
       }
 
@@ -240,16 +242,71 @@
         return e.path === '$.schemaVersion' || e.path === '$.categories' || e.path === '$.items';
       });
       if (fatal.length) {
-        backupCorrupt(raw, '结构校验失败：' + fatal.map(function (e) { return e.path + ' ' + e.message; }).join('; '));
-        state = schema.createEmptyDocument();
-        return { ok: false, seeded: false, recovered: false, code: 'E_INVALID', errors: validation.errors, warnings: versionWarnings };
+        if (opts.backup !== false) {
+          backupCorrupt(raw, '结构校验失败：' + fatal.map(function (e) { return e.path + ' ' + e.message; }).join('; '));
+        }
+        return { ok: false, doc: null, recovered: false, code: 'E_INVALID', errors: validation.errors, warnings: versionWarnings };
       }
 
-      state = sanitized.doc;
-      lastWarnings = versionWarnings.concat(sanitized.warnings);
+      var warnings = versionWarnings.concat(sanitized.warnings);
+      return { ok: true, doc: sanitized.doc, recovered: warnings.length > 0, warnings: warnings };
+    }
+
+    function load() {
+      lastWarnings = [];
+      var raw = null;
+      try {
+        raw = storage.getItem(dbKey);
+      } catch (e) {
+        raw = null;
+      }
+
+      if (raw === null || raw === undefined || raw === '') {
+        // 首次运行：按 BR-15 决定是否注入演示数据。
+        // 账号副本绝不注入演示数据（契约 §2.2：登录不得写入账号副本）。
+        var seedDone = false;
+        try { seedDone = storage.getItem(seedKey) === 'done'; } catch (e) { seedDone = false; }
+        if (K.isGuestScope(scope) && seedFactory && !seedDone) {
+          try {
+            var seededDoc = seedFactory();
+            var sres = schema.sanitizeDocument(seededDoc);
+            state = sres.doc;
+            seeded = true;
+            lastWarnings = lastWarnings.concat(sres.warnings);
+            // 演示数据必须立即落盘：否则用户注入后马上关闭页面就会丢失
+            commit(false);
+            saveNow();
+          } catch (e) {
+            lastWarnings.push({ path: '$', message: '演示数据注入失败：' + e.message });
+            state = schema.createEmptyDocument();
+          }
+        } else {
+          state = schema.createEmptyDocument();
+        }
+        return { ok: true, seeded: seeded, warnings: lastWarnings.slice(), recovered: false, scope: K.scopeId(scope) };
+      }
+
+      var parsedDoc = parseDocument(raw);
+      if (!parsedDoc.ok) {
+        state = schema.createEmptyDocument();
+        lastWarnings = parsedDoc.warnings.slice();
+        var failure = {
+          ok: false, seeded: false, recovered: false, code: parsedDoc.code,
+          warnings: lastWarnings.slice(), scope: K.scopeId(scope)
+        };
+        if (parsedDoc.error) failure.error = parsedDoc.error;
+        if (parsedDoc.errors) failure.errors = parsedDoc.errors;
+        return failure;
+      }
+
+      state = parsedDoc.doc;
+      lastWarnings = parsedDoc.warnings;
       // 归一过程中修复了内容则回写，保证磁盘与内存一致
       if (lastWarnings.length) commit(false);
-      return { ok: true, seeded: false, recovered: lastWarnings.length > 0, warnings: lastWarnings.slice() };
+      return {
+        ok: true, seeded: false, recovered: lastWarnings.length > 0,
+        warnings: lastWarnings.slice(), scope: K.scopeId(scope)
+      };
     }
 
     function backupCorrupt(raw, reason) {
@@ -278,7 +335,7 @@
         saveTimer = null;
       }
       try {
-        storage.setItem(DB_KEY, serialize());
+        storage.setItem(dbKey, serialize());
         storageDegraded = storage.degraded;
         lastError = null;
         return { ok: true };
@@ -1401,13 +1458,192 @@
       return { ok: true, warnings: s.warnings, errors: [] };
     }
 
-    /** 清空全部数据（F-12.3）：写 seed 标记，防止清空后重新注入演示数据 */
+    /* ---------------- 数据作用域（Phase 1B 第一切片） ---------------- */
+
+    function getScope() {
+      return scope.kind === 'guest' ? K.guestScope() : K.userScope(scope.uid);
+    }
+
+    function getScopeId() {
+      return K.scopeId(scope);
+    }
+
+    /** 启动解析诊断：是否发生过回落、写指针结果。 */
+    function getScopeInfo() {
+      return {
+        scope: getScope(),
+        id: K.scopeId(scope),
+        repaired: !!(scopeInfo && scopeInfo.repaired),
+        reason: scopeInfo ? scopeInfo.reason : 'explicit-scope',
+        pointerWrite: scopeInfo ? scopeInfo.pointerWrite : null
+      };
+    }
+
+    function scopeError(code, message, detail) {
+      return StoreError(code, message, detail);
+    }
+
+    /**
+     * 切换活动数据源（指针最后写；失败不改变内存状态与指针）。
+     * 账号作用域必须已存在本地副本，且会话 uid 必须匹配——本函数绝不复制游客数据。
+     *
+     * @param {object|string} nextScope 作用域对象或 "guest" / "user:<uid>"
+     * @param {{sessionUid?:string}} [opts]
+     */
+    function switchScope(nextScope, opts) {
+      opts = opts || {};
+      var target = normalizeScope(nextScope);
+      if (K.scopeEquals(scope, target)) {
+        return { ok: true, changed: false, scope: getScope(), id: K.scopeId(scope) };
+      }
+      if (K.isUserScope(target)) {
+        var session = requireAccountSession(target.uid, opts);
+        if (!session.ok) return session;
+      }
+
+      // 先把当前作用域的节流写入落盘，避免切换后丢失
+      if (saveTimer) {
+        var saved = saveNow();
+        if (!saved.ok) {
+          lastError = scopeError(saved.code || 'E_SAVE', '切换前保存失败：' + (saved.error || ''), saved);
+          return { ok: false, code: lastError.code, message: lastError.message };
+        }
+      }
+
+      var targetRead = scopeStorage.readScopeRecord(storage, target);
+      if (!targetRead.ok) {
+        lastError = scopeError(targetRead.code, targetRead.message, targetRead);
+        return { ok: false, code: targetRead.code, message: targetRead.message };
+      }
+      if (!targetRead.exists && K.isUserScope(target)) {
+        return { ok: false, code: 'E_ACCOUNT_COPY_MISSING', message: '账号本地副本不存在，不能切换（不得用游客数据代替）' };
+      }
+
+      var staged = targetRead.exists
+        ? parseDocument(targetRead.raw, { backup: true })
+        : { ok: true, doc: schema.createEmptyDocument(), warnings: [] };
+      if (!staged.ok) {
+        lastError = scopeError(staged.code || 'E_TARGET_INVALID', '目标作用域数据不可用', staged);
+        return {
+          ok: false, code: staged.code || 'E_TARGET_INVALID',
+          message: '目标作用域数据不可用', errors: staged.errors || [], warnings: staged.warnings || []
+        };
+      }
+
+      // 指针最后写；失败会自动恢复旧指针
+      var pointer = scopeStorage.switchActiveScope(storage, target);
+      if (!pointer.ok) {
+        lastError = scopeError(pointer.code || 'E_POINTER_WRITE', '活动指针写入失败：' + (pointer.message || ''), pointer);
+        return {
+          ok: false, code: pointer.code || 'E_POINTER_WRITE',
+          message: lastError.message, rolledBack: !!pointer.rolledBack
+        };
+      }
+
+      scope = target;
+      dbKey = K.dbKeyForScope(scope);
+      seedKey = K.seedKeyForScope(scope);
+      state = staged.doc;
+      lastWarnings = (staged.warnings || []).slice();
+      seeded = false;
+      lastError = null;
+      scopeInfo = { scope: scope, id: K.scopeId(scope), repaired: false, reason: 'switched', pointerWrite: { ok: true } };
+      notify();
+      return { ok: true, changed: true, scope: getScope(), id: K.scopeId(scope) };
+    }
+
+    /**
+     * 账号操作的会话闸门：Store 会话与调用方提供的 uid 都是权威来源，
+     * 任一与目标账号不符即拒绝；两者都没有则视为未登录。
+     */
+    function requireAccountSession(uid, opts) {
+      var supplied = (opts && typeof opts.sessionUid === 'string') ? opts.sessionUid : null;
+      if (sessionUid && supplied && sessionUid !== supplied) {
+        return { ok: false, code: 'E_SCOPE_SESSION_MISMATCH', message: '调用方会话 uid 与 Store 会话不一致' };
+      }
+      var effectiveUid = sessionUid || supplied;
+      if (!effectiveUid) {
+        return { ok: false, code: 'E_SCOPE_NO_SESSION', message: '未登录时不能访问账号数据' };
+      }
+      if (effectiveUid !== uid) {
+        return { ok: false, code: 'E_SCOPE_SESSION_MISMATCH', message: '会话 uid 与目标账号不一致' };
+      }
+      return { ok: true, uid: effectiveUid };
+    }
+
+    /**
+     * 把候选文档持久化到指定账号副本（只写该账号键，不切换指针、不重建锚点）。
+     * 这是同步层 G12 的本地落盘原语；本阶段不接任何远端。
+     */
+    function persistAccountCopy(uid, doc, opts) {
+      opts = opts || {};
+      var session = requireAccountSession(uid, opts);
+      if (!session.ok) return session;
+      var target = K.userScope(uid);
+      var validation = schema.validateDocument(doc);
+      if (!validation.ok) {
+        return { ok: false, code: 'E_INVALID_DOC', message: '候选文档校验失败', errors: validation.errors };
+      }
+      var sanitized = schema.sanitizeDocument(doc);
+      var raw = JSON.stringify(sanitized.doc);
+      var before = scopeStorage.readScopeRecord(storage, target);
+      var written = scopeStorage.writeScopeRecord(storage, target, raw);
+      if (!written.ok) {
+        var rolledBack = false;
+        if (before.ok) {
+          rolledBack = before.exists
+            ? scopeStorage.writeScopeRecord(storage, target, before.raw).ok
+            : scopeStorage.removeScopeRecord(storage, target).ok;
+        }
+        lastError = scopeError(written.code, '账号副本写入失败：' + (written.message || ''), written);
+        return { ok: false, code: written.code, message: lastError.message, rolledBack: rolledBack };
+      }
+      return { ok: true, doc: sanitized.doc, warnings: sanitized.warnings, key: K.dbKeyForScope(target) };
+    }
+
+    /** 读取账号副本（只读，不改变活动作用域）。 */
+    function readAccountCopy(uid, opts) {
+      var session = requireAccountSession(uid, opts);
+      if (!session.ok) return session;
+      var target = K.userScope(uid);
+      var rec = scopeStorage.readScopeRecord(storage, target);
+      if (!rec.ok) return { ok: false, code: rec.code, message: rec.message };
+      if (!rec.exists) return { ok: false, code: 'E_ACCOUNT_COPY_MISSING', message: '账号本地副本不存在' };
+      var parsed = parseDocument(rec.raw, { backup: false });
+      if (!parsed.ok) {
+        return { ok: false, code: parsed.code || 'E_INVALID_DOC', message: '账号本地副本不可用', errors: parsed.errors || [] };
+      }
+      return { ok: true, doc: parsed.doc, warnings: parsed.warnings, key: rec.key };
+    }
+
+    function hasAccountCopy(uid) {
+      return scopeStorage.hasScopeRecord(storage, K.userScope(uid));
+    }
+
+    /**
+     * 清空当前活动作用域（F-12.3）。
+     * - 只删除当前作用域数据键，并写当前作用域 seed 标记；
+     * - 账号作用域先写合法 reset 记录；游客作用域不触碰任何账号同步记录（Q-14 / A-1）；
+     * - 任一步失败都会恢复数据键与同步记录，内存文档保持不变。
+     * @returns {boolean} 成功与否；失败原因见 getLastError()
+     */
     function clearAll() {
+      if (saveTimer) {
+        var flushed = saveNow();
+        if (!flushed.ok) {
+          lastError = scopeError(flushed.code || 'E_SAVE', '清空前保存失败：' + (flushed.error || ''), flushed);
+          return false;
+        }
+      }
+      var result = scopeStorage.clearScope(storage, scope, { now: now() });
+      if (!result.ok) {
+        lastError = scopeError(result.code || 'E_CLEAR', result.message || '清空当前作用域失败', result);
+        return false;
+      }
       state = schema.createEmptyDocument();
-      try {
-        storage.removeItem(DB_KEY);
-        storage.setItem(SEED_KEY, 'done');
-      } catch (e) { /* 忽略 */ }
+      lastWarnings = [];
+      seeded = false;
+      lastError = null;
       commit(false);
       return true;
     }
@@ -1535,6 +1771,14 @@
       getLastError: getLastError,
       isStorageDegraded: isStorageDegraded,
       isSeeded: isSeeded,
+      // 数据作用域（Phase 1B）
+      getScope: getScope,
+      getScopeId: getScopeId,
+      getScopeInfo: getScopeInfo,
+      switchScope: switchScope,
+      persistAccountCopy: persistAccountCopy,
+      readAccountCopy: readAccountCopy,
+      hasAccountCopy: hasAccountCopy,
       // 事项
       addItem: addItem,
       updateItem: updateItem,
@@ -1579,7 +1823,10 @@
       isExpanded: isExpanded,
       setExpanded: setExpanded,
       // 常量（测试用）
-      KEYS: { DB: DB_KEY, BACKUP: BACKUP_KEY, UI: UI_KEY, SEED: SEED_KEY, CORRUPT_PREFIX: CORRUPT_PREFIX }
+      KEYS: {
+        DB: DB_KEY, BACKUP: BACKUP_KEY, UI: UI_KEY, SEED: SEED_KEY,
+        ACTIVE: K.KEYS.active, CORRUPT_PREFIX: CORRUPT_PREFIX
+      }
     };
   }
 
@@ -1588,7 +1835,10 @@
     createStore: createStore,
     createStorage: createStorage,
     createMemoryStorage: createMemoryStorage,
-    KEYS: { DB: DB_KEY, BACKUP: BACKUP_KEY, UI: UI_KEY, SEED: SEED_KEY, CORRUPT_PREFIX: CORRUPT_PREFIX },
+    KEYS: {
+      DB: DB_KEY, BACKUP: BACKUP_KEY, UI: UI_KEY, SEED: SEED_KEY,
+      ACTIVE: K.KEYS.active, CORRUPT_PREFIX: CORRUPT_PREFIX
+    },
     SAVE_THROTTLE_MS: SAVE_THROTTLE_MS
   };
 });

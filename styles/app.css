@@ -167,12 +167,15 @@ button { font: inherit; color: inherit; text-align: center; }
 }
 
 /* 2026-10-22 二十三轮（用户反馈）：去掉蓝点与「日程安排」副标题；
-   品牌名放在白底带阴影的块上，悬停与事项块同款抬升，点击打开「关于」。 */
+   品牌块为白底带阴影的按钮，悬停与事项块同款抬升，点击打开「关于」。
+   四十二轮：块内只放网页 logo，按钮改正方形、图标居中。 */
 .brand {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  width: 32px;
   height: 32px;
-  padding: 0 12px;
+  padding: 0;
   border: 0;
   border-radius: 10px;
   background: var(--surface);
@@ -185,7 +188,15 @@ button { font: inherit; color: inherit; text-align: center; }
   .brand:hover { box-shadow: var(--shadow); transform: scale(1.02); }
 }
 .brand:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
-.brand-name { font-weight: 600; font-size: 17px; letter-spacing: .2px; line-height: 20px; }
+/* 四十二轮（用户口径）：左上角只保留网页 logo（与 favicon 同一标记的高清版）。 */
+.brand-logo {
+  display: block;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  pointer-events: none;
+}
+html[data-theme='dark'] .brand-logo { filter: invert(1); }
 
 .header-right { display: flex; align-items: center; gap: 10px; }
 .today-chip {
@@ -1563,8 +1574,9 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
     /* 四十一轮（用户口径）：手机端顶栏恢复毛玻璃。切档 / 翻转期间的临时纯色
        仍由 body.is-view-switching / .is-year-flipping 那一条规则负责。 */
   }
-  .brand { height: 44px; padding: 0 10px; }
-  .brand-name { font-size: 16px; }
+  /* 四十二轮：手机档品牌块保持正方形，logo 按比例放大。 */
+  .brand { width: 44px; height: 44px; padding: 0; }
+  .brand-logo { width: 28px; height: 28px; }
   .header-right { gap: 8px; min-width: 0; }
   .today-chip { display: none; }
   .view-switch-btn { min-width: 44px; min-height: 44px; padding: 0 10px; font-size: 14px; }

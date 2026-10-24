@@ -620,8 +620,11 @@
           confirmLabel: '确认清空'
         }).then(function (ok) {
           if (!ok) return;
-          store.clearAll();
-          dataChanged();
+          if (!store.clearAll()) {
+            var err = store.getLastError();
+            M.toast('清空失败：' + (err && err.message ? err.message : '浏览器存储不可用'));
+            return;
+          }          dataChanged();
           M.toast('已清空全部数据');
         });
       }
