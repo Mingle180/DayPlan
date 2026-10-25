@@ -379,10 +379,13 @@
 
     /* ---------------- 手机横滑切日期 / 周（四十七轮） ---------------- */
 
-    var SWIPE_START_PX = 8;      // 先观察方向：位移小于此值不动画
-    var SWIPE_COMMIT_PX = 52;    // 距离阈值（宽度的 22% 与它取大）
-    var SWIPE_COMMIT_RATIO = 0.22;
-    var SWIPE_FLICK_VX = 0.35;   // px/ms：快速轻扫可低于距离阈值
+    var SWIPE_SLOP_PX = 7;       // 判方向的手指位移（小于浏览器滚动阈值，先手拿住手势）
+    var SWIPE_LOCK_RATIO = 0.9;  // |x| > |y|×0.9 即锁成横滑（约 42° 以内都算横滑）
+    var SWIPE_HOLD_PX = 20;      // 纵向占优到这个距离才认定是在滚页面
+    var SWIPE_COMMIT_PX = 40;    // 距离阈值（宽度的 14% 与它取大）
+    var SWIPE_COMMIT_RATIO = 0.14;
+    var SWIPE_FLICK_VX = 0.28;   // px/ms：快速轻扫可低于距离阈值
+    var SWIPE_FLICK_MIN_PX = 12;
     var SWIPE_OUT_MS = 150;
     var SWIPE_IN_MS = 230;
 
@@ -512,12 +515,22 @@
         var x = e.clientX - startX;
         var y = e.clientY - startY;
         if (!decided) {
-          if (Math.abs(x) < SWIPE_START_PX) return;
-          /* 纵向意图优先：放手让浏览器滚页面，别抢手势 */
-          if (Math.abs(x) <= Math.abs(y) * 1.15) { active = false; el.style.transition = ''; return; }
-          decided = true;
-          if (el.classList) el.classList.add('is-swiping');
-          try { el.setPointerCapture(pointerId); } catch (err) { /* 合成事件无捕获 */ }
+          var ax = Math.abs(x);
+          var ay = Math.abs(y);
+          if (ax < SWIPE_SLOP_PX && ay < SWIPE_HOLD_PX) return;
+          if (ax >= SWIPE_SLOP_PX && ax > ay * SWIPE_LOCK_RATIO) {
+            decided = true;
+            if (el.classList) el.classList.add('is-swiping');
+            try { el.setPointerCapture(pointerId); } catch (err) { /* 合成事件无捕获 */ }
+          } else if (ay >= SWIPE_HOLD_PX && ay > ax) {
+            /* 明确的纵向意图：放手让浏览器滚页面 */
+            active = false;
+            el.style.transition = '';
+            return;
+          } else {
+            /* 还没分出主方向：继续观察，不锁死这次手势 */
+            return;
+          }
         }
         dx = x;
         var now = e.timeStamp || Date.now();
@@ -538,12 +551,17 @@
           return;
         }
         decided = false;
-        if (canceled) { settleBack(); return; }
         var width = 0;
         try { width = el.getBoundingClientRect().width || 0; } catch (err) { width = 0; }
         var threshold = Math.max(SWIPE_COMMIT_PX, width * SWIPE_COMMIT_RATIO);
         var commitOk = Math.abs(dx) >= threshold
-          || (Math.abs(vx) >= SWIPE_FLICK_VX && Math.abs(dx) >= 16);
+          || (Math.abs(vx) >= SWIPE_FLICK_VX && Math.abs(dx) >= SWIPE_FLICK_MIN_PX);
+        /* 已经被锁定为横滑才可能收到 pointercancel（浏览器抢去滚动）。
+           此时按半程距离或甩速照常提交，避免拖到一半突然弹回。 */
+        if (canceled && !commitOk) {
+          commitOk = Math.abs(dx) >= threshold * 0.5
+            || (Math.abs(vx) >= SWIPE_FLICK_VX && Math.abs(dx) >= SWIPE_FLICK_MIN_PX);
+        }
         if (commitOk) commit(dx < 0 ? 1 : -1);
         else settleBack();
       }
@@ -552,6 +570,19 @@
       el.addEventListener('pointermove', onPointerMove);
       el.addEventListener('pointerup', function (e) { finishGesture(e, false); });
       el.addEventListener('pointercancel', function (e) { finishGesture(e, true); });
+      /* 锁定横滑后自己消化 touchmove，浏览器就不会把这次手势改成纵向滚动
+         （纵向滚动的接管正是「划到一半断掉」的来源）。未锁定前放行，页面照常滚。 */
+      el.addEventListener('touchmove', function (e) {
+        if (e && e.cancelable === false) return;
+        if (!decided) {
+          var t = e && e.touches && e.touches[0];
+          if (!active || !t) return;
+          var ax = Math.abs(t.clientX - startX);
+          var ay = Math.abs(t.clientY - startY);
+          if (ax < SWIPE_SLOP_PX || ax <= ay * SWIPE_LOCK_RATIO) return;
+        }
+        if (e && typeof e.preventDefault === 'function') e.preventDefault();
+      }, { passive: false });
     }
 
     /* 视图模块（日 / 周）在事件回调里取：模块加载顺序早于 app，不能在它们顶层捕获。 */
