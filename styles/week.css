@@ -29,9 +29,10 @@
   box-shadow: var(--shadow);
 }
 /* 列宽由 JS 以内联 grid-template-columns 写入（迭代 8 / F-52 起为内容驱动的像素宽：
- * 52px 轴列 + 每天「各构成类别列宽之和」；总宽可超过容器 → 由 .week-scroll 横向滚动）。
+ * 38px 轴列（四十九轮由 52 收窄到刚好容纳 10px 的 HH:mm）+ 每天「各构成类别列宽之和」；
+ * 总宽可超过容器 → 由 .week-scroll 横向滚动）。
  * 下面的静态规则只是 JS 未运行时的兜底（等宽 84px 起），运行时始终被内联样式覆盖。 */
-.week-grid { display: grid; grid-template-columns: 52px repeat(7, minmax(84px, 1fr)); }
+.week-grid { display: grid; grid-template-columns: 38px repeat(7, minmax(84px, 1fr)); }
 /* 规范 12 / LA-3：表头毛玻璃置顶（内容从其下滚过时呈毛玻璃通透） */
 .week-grid .wk-head {
   position: sticky;
@@ -64,12 +65,14 @@
 .wk-axis { position: relative; background: var(--surface); }
 .wk-axis-tick {
   position: absolute;
-  right: 4px;
+  right: 6px;
   font-size: 10px;
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
   transform: translateY(-50%);
 }
+/* 四十九轮（用户口径）：整点横线只留在事项区 —— 轴列（时间数字）不再画 .wk-hourline，
+   横线由 7 个日列各自绘制，从左边界开始，不再穿到数字下面。 */
 .wk-hourline {
   position: absolute;
   left: 0; right: 0;

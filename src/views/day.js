@@ -76,9 +76,7 @@
       panel: document.getElementById('day-panel'),
       title: document.getElementById('day-title'),
       sub: document.getElementById('day-sub'),
-      prev: document.getElementById('btn-prev-day'),
       today: document.getElementById('btn-today'),
-      next: document.getElementById('btn-next-day'),
       newItem: document.getElementById('btn-new-item'),
       scroll: document.getElementById('timeline-scroll'),
       inner: document.getElementById('timeline-inner'),
@@ -1220,12 +1218,15 @@
     }
 
     /**
-     * 迭代 10 条13：把无时事项拖到同列表另一项之前/之后（取代 ▲▼ 按钮）。
+     * 迭代 10 条13：把无时事项拖到同列表的另一处（取代 ▲▼ 按钮）。
      * 以**全部**无时条目（含已完成/已被完成台占用的隐藏项）的当前次序为基准移动 ——
      * 只按可见项重排会把隐藏项挤到末尾，刷新后就乱了。
+     * @param {string} fromSeriesId
+     * @param {number} slot 在可见项（已剔除被拖项）中的插入位：0 = 最前，items.length = 最后
+     * @param {string[]} visibleIds 可见项（已剔除被拖项）的 seriesId，按 DOM 顺序
      */
-    function moveUntimedTo(fromSeriesId, toSeriesId, after) {
-      if (!fromSeriesId || !toSeriesId || fromSeriesId === toSeriesId) return;
+    function moveUntimedToSlot(fromSeriesId, slot, visibleIds) {
+      if (!fromSeriesId || !Array.isArray(visibleIds)) return;
       var all = Order.sortUntimed(Order.partition(state.occurrences).untimed);
       var ids = [];
       all.forEach(function (o) {
@@ -1234,9 +1235,13 @@
       var from = ids.indexOf(fromSeriesId);
       if (from < 0) return;
       ids.splice(from, 1);
-      var anchor = ids.indexOf(toSeriesId);
-      if (anchor < 0) return;
-      ids.splice(after ? anchor + 1 : anchor, 0, fromSeriesId);
+      var visible = visibleIds.filter(function (id) { return id && id !== fromSeriesId; });
+      var insertAt;
+      if (!visible.length) insertAt = 0;
+      else if (slot >= visible.length) insertAt = ids.indexOf(visible[visible.length - 1]) + 1;
+      else insertAt = ids.indexOf(visible[slot]);
+      if (!(insertAt >= 0)) insertAt = ids.length;
+      ids.splice(insertAt, 0, fromSeriesId);
       try {
         store.reorderUntimed(state.date, ids);
         afterWrite();
@@ -1475,10 +1480,21 @@
       setDate(D.addDays(state.date, days), { slide: dir });
     }
 
-    els.prev.addEventListener('click', function () { shiftDate(-1); });
-    els.next.addEventListener('click', function () { shiftDate(1); });
     els.today.addEventListener('click', function () { setDate(D.todayISO()); });
     els.newItem.addEventListener('click', function () { openEdit(null); });
+
+    /* 四十七轮（用户口径）：手机端在时间表以外左右滑动切换日期，取代「‹ / 今天 / ›」
+       两侧箭头；键盘 [ / ] 仍走 shiftDate。 */
+    if (root.DayPlan.motion && typeof root.DayPlan.motion.enableSwipe === 'function') {
+      root.DayPlan.motion.enableSwipe(els.panel, {
+        exclude: function (target) {
+          return !!(target && target.closest && target.closest('.timeline-section'));
+        },
+        onCommit: function (dir) {
+          setDate(D.addDays(state.date, dir), { notify: true });
+        }
+      });
+    }
 
     /* 「隐藏已完成」开关已移入设置：每次 refresh（含设置变更回调）都重新读 UI 状态。 */
     function syncHideDone() {
@@ -1557,32 +1573,66 @@
         if (dockEl && dockEl.classList) dockEl.classList.remove('is-drop-target');
       }
 
-      /* ---- 列表内排序（迭代 10 条13）---- */
+      /* ---- 列表内排序（迭代 10 条13，四十七轮改为按指针几何取落点）---- */
 
-      function listItemUnder(target) {
-        var n = target;
-        while (n && n !== els.panel) {
-          if (n.className && String(n.className).indexOf('untimed-item') >= 0) return n;
-          n = n.parentNode;
-        }
-        return null;
+      /* 单一落点线：列表内绝对定位，不再靠逐项 ::before/::after 切换（子元素间移动时
+         dragleave 会把标记清掉，表现为蓝条闪烁）。 */
+      var sortLine = null;
+
+      function hideSortLine() {
+        if (sortLine && sortLine.parentNode) sortLine.parentNode.removeChild(sortLine);
+        sortLine = null;
       }
 
-      function clearSortMarks() {
+      /** 可见卡片（剔除被拖项与落点线），按 DOM 次序 */
+      function sortCandidates() {
+        var out = [];
         var list = els.untimedList;
-        if (!list || !list.children) return;
+        if (!list || !list.children) return out;
         for (var i = 0; i < list.children.length; i += 1) {
-          var c = list.children[i];
-          if (c.classList) c.classList.remove('is-drop-before', 'is-drop-after');
+          var n = list.children[i];
+          if (!n || n === sortLine) continue;
+          if (!n.className || String(n.className).indexOf('untimed-item') < 0) continue;
+          if (n.getAttribute && n.getAttribute('data-occ-key') === dragKey) continue;
+          out.push(n);
         }
+        return out;
       }
 
-      /** 指针落在目标项上半 → 插到它前面；下半 → 插到它后面。 */
-      function dropSide(item, ev) {
-        if (!item || typeof item.getBoundingClientRect !== 'function') return false;
-        var r = item.getBoundingClientRect();
-        var y = (ev && typeof ev.clientY === 'number') ? ev.clientY : 0;
-        return y > r.top + r.height / 2;
+      /** 指针纵坐标 → 插入位（0..n）与落点线的 y（相对列表顶部） */
+      function sortSlot(clientY) {
+        var items = sortCandidates();
+        var listRect = els.untimedList.getBoundingClientRect();
+        var y = null;
+        var index = items.length;
+        for (var i = 0; i < items.length; i += 1) {
+          var r = items[i].getBoundingClientRect();
+          if (clientY < r.top + r.height / 2) {
+            index = i;
+            y = r.top;
+            break;
+          }
+        }
+        if (y === null && items.length) {
+          y = items[items.length - 1].getBoundingClientRect().bottom;
+        }
+        var ids = items.map(function (n) { return n.getAttribute('data-series-id'); });
+        return {
+          index: index,
+          ids: ids,
+          top: (y === null) ? 0 : Math.max(0, Math.round(y - listRect.top) - 1)
+        };
+      }
+
+      function showSortLine(slot) {
+        if (!els.untimedList) return;
+        if (!sortLine || sortLine.parentNode !== els.untimedList) {
+          sortLine = document.createElement('li');
+          sortLine.className = 'untimed-drop-line';
+          sortLine.setAttribute('aria-hidden', 'true');
+          els.untimedList.appendChild(sortLine);
+        }
+        sortLine.style.top = slot.top + 'px';
       }
 
       els.panel.addEventListener('dragstart', function (e) {
@@ -1605,45 +1655,41 @@
         var src = sourceOf(e.target ? e.target : null);
         if (src && src.classList) src.classList.remove('is-dragging');
         clearTarget();
-        clearSortMarks();
+        hideSortLine();
         dragKey = null;
         dragFromList = false;
       });
 
-      /* 列表内拖动排序：dragover 标落点，drop 重排并落盘 */
+      /* 列表内拖动排序：dragover 按指针几何标落点（卡片空隙 / 列表空白也能落），
+         drop 重排并落盘。落点线是全列表唯一一条，避免移动过程中的闪烁。 */
       if (els.untimedList) {
         els.untimedList.addEventListener('dragover', function (e) {
           if (!dragKey || !dragFromList) return;
-          var item = listItemUnder(e.target);
-          if (!item) return;
-          if (item.getAttribute && item.getAttribute('data-occ-key') === dragKey) return;
+          /* 必须 preventDefault：指针在卡片之间或列表空白处时，浏览器默认也不允许 drop */
           e.preventDefault();
           try { if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'; } catch (err) { /* 忽略 */ }
-          var after = dropSide(item, e);
-          clearSortMarks();
-          if (item.classList) item.classList.add(after ? 'is-drop-after' : 'is-drop-before');
+          showSortLine(sortSlot(e.clientY));
         });
 
         els.untimedList.addEventListener('dragleave', function (e) {
-          var item = listItemUnder(e.target);
-          if (item && item.classList) item.classList.remove('is-drop-before', 'is-drop-after');
+          /* 子元素之间移动（relatedTarget 仍在列表内）不算离开，否则落点线会闪 */
+          var to = e.relatedTarget;
+          if (to && els.untimedList.contains && els.untimedList.contains(to)) return;
+          hideSortLine();
         });
 
         els.untimedList.addEventListener('drop', function (e) {
           if (!dragKey || !dragFromList) return;
-          var item = listItemUnder(e.target);
           e.preventDefault();
-          var after = dropSide(item, e);
-          clearSortMarks();
+          var slot = sortSlot(e.clientY);
+          hideSortLine();
           var fromKey = dragKey;
           dragKey = null;
           dragFromList = false;
-          if (!item || !fromKey) return;
           var fromSeries = null;
-          var toSeries = item.getAttribute ? item.getAttribute('data-series-id') : null;
           (state.occurrences || []).forEach(function (o) { if (o.key === fromKey) fromSeries = o.seriesId; });
-          if (!fromSeries || !toSeries || fromSeries === toSeries) return;
-          moveUntimedTo(fromSeries, toSeries, after);
+          if (!fromSeries) return;
+          moveUntimedToSlot(fromSeries, slot.index, slot.ids);
         });
       }
 

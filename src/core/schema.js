@@ -56,7 +56,7 @@
     createdAt: URGENT_CREATED_AT
   };
 
-  /** 内置类别（固定 id，不可删除；非紧急者可改名、改色、排序；紧急恒首位且颜色固定） */
+  /** 内置类别（固定 id；四十八轮起除紧急外均可删除；非紧急者可改名、改色、排序；紧急恒首位且颜色固定） */
   var BUILTIN_CATEGORIES = [
     {
       id: URGENT_CATEGORY_ID, name: '紧急', color: '#dc2626', builtin: true,
@@ -449,8 +449,12 @@
           catIds[c.id] = true;
         }
       });
+      /* 四十八轮（用户口径「内置类别除了紧急都可删除」）：只保证紧急类别存在；
+         其余内置类别允许被用户删掉，不能在这里补回来。 */
       BUILTIN_CATEGORIES.forEach(function (b) {
-        if (!catIds[b.id]) errors.push(err('$.categories', '缺少内置类别 ' + b.id));
+        if (!catIds[b.id] && b.special === 'urgent') {
+          errors.push(err('$.categories', '缺少内置类别 ' + b.id));
+        }
       });
     }
 
@@ -644,8 +648,9 @@
     var out = {};
     Object.keys(doc).forEach(function (k) { out[k] = doc[k]; });
 
-    // 类别：确保内置类别（含紧急）存在且不可删除；内置的 name / color 以文档为准（可自定义），
-    // 只有紧急的 special / order / color 由契约固定。次序按 DM-3（紧急恒首位，其余 order 升序）
+    // 类别：只保证紧急类别存在（四十八轮起其余内置类别允许被用户删除，不再自动补回）；
+    // 内置的 name / color 以文档为准（可自定义），只有紧急的 special / order / color 由契约固定。
+    // 次序按 DM-3（紧急恒首位，其余 order 升序）
     var rawCats = Array.isArray(doc.categories) ? doc.categories : [];
     var catMap = {};
     rawCats.forEach(function (c, i) {
@@ -655,8 +660,9 @@
     });
     BUILTIN_CATEGORIES.forEach(function (b) {
       if (!catMap[b.id]) {
+        if (b.special !== 'urgent') return;
         var fresh = { id: b.id, name: b.name, color: b.color, builtin: true, order: b.order };
-        if (b.special) fresh.special = b.special;
+        fresh.special = b.special;
         if (b.createdAt) fresh.createdAt = b.createdAt;
         catMap[b.id] = fresh;
         warnings.push(err('$.categories', '补充缺失的内置类别：' + b.name));
@@ -673,13 +679,20 @@
     var categoryIds = {};
     categories.forEach(function (c) { categoryIds[c.id] = true; });
 
+    /* 事项类别兜底：优先文档设置的默认类别，其次紧急，最后第一个类别。
+       旧实现固定回退 cat_short_task —— 该类别四十八轮起可能已被删除。 */
+    var fallbackCategoryId = (isNonEmptyString(doc.settings && doc.settings.defaultCategoryId)
+      && categoryIds[doc.settings.defaultCategoryId])
+      ? doc.settings.defaultCategoryId
+      : (categoryIds[URGENT_CATEGORY_ID] ? URGENT_CATEGORY_ID : (categories[0] && categories[0].id));
+
     // 事项
     var items = [];
     var itemIds = {};
     var rawItems = Array.isArray(doc.items) ? doc.items : [];
     rawItems.forEach(function (it, i) {
       var originalCategoryId = isPlainObject(it) ? it.categoryId : undefined;
-      var s = sanitizeItem(it, { categoryIds: categoryIds, fallbackCategoryId: DEFAULT_SETTINGS.defaultCategoryId });
+      var s = sanitizeItem(it, { categoryIds: categoryIds, fallbackCategoryId: fallbackCategoryId });
       if (!s) {
         warnings.push(err('$.items[' + i + ']', '无法修复，已丢弃'));
         return;
@@ -750,6 +763,11 @@
     out.weekNotes = weekNotes;
     out.monthPlans = sanitizeMonthPlans(doc.monthPlans, warnings);
     out.settings = sanitizeSettings(doc.settings);
+    /* 四十八轮：默认类别可能已被用户删除 —— 归一到一个仍然存在的类别（优先紧急）。 */
+    if (!categoryIds[out.settings.defaultCategoryId]) {
+      out.settings.defaultCategoryId = fallbackCategoryId;
+      warnings.push(err('$.settings.defaultCategoryId', '默认类别不存在，已回退到 ' + fallbackCategoryId));
+    }
     return { doc: out, warnings: warnings };
   }
 

@@ -620,8 +620,6 @@
           return;
         }
 
-        var prevDay = dt.addDays(dateISO, -1);
-
         // 例外按分界日拆开：
         //   stayInOriginal：发生日期 < 分界日（diffDays(k, dateISO) = dateISO - k > 0）→ 留在原序列
         //   moveToNew     ：发生日期 >= 分界日（<= 0）→ 随新序列迁移
@@ -633,7 +631,10 @@
         });
         series.exceptions = stayInOriginal;
         series.repeat = copyRepeat(series.repeat);
-        series.repeat.endDate = prevDay; // 半开区间：原序列最后一天 = dateISO - 1
+        /* endDate 半开（BR-5）：原序列保留 [startDate, dateISO)，最后一天 = dateISO - 1。
+           写成 dateISO - 1 会连分界日前一天一起丢掉，并在「分界日 = 第二次发生」时
+           产生 endDate === startDate 的非法区间（四十七轮修复）。 */
+        series.repeat.endDate = dateISO;
         series.updatedAt = now();
         draft.items[i] = series;
 
@@ -656,6 +657,9 @@
           if (k === 'id' || k === 'createdAt' || k === 'exceptions') return;
           fresh[k] = changes[k];
         });
+        /* 分界日就是新序列的起点：表单里改「开始日期」不得挪动拆分边界，
+           否则分界日与起点之间会出现重复或缺失的发生。 */
+        fresh.repeat.startDate = dateISO;
         fresh.createdAt = now();
         fresh.updatedAt = fresh.createdAt;
         draft.items.push(fresh);
@@ -716,11 +720,17 @@
      */
     function reorderUntimed(dateISO, orderedIds) {
       var wanted = Array.isArray(orderedIds) ? orderedIds : [];
+      var wantedSet = {};
+      wanted.forEach(function (id) { if (typeof id === 'string') wantedSet[id] = true; });
       mutate(function (draft) {
         var group = draft.items.filter(function (it) {
+          if (it.time) return false;
           if (it.kind === 'single') return it.date === dateISO;
-          return it.repeat && it.repeat.startDate === dateISO && it.time === null;
-        }).filter(function (it) { return !it.time; });
+          if (!it.repeat) return false;
+          /* 重复事项的次序跟序列走：只要它当天出现在未排列表里（调用方列进目标次序），
+             就参与排序；只认 startDate 会漏掉更早起算的重复事项。 */
+          return it.repeat.startDate === dateISO || !!wantedSet[it.id];
+        });
 
         group.sort(compareUntimed);
         var rank = {};
@@ -1076,9 +1086,7 @@
         var cat = draft.categories[i];
         /* 2026-10-20（用户反馈「除了紧急类型仅可改名，其他类型均可自定义」）：
            · 紧急：**只允许改名** —— id / 颜色 / 次序 / 存在性全部固定（颜色恒 #dc2626）。
-           · 非紧急（含三个内置类别）：改名、改色、排序都放开；仍**不可删除** ——
-             `settings.defaultCategoryId` 与删除类别时的迁移兜底都指向内置类别，删光会没有落点
-             （见 removeCategory 的 E_BUILTIN_LOCKED）。 */
+           · 非紧急（含三个内置类别）：改名、改色、排序、删除都放开（四十八轮起）。 */
         if (patch.name !== undefined) {
           var name = String(patch.name).trim();
           if (!name) throw StoreError('E_INVALID_NAME', '类别名称不能为空');
@@ -1105,11 +1113,11 @@
       return getCategory(id);
     }
 
-    /** 删除自定义类别；被引用时必须提供 moveTo */
+    /** 删除类别；被引用时必须提供 moveTo。四十八轮起除「紧急」外的内置类别也可删除。 */
     function removeCategory(id, moveTo) {
       var cat = getCategory(id);
       if (!cat) throw StoreError('E_NOT_FOUND', '类别不存在：' + id);
-      if (cat.builtin) throw StoreError('E_BUILTIN_LOCKED', '内置类别不可删除');
+      if (schema.isUrgentCategory(cat)) throw StoreError('E_BUILTIN_LOCKED', '「' + cat.name + '」不可删除');
       var refCount = state.items.filter(function (it) { return it.categoryId === id; }).length;
       if (refCount > 0) {
         if (!moveTo) throw StoreError('E_CATEGORY_IN_USE', '该类别被 ' + refCount + ' 个事项引用，请先选择迁移目标', { refCount: refCount });
@@ -1128,7 +1136,12 @@
         var i = findIndexById(draft.categories, id);
         draft.categories.splice(i, 1);
         compactStoreCategories(draft);
-        if (draft.settings.defaultCategoryId === id) draft.settings.defaultCategoryId = moveTo || 'cat_short_task';
+        if (draft.settings.defaultCategoryId === id) {
+          /* 兜底必须落在**仍然存在**的类别上（四十八轮起内置类别可删，cat_short_task 可能已不在） */
+          draft.settings.defaultCategoryId = moveTo
+            || (draft.categories[0] && draft.categories[0].id)
+            || schema.DEFAULT_SETTINGS.defaultCategoryId;
+        }
       });
       return true;
     }

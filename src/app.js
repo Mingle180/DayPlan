@@ -181,7 +181,7 @@
       if (!root.DayPlan.dayView) return null;
       instances.day = root.DayPlan.dayView.createDayView({
         store: store,
-        /* 日视图内的「‹ / 今天 / ›」改的是视图自己的 state.date，必须回写到共享 state.viewDate 并落盘。
+        /* 日视图内的「今天」与左右横滑改的是视图自己的 state.date，必须回写到共享 state.viewDate 并落盘。
            原先这里写成 `persistViewState()` 丢掉了入参 iso —— 于是 viewDate 停在旧值，
            刷新后日视图会跳回旧日期（往往是周视图归一化出的周一）。日视图自身已重绘，
            这里只同步周/月两个隐藏视图，不再回调日视图以免重入。 */
@@ -377,8 +377,189 @@
       }
     }
 
+    /* ---------------- 手机横滑切日期 / 周（四十七轮） ---------------- */
+
+    var SWIPE_START_PX = 8;      // 先观察方向：位移小于此值不动画
+    var SWIPE_COMMIT_PX = 52;    // 距离阈值（宽度的 22% 与它取大）
+    var SWIPE_COMMIT_RATIO = 0.22;
+    var SWIPE_FLICK_VX = 0.35;   // px/ms：快速轻扫可低于距离阈值
+    var SWIPE_OUT_MS = 150;
+    var SWIPE_IN_MS = 230;
+
+    var SWIPE_NO_START = ['input', 'textarea', 'select', 'button', 'a', '.modal-backdrop', '.dp-pop'];
+    function isInteractiveTarget(target) {
+      if (!target || typeof target.closest !== 'function') return false;
+      for (var i = 0; i < SWIPE_NO_START.length; i += 1) {
+        if (target.closest(SWIPE_NO_START[i])) return true;
+      }
+      return false;
+    }
+
+    /**
+     * 给日 / 周视图接横滑：时间表以外的区域按 1:1 跟手，松手后旧页滑出、
+     * 新页从另一侧滑入。换内容发生在旧页完全离屏时，用户看不到中间帧。
+     * 只接管 pointerType=touch —— 鼠标拖拽（未排排序）和桌面点击不受影响。
+     * @param {HTMLElement} el 被平移的视图根节点
+     * @param {{exclude?:function(Element):boolean, onCommit:function(number)}} opts
+     */
+    function enableSwipe(el, opts) {
+      if (!el || !el.addEventListener) return;
+      opts = opts || {};
+      var excluded = typeof opts.exclude === 'function' ? opts.exclude : function () { return false; };
+      var onCommit = typeof opts.onCommit === 'function' ? opts.onCommit : function () {};
+      var active = false;
+      var decided = false;
+      var busy = false;
+      var pointerId = null;
+      var startX = 0;
+      var startY = 0;
+      var dx = 0;
+      var lastX = 0;
+      var lastT = 0;
+      var vx = 0;
+
+      function stopMotion() {
+        var motion = root.DayPlan.motion;
+        if (motion && typeof motion.clearSlide === 'function') motion.clearSlide(el);
+        try {
+          el.getAnimations().forEach(function (a) { a.cancel(); });
+        } catch (e) { /* 不支持 getAnimations */ }
+      }
+
+      function resetStyles() {
+        if (el.classList) el.classList.remove('is-swiping');
+        el.style.transition = '';
+        el.style.transform = '';
+      }
+
+      function settleBack() {
+        var reduced = prefersReducedMotion() || typeof el.animate !== 'function';
+        if (reduced) { resetStyles(); return; }
+        var a = el.animate([
+          { transform: 'translateX(' + dx + 'px)' },
+          { transform: 'translateX(0px)' }
+        ], { duration: 220, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' });
+        var done = function () { resetStyles(); };
+        if (a.finished && typeof a.finished.then === 'function') a.finished.then(done, done);
+        else setTimeout(done, 240);
+      }
+
+      function commit(dir) {
+        busy = true;
+        var width = 0;
+        try { width = el.getBoundingClientRect().width || 0; } catch (e) { width = 0; }
+        if (!width) width = root.innerWidth || 320;
+        var outX = dir > 0 ? -width : width;
+        var reduced = prefersReducedMotion() || typeof el.animate !== 'function';
+        if (reduced) {
+          resetStyles();
+          try { onCommit(dir); } finally { busy = false; }
+          return;
+        }
+        var dist = Math.abs(outX - dx);
+        var outMs = Math.max(90, Math.round(dist / width * SWIPE_OUT_MS));
+        var out = el.animate([
+          { transform: 'translateX(' + dx + 'px)' },
+          { transform: 'translateX(' + outX + 'px)' }
+        ], { duration: outMs, easing: 'cubic-bezier(0.4, 0, 1, 1)' });
+
+        var swingIn = function () {
+          /* 旧页已完全离屏：此时换内容不会出现「中间帧」 */
+          el.style.transition = '';
+          el.style.transform = 'translateX(' + (-outX) + 'px)';
+          try { el.offsetWidth; } catch (e) { /* 强制布局 */ }
+          try { onCommit(dir); } catch (e) { resetStyles(); busy = false; return; }
+          var enter = el.animate([
+            { transform: 'translateX(' + (-outX) + 'px)' },
+            { transform: 'translateX(0px)' }
+          ], { duration: SWIPE_IN_MS, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' });
+          var done = function () { resetStyles(); busy = false; };
+          if (enter.finished && typeof enter.finished.then === 'function') enter.finished.then(done, done);
+          else setTimeout(done, SWIPE_IN_MS + 40);
+        };
+        if (out.finished && typeof out.finished.then === 'function') out.finished.then(swingIn, swingIn);
+        else setTimeout(swingIn, outMs + 40);
+
+        /* 动画被外部取消时兜底释放手势锁 */
+        setTimeout(function () {
+          if (!busy) return;
+          stopMotion();
+          resetStyles();
+          busy = false;
+        }, outMs + SWIPE_IN_MS + 480);
+      }
+
+      function onPointerDown(e) {
+        if (busy || !e.isPrimary) return;
+        if (e.pointerType && e.pointerType !== 'touch') return;
+        if (isInteractiveTarget(e.target) || excluded(e.target)) return;
+        active = true;
+        decided = false;
+        pointerId = e.pointerId;
+        startX = e.clientX;
+        startY = e.clientY;
+        dx = 0;
+        lastX = e.clientX;
+        lastT = e.timeStamp || Date.now();
+        vx = 0;
+        stopMotion();
+        el.style.transition = 'none';
+        el.style.transform = '';
+      }
+
+      function onPointerMove(e) {
+        if (!active || e.pointerId !== pointerId) return;
+        var x = e.clientX - startX;
+        var y = e.clientY - startY;
+        if (!decided) {
+          if (Math.abs(x) < SWIPE_START_PX) return;
+          /* 纵向意图优先：放手让浏览器滚页面，别抢手势 */
+          if (Math.abs(x) <= Math.abs(y) * 1.15) { active = false; el.style.transition = ''; return; }
+          decided = true;
+          if (el.classList) el.classList.add('is-swiping');
+          try { el.setPointerCapture(pointerId); } catch (err) { /* 合成事件无捕获 */ }
+        }
+        dx = x;
+        var now = e.timeStamp || Date.now();
+        var span = now - lastT;
+        if (span > 0) vx = vx * 0.7 + ((e.clientX - lastX) / span) * 0.3;
+        lastX = e.clientX;
+        lastT = now;
+        el.style.transform = 'translateX(' + dx + 'px)';
+      }
+
+      function finishGesture(e, canceled) {
+        if (!active || e.pointerId !== pointerId) return;
+        active = false;
+        pointerId = null;
+        if (!decided) {
+          el.style.transition = '';
+          el.style.transform = '';
+          return;
+        }
+        decided = false;
+        if (canceled) { settleBack(); return; }
+        var width = 0;
+        try { width = el.getBoundingClientRect().width || 0; } catch (err) { width = 0; }
+        var threshold = Math.max(SWIPE_COMMIT_PX, width * SWIPE_COMMIT_RATIO);
+        var commitOk = Math.abs(dx) >= threshold
+          || (Math.abs(vx) >= SWIPE_FLICK_VX && Math.abs(dx) >= 16);
+        if (commitOk) commit(dx < 0 ? 1 : -1);
+        else settleBack();
+      }
+
+      el.addEventListener('pointerdown', onPointerDown);
+      el.addEventListener('pointermove', onPointerMove);
+      el.addEventListener('pointerup', function (e) { finishGesture(e, false); });
+      el.addEventListener('pointercancel', function (e) { finishGesture(e, true); });
+    }
+
     /* 视图模块（日 / 周）在事件回调里取：模块加载顺序早于 app，不能在它们顶层捕获。 */
-    root.DayPlan.motion = { slidePanel: slideDatePanel };
+    root.DayPlan.motion = {
+      slidePanel: slideDatePanel,
+      clearSlide: clearViewSlide,
+      enableSwipe: enableSwipe
+    };
 
     function setViewMode(mode, opts) {
       if (VIEW_MODES.indexOf(mode) < 0) return;

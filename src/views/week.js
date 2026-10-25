@@ -38,7 +38,7 @@
   var DEFAULT_COMPRESS_HEIGHT = 26;    /* F-38：settings.idleCompressHeight 兜底（DM-21） */
   var DEFAULT_LANES_MAX = 3;           /* DM-19.2：周视图仅作列宽权重下限 */
   var WEEK_LANE_HARD_CAP = 6;          /* DM-19.4 / DM-22：道数硬上限 */
-  var WEEK_GRID_AXIS_WIDTH = 52;       /* .week-grid 第一列（时间轴）像素宽（US-29） */
+  var WEEK_GRID_AXIS_WIDTH = 38;       /* .week-grid 第一列（时间轴）像素宽；四十九轮由 52 收到 38（只够 10px 的 HH:mm） */
   var WEEK_MIN_DAY_WIDTH_PX = 84;      /* 迭代 8（F-52）：无内容时单天列宽的兜底（与静态 CSS 的 84px 一致） */
   var HOURS_PER_DAY = 24;
   var MINUTES_PER_DAY = 1440;
@@ -259,19 +259,9 @@
 
     var titleEl = el('h1', { class: 'week-title', id: 'week-title', text: '—' });
 
-    var btnPrev = el('button', {
-      class: 'date-nav-btn date-nav-arrow', type: 'button', id: 'btn-week-prev',
-      title: '上一周（Alt+←）', 'aria-label': '上一周',
-      text: '‹', onclick: function () { shiftWeek(-1); }
-    });
     var btnThis = el('button', {
       class: 'date-nav-btn is-current', type: 'button', id: 'btn-week-current', title: '回到本周',
       text: '本周', onclick: function () { setWeekStart(D.startOfWeek(D.todayISO()), { notify: true }); }
-    });
-    var btnNext = el('button', {
-      class: 'date-nav-btn date-nav-arrow', type: 'button', id: 'btn-week-next',
-      title: '下一周（Alt+→）', 'aria-label': '下一周',
-      text: '›', onclick: function () { shiftWeek(1); }
     });
     var btnNew = el('button', {
       class: 'btn-add-round', type: 'button', id: 'btn-new-week-plan',
@@ -293,7 +283,7 @@
     rootEl.appendChild(el('div', { class: 'week-head' }, [
       titleEl,
       el('div', { class: 'head-actions' }, [
-        el('div', { class: 'date-nav', role: 'group', 'aria-label': '周导航' }, [btnPrev, btnThis, btnNext]),
+        el('div', { class: 'date-nav', role: 'group', 'aria-label': '周导航' }, [btnThis]),
         btnNew
       ])
     ]));
@@ -572,6 +562,9 @@
      * 刻度/小时线的 `top` 与事项块共享同一映射（ADR-20 / BR-36 / F-38）：
      * 迭代 4 为 `top = h × pxPerHour`；迭代 6 起改为 `geom.getY(minute)`（= 折叠轴），
      * **折叠区内（outside）不绘制刻度与小时线**（与日视图同一口径）。
+     *
+     * 四十九轮（用户口径）：「横向的灰色线不要伸到时间数字这一列来和数字发生重叠，仅留在事项区」
+     * → 轴列只放刻度文字与折叠窄带，整点横线由 7 个日列各自绘制（横线从事项区左缘开始）。
      */
     function axisNode(geom) {
       var axis = el('div', {
@@ -584,9 +577,6 @@
         var tick = el('span', { class: 'wk-axis-tick', text: pad2(t.hour) + ':00' });
         tick.style.top = t.top + 'px';
         axis.appendChild(tick);
-        var line = el('div', { class: 'wk-hourline' });
-        line.style.top = t.top + 'px';
-        axis.appendChild(line);
       });
       geom.bands.forEach(function (band) { axis.appendChild(idleBandNode(band, true)); });
       return axis;
@@ -804,7 +794,7 @@
       }
       var columns = geo.columns;
 
-      /* 迭代 8（F-52）：列宽由内容决定 —— 52px 轴列 + 每天「各构成类别列宽之和」像素；
+      /* 迭代 8（F-52）：列宽由内容决定 —— 38px 轴列（四十九轮由 52 收窄）+ 每天「各构成类别列宽之和」像素；
        * 未取到内容宽度时退回迭代 4 的 widthWeight 份 fr（保持既有断言口径可用）。 */
       var tracks;
       var hasWidths = geo.widths && geo.widths.length && geo.widths.some(function (w) { return w > 0; });
@@ -939,6 +929,20 @@
     }
 
     function getWeekStart() { return state.monday; }
+
+    /* 四十七轮（用户口径）：手机端在周表以外左右滑动切换周，取代「‹ / 本周 / ›」
+       两侧箭头；键盘 Alt+←/→ 仍走 shiftWeek。 */
+    if (root.DayPlan.motion && typeof root.DayPlan.motion.enableSwipe === 'function') {
+      root.DayPlan.motion.enableSwipe(rootEl, {
+        exclude: function (target) {
+          return !!(target && target.closest && target.closest('#week-grid-scroll'));
+        },
+        onCommit: function (dir) {
+          var base = state.monday || D.startOfWeek(D.todayISO());
+          setWeekStart(D.addDays(base, dir * 7), { notify: true });
+        }
+      });
+    }
 
     /* ------------------------------------------------------------------ *
      * 6. 事项交互（折叠/展开、完成、重要、修改、删除 —— 语义与日视图一致）

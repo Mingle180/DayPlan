@@ -483,12 +483,15 @@ html[data-theme='dark'] .side-rail { background: var(--surface-2); }
   .dock-back:hover { background: var(--surface-3); color: var(--text); }
 }
 
+/* 四十八轮（用户口径）：计时数字放大，横向约占整排一半。 */
 .dock-clock {
-  font-size: 20px;
+  font-size: clamp(30px, 7.6vw, 34px);
+  line-height: 1.15;
   font-weight: 600;
   letter-spacing: .5px;
   font-variant-numeric: tabular-nums;
   text-align: center;
+  white-space: nowrap;
   color: var(--text);
 }
 .dock-clock.is-done { color: var(--warn); }
@@ -590,16 +593,13 @@ html[data-theme='dark'] .side-rail { background: var(--surface-2); }
  * 方案 A：浅灰玻璃轨道 + 白色凸起中段 + 透明箭头段。
  * 方案 B：新建按钮用毛玻璃圆形，直径与轨道高度严格相等（都是 32px）。 */
 .head-actions { --date-nav-h: 32px; display: flex; align-items: center; gap: 8px; flex: none; }
+/* 四十八轮（用户口径）：按钮背后不再有灰色槽 —— 去掉轨道底色、毛玻璃与内边距，
+   只留按钮自己的白色胶囊 + 灰色阴影。 */
 .date-nav {
   display: inline-flex;
   align-items: center;
   gap: 2px;
   height: var(--date-nav-h);
-  padding: 2px;
-  border-radius: 999px;
-  background: var(--surface-2);
-  -webkit-backdrop-filter: blur(14px) saturate(180%);
-  backdrop-filter: blur(14px) saturate(180%);
 }
 .date-nav-btn {
   appearance: none;
@@ -628,12 +628,23 @@ html[data-theme='dark'] .side-rail { background: var(--surface-2); }
   background: var(--seg-active);
   color: var(--seg-active-text);
   font-weight: 600;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, .14), inset 0 1px 0 rgba(255, 255, 255, .7);
+  /* 四十九轮（用户口径）：阴影与旁边的「+」按钮同一程度 —— 两层投影 + 顶部内高光，数值保持一致 */
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .12), 0 1px 2px rgba(0, 0, 0, .08), inset 0 1px 0 rgba(255, 255, 255, .75);
 }
 @media (hover: hover) {
   .date-nav-btn.is-current:hover { background: var(--seg-active); }
 }
-.date-nav-arrow { min-width: 28px; width: 28px; padding: 0; font-size: 16px; line-height: 1; }
+
+/* 四十七轮（用户口径）：手机端横滑切日期 / 周，取代「‹ / 今天(本周) / ›」两侧箭头。
+   pan-y 把横向手势留给 JS，纵向滚动仍归浏览器；不含 pinch-zoom，页面缩放仍被挡住。
+   时间表自己保留横向滚动与拖动。 */
+#day-panel, #week-view { touch-action: pan-y; }
+#day-panel .timeline-section, #week-view .week-grid-scroll { touch-action: auto; }
+#day-panel.is-swiping, #week-view.is-swiping {
+  will-change: transform;
+  user-select: none;
+  -webkit-user-select: none;
+}
 
 .btn-add-round {
   appearance: none;
@@ -720,18 +731,30 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
   top: 0;
   bottom: 0;
   width: 2px;
-  background: var(--danger);
+  /* 四十八轮（用户口径）：两端改成小尖角叉（手绘样式），不再用顶部圆点。
+     叉形用 SVG 蒙版着色，颜色跟随 --danger（深浅色主题一致）。
+     四十九轮（用户口径）：「红线中间一竖在两端交叉处不要出头，两端应该是 Y 形」——
+     竖线本体两端各缩进 3.4px（Y 的交点），中竖因此止于交点；SVG 里竖线同样止于 V3.4、
+     端点一律 butt 平切，两臂从竖线肩部（x=4.45 / 5.55）起笔，不再在中心点交叉。 */
+  background: linear-gradient(var(--danger), var(--danger)) no-repeat 0 3.4px / 100% calc(100% - 6.8px);
   z-index: 3;
   pointer-events: none;
+  --now-fork: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 7'%3E%3Cpath d='M5 7V3.4M1.4 .5 4.45 3.4M8.6 .5 5.55 3.4' fill='none' stroke='%23000' stroke-width='1.25' stroke-linecap='butt'/%3E%3C/svg%3E");
 }
-.timeline-now::before {
+.timeline-now::before,
+.timeline-now::after {
   content: "";
   position: absolute;
-  top: -4px; left: -3px;
-  width: 8px; height: 8px;
-  border-radius: 50%;
+  left: 50%;
+  width: 10px;
+  height: 7px;
+  margin-left: -5px;
   background: var(--danger);
+  -webkit-mask: var(--now-fork) no-repeat center / 100% 100%;
+  mask: var(--now-fork) no-repeat center / 100% 100%;
 }
+.timeline-now::before { top: 0; }
+.timeline-now::after { bottom: 0; transform: scaleY(-1); }
 
 .timeline-empty {
   position: absolute;
@@ -977,7 +1000,7 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
 }
 .section-head h2 { font-size: 14px; margin: 0; }
 .untimed-section { margin-bottom: 16px; }
-.untimed-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.untimed-list { position: relative; list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 
 .untimed-item {
   position: relative;
@@ -1002,20 +1025,19 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
 }
 .untimed-item.is-done { opacity: .5; }
 .untimed-item.is-done .ui-title { text-decoration: line-through; }
-/* 拖动排序：来源淡出，目标位置画一条主色落点线 */
+/* 拖动排序：来源淡出；落点线是全列表唯一一条（四十七轮），
+   避免逐项 ::before/::after 在子元素间移动时被 dragleave 清掉而闪烁。 */
 .untimed-item.is-dragging { opacity: .45; }
-.untimed-item.is-drop-before::before,
-.untimed-item.is-drop-after::after {
-  content: '';
+.untimed-drop-line {
   position: absolute;
   left: 6px;
   right: 6px;
   height: 2px;
   border-radius: 1px;
   background: var(--primary);
+  pointer-events: none;
+  z-index: 5;
 }
-.untimed-item.is-drop-before::before { top: -3px; }
-.untimed-item.is-drop-after::after { bottom: -3px; }
 .ui-seq {
   width: 18px;
   text-align: right;
@@ -1550,13 +1572,9 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
 .cat-item.is-drop-before::after { top: -5px; }
 .cat-item.is-drop-after::after { bottom: -5px; }
 .cat-swatch { width: 14px; height: 14px; border-radius: 5px; flex: none; border: 1px solid rgba(0,0,0,.1); }
-/* 2026-10-20：紧急类别的颜色固定，色块退化成「不可点的标记」——虚线边框 + 禁止光标，
-   让「这只是标识，不是按钮」一眼可辨，而不是点了没反应。 */
-.cat-swatch.is-locked {
-  cursor: not-allowed;
-  /* 虚线用 --text-3：rgba(0,0,0,.12) 在红块边缘几乎看不见，"锁定感"等于没做出来 */
-  border: 1px dashed var(--text-3);
-}
+/* 四十八轮（用户口径）：「紧急」色块不再画虚线「毛边」，与其他类别同一实线细边；
+   仍保留不可点的语义（span + not-allowed）。 */
+.cat-swatch.is-locked { cursor: not-allowed; }
 .cat-name { flex: 1; min-width: 0; font-weight: 600; }
 .cat-name input { width: 100%; }
 /* 色板：19 色按 8 列网格排（红→紫→蓝→绿→黄→橙→棕→中性），最后一个落单也不参差 */
@@ -1625,7 +1643,6 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
   .day-head .date-nav, .week-head .date-nav { flex: 0 0 auto; }
   .date-nav-btn { min-width: 44px; }
   .date-nav-btn.is-current { min-width: 84px; padding: 0 14px; }
-  .date-nav-arrow { width: 44px; min-width: 44px; }
 
   /* 表单：单列堆叠；输入 16px（iOS 聚焦不放大页面）；控件 44px 热区 */
   .field-row { flex-wrap: wrap; gap: 0; }

@@ -150,8 +150,7 @@
 
         /* 2026-10-20（用户反馈）：除「紧急」外一律可自定义 ——
            · 紧急：只可改名（颜色锁定、恒首位、不可删）；
-           · 其余内置：可改名、可改色、可排序，但**不可删除**（默认类别与迁移兜底都指向它们）；
-           · 自定义类别：全部开放，含删除。 */
+           · 其余（含内置类别，四十八轮起）：改名、改色、排序、删除全部开放。 */
         if (urgent) {
           li.appendChild(el('button', {
             class: 'btn btn-sm', type: 'button', text: '改名',
@@ -164,7 +163,7 @@
             class: 'btn btn-sm', type: 'button', text: '删除', disabled: true,
             title: '「' + cat.name + '」不可删除'
           }));
-        } else if (!cat.builtin) {
+        } else {
           li.appendChild(el('button', {
             class: 'btn btn-sm', type: 'button', text: '改名',
             onclick: function () { rename(cat); }
@@ -172,16 +171,6 @@
           li.appendChild(el('button', {
             class: 'btn btn-sm btn-danger', type: 'button', text: '删除',
             onclick: function () { remove(cat, refCount[cat.id] || 0); }
-          }));
-        } else {
-          li.appendChild(el('button', {
-            class: 'btn btn-sm', type: 'button', text: '改名',
-            title: '内置类别可改名、改色（不可删除）',
-            onclick: function () { rename(cat); }
-          }));
-          li.appendChild(el('button', {
-            class: 'btn btn-sm', type: 'button', text: '删除', disabled: true,
-            title: '内置类别不可删除（作为默认类别与迁移兜底）'
           }));
         }
         list.appendChild(li);
