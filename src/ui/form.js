@@ -192,11 +192,14 @@
   }
 
   /**
-   * 时间控件（迭代 7 / F-48.2）：可见按钮显示 `HH:mm`，点击展开「密码锁」滚轮（时 + 分，5 分钟刻度）；
+   * 时间控件（迭代 7 / F-48.2）：可见按钮显示 `HH:mm`，点击展开「密码锁」滚轮（时 + 分，默认 5 分钟刻度）；
    * 隐藏的 `input[type=time]` 仍是唯一取值载体。
+   * @param {object} attrs
+   * @param {{step?: number}} [opts] step：分钟刻度（五十一轮倒计时用 1，精确到分）
    * @returns {{wrap:HTMLElement, input:HTMLElement, button:HTMLElement}}
    */
-  function timeFieldControl(attrs) {
+  function timeFieldControl(attrs, opts) {
+    opts = opts || {};
     var input = el('input', Object.assign({ type: 'time' }, attrs));
     input.style.display = 'none';
     var button = el('button', {
@@ -210,6 +213,7 @@
     if (!P || typeof P.createWheel !== 'function') return { wrap: wrap, input: input, button: button };
 
     var step = TIME_STEP;
+    if (typeof opts.step === 'number' && opts.step > 0 && opts.step <= 60) step = Math.floor(opts.step);
     var hours = (typeof P.hourOptions === 'function') ? P.hourOptions() : null;
     var minutes = (typeof P.minuteOptions === 'function') ? P.minuteOptions(step) : null;
     if (!hours || !minutes) return { wrap: wrap, input: input, button: button };
@@ -865,6 +869,100 @@
   }
 
   /**
+   * 五十一轮：倒计时表单（标题 / 类型 / 目标日期 / 时刻（精确到分）/ 备注）。
+   * 与 createItemForm 同形状：`{ element, getValues, validate, focus }`。
+   * 「类型」复用事项类别（决定块左侧色标），不引入第二套类型数据。
+   * @param {object} opts
+   *   - countdown: 被编辑的倒计时（可选）
+   *   - date: 新建时的默认日期
+   *   - time: 新建时的默认时刻
+   *   - categories: 类别数组
+   */
+  function createCountdownForm(opts) {
+    opts = opts || {};
+    var categories = (opts.categories || []).slice();
+    var cd = opts.countdown || null;
+    var initialDate = (cd && String(cd.targetAt || '').slice(0, 10)) || opts.date || D.todayISO();
+    var initialTime = (cd && String(cd.targetAt || '').slice(11, 16)) || opts.time || '09:00';
+
+    var form = el('div', { class: 'item-form' });
+
+    var titleInput = el('input', {
+      type: 'text', maxlength: String(S.TITLE_MAX), value: cd ? cd.title : '',
+      'aria-label': '标题'
+    });
+    var titleErr = el('div', { class: 'field-error' });
+    form.appendChild(el('div', { class: 'field' }, [
+      el('label', { class: 'field-label', text: '标题' }), titleInput, titleErr
+    ]));
+
+    var catSelect = el('select', { 'aria-label': '类型' });
+    categories.forEach(function (c) { catSelect.appendChild(el('option', { value: c.id, text: c.name })); });
+    var initialCat = (cd && cd.categoryId) || opts.defaultCategoryId || '';
+    if (initialCat) catSelect.value = initialCat;
+    if (!catSelect.value && categories[0]) catSelect.value = categories[0].id;
+    form.appendChild(el('div', { class: 'field' }, [
+      el('label', { class: 'field-label', text: '类型' }), selectFieldControl(catSelect).wrap
+    ]));
+
+    var dateCtl = dateFieldControl({ value: initialDate, 'aria-label': '目标日期（YYYY-MM-DD）' });
+    var dateErr = el('div', { class: 'field-error' });
+    form.appendChild(el('div', { class: 'field' }, [
+      el('label', { class: 'field-label', text: '目标日期' }), dateCtl.wrap, dateErr
+    ]));
+
+    /* step: 1 → 分钟滚轮逐分可选（事项表单仍是 5 分钟刻度） */
+    var timeCtl = timeFieldControl({ value: initialTime, 'aria-label': '时刻' }, { step: 1 });
+    var timeErr = el('div', { class: 'field-error' });
+    form.appendChild(el('div', { class: 'field' }, [
+      el('label', { class: 'field-label', text: '时刻' }), timeCtl.wrap, timeErr
+    ]));
+
+    var noteInput = el('textarea', { maxlength: String(S.NOTE_MAX), 'aria-label': '备注' });
+    noteInput.value = (cd && cd.note) || '';
+    form.appendChild(el('div', { class: 'field' }, [
+      el('label', { class: 'field-label', text: '备注' }), noteInput
+    ]));
+
+    function collect() {
+      return {
+        title: titleInput.value.trim(),
+        categoryId: catSelect.value,
+        date: dateCtl.input.value,
+        time: timeCtl.input.value,
+        note: noteInput.value
+      };
+    }
+
+    function validate() {
+      var v = collect();
+      var errs = {};
+      titleErr.textContent = '';
+      dateErr.textContent = '';
+      timeErr.textContent = '';
+      if (!v.title) { errs.title = '请填写标题'; flashFieldError(titleErr, 'title', errs.title); }
+      else if (v.title.length > S.TITLE_MAX) {
+        errs.title = '标题不能超过 ' + S.TITLE_MAX + ' 字';
+        flashFieldError(titleErr, 'title', errs.title);
+      }
+      if (!D.isValidDate(v.date)) { errs.date = '请选择合法日期'; flashFieldError(dateErr, 'date', errs.date); }
+      if (!D.isValidTime(v.time)) { errs.time = '请选择时刻'; flashFieldError(timeErr, 'time', errs.time); }
+      return {
+        ok: !(errs.title || errs.date || errs.time),
+        values: v,
+        message: ''
+      };
+    }
+
+    return {
+      element: form,
+      getValues: collect,
+      validate: validate,
+      focus: function () { titleInput.focus(); if (titleInput.select) titleInput.select(); }
+    };
+  }
+
+  /**
    * 构建周计划表单（F-20 / DM-6.3 / BR-21，迭代 3 新增）。
    *
    * 与 createItemForm 同形状：`{ element, getValues, values, validate, scope, focus }`
@@ -1257,6 +1355,7 @@
 
   root.DayPlan.form = {
     createItemForm: createItemForm,
+    createCountdownForm: createCountdownForm,
     createWeekPlanForm: createWeekPlanForm,
     createMonthPlanForm: createMonthPlanForm,
     selectFieldControl: selectFieldControl,

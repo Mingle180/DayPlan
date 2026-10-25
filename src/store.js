@@ -1413,6 +1413,132 @@
       return true;
     }
 
+    // ---------------- 倒计时（五十一轮） ----------------
+
+    /** 本地墙钟 "YYYY-MM-DDTHH:mm" → 毫秒；非法返回 null */
+    function targetAtMs(targetAt) {
+      var m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(String(targetAt || ''));
+      if (!m) return null;
+      var t = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), 0, 0).getTime();
+      return isFinite(t) ? t : null;
+    }
+
+    /**
+     * 新条目的插入位：按剩余时间升序；已到期的视为最远（排在有剩余时间之后）。
+     * 插入后顺序交给用户拖动维护（数组顺序即显示顺序）。
+     */
+    function countdownInsertIndex(list, targetAt) {
+      var ms = targetAtMs(targetAt);
+      if (ms === null) return list.length;
+      var nowMs = Date.now();
+      if (ms <= nowMs) return list.length;
+      for (var i = 0; i < list.length; i += 1) {
+        var other = targetAtMs(list[i].targetAt);
+        if (other !== null && other > nowMs && other > ms) return i;
+      }
+      return list.length;
+    }
+
+    function normalizeCountdownCategory(draft, categoryId) {
+      var exists = (draft.categories || []).some(function (c) { return c.id === categoryId; });
+      if (exists) return categoryId;
+      var fallback = draft.settings && draft.settings.defaultCategoryId;
+      if (fallback && (draft.categories || []).some(function (c) { return c.id === fallback; })) return fallback;
+      var first = (draft.categories || [])[0];
+      return first ? first.id : 'urgent';
+    }
+
+    /** 读取倒计时（数组顺序 = 显示顺序） */
+    function getCountdowns() {
+      var list = Array.isArray(state.countdowns) ? state.countdowns : [];
+      return list.map(function (e) {
+        return {
+          id: e.id,
+          title: e.title,
+          categoryId: e.categoryId,
+          targetAt: e.targetAt,
+          note: e.note || '',
+          createdAt: e.createdAt,
+          updatedAt: e.updatedAt
+        };
+      });
+    }
+
+    /** 追加一条倒计时，返回 id；目标时刻非法抛错。 */
+    function addCountdown(input) {
+      input = input || {};
+      if (!schema.isCountdownTargetAt(input.targetAt)) {
+        throw StoreError('E_INVALID_DATETIME', '目标时刻不合法：' + input.targetAt);
+      }
+      var stamp = now();
+      var entry = {
+        id: schema.isNonEmptyString(input.id) ? input.id : idgen.genericId('cd'),
+        title: String(input.title === null || input.title === undefined ? '' : input.title)
+          .trim().slice(0, schema.TITLE_MAX),
+        categoryId: input.categoryId,
+        targetAt: input.targetAt,
+        note: typeof input.note === 'string' ? input.note.slice(0, schema.NOTE_MAX) : '',
+        createdAt: stamp,
+        updatedAt: stamp
+      };
+      mutate(function (draft) {
+        var list = Array.isArray(draft.countdowns) ? draft.countdowns : [];
+        entry.categoryId = normalizeCountdownCategory(draft, entry.categoryId);
+        list.splice(countdownInsertIndex(list, entry.targetAt), 0, entry);
+        draft.countdowns = list;
+      });
+      return entry.id;
+    }
+
+    function updateCountdown(id, patch) {
+      patch = patch || {};
+      if (patch.targetAt !== undefined && !schema.isCountdownTargetAt(patch.targetAt)) {
+        throw StoreError('E_INVALID_DATETIME', '目标时刻不合法：' + patch.targetAt);
+      }
+      mutate(function (draft) {
+        var list = Array.isArray(draft.countdowns) ? draft.countdowns : [];
+        var target = null;
+        for (var i = 0; i < list.length; i += 1) {
+          if (list[i].id === id) { target = list[i]; break; }
+        }
+        if (!target) throw StoreError('E_NOT_FOUND', '倒计时不存在：' + id);
+        Object.keys(patch).forEach(function (k) {
+          if (k === 'id' || k === 'createdAt' || k === 'updatedAt') return;
+          target[k] = patch[k];
+        });
+        target.categoryId = normalizeCountdownCategory(draft, target.categoryId);
+        target.updatedAt = now();
+      });
+      return true;
+    }
+
+    function removeCountdown(id) {
+      mutate(function (draft) {
+        var list = Array.isArray(draft.countdowns) ? draft.countdowns : [];
+        var next = list.filter(function (e) { return e.id !== id; });
+        if (next.length === list.length) throw StoreError('E_NOT_FOUND', '倒计时不存在：' + id);
+        draft.countdowns = next;
+      });
+      return true;
+    }
+
+    /** 拖动排序：orderedIds 为期望顺序；未列出的条目按原顺序追加在末尾。 */
+    function reorderCountdowns(orderedIds) {
+      mutate(function (draft) {
+        var list = Array.isArray(draft.countdowns) ? draft.countdowns : [];
+        var byId = {};
+        list.forEach(function (e) { byId[e.id] = e; });
+        var next = [];
+        (Array.isArray(orderedIds) ? orderedIds : []).forEach(function (cid) {
+          var entry = byId[cid];
+          if (entry && next.indexOf(entry) < 0) next.push(entry);
+        });
+        list.forEach(function (e) { if (next.indexOf(e) < 0) next.push(e); });
+        draft.countdowns = next;
+      });
+      return true;
+    }
+
     // ---------------- 设置 ----------------
 
     function updateSettings(patch) {
@@ -1823,6 +1949,12 @@
       updateMonthPlanItem: updateMonthPlanItem,
       toggleMonthPlanItemDone: toggleMonthPlanItemDone,
       removeMonthPlanItem: removeMonthPlanItem,
+      // 倒计时（五十一轮）
+      getCountdowns: getCountdowns,
+      addCountdown: addCountdown,
+      updateCountdown: updateCountdown,
+      removeCountdown: removeCountdown,
+      reorderCountdowns: reorderCountdowns,
       // 设置
       updateSettings: updateSettings,
       // 数据

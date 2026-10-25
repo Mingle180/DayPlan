@@ -603,9 +603,16 @@
    * 生成重复规则的中文说明（F-07）。
    * 迭代 3：`meta.origin === "weekPlan"` 时前缀 `周计划 · `（ADR-11：仅文案差异）；
    * 不传 `meta` 时与迭代 2 的输出完全一致（向后兼容）。
+   *
+   * 2026-10-25 五十一轮反馈：周计划 / 月计划是按天同步到日视图的整段计划，
+   * 每条发生上再写一遍「每天（… 起）（至 …）」纯属噪音 —— 用户口径
+   * 「仅显示『周计划』『月计划』即可」。计划类型本身就是这条发生的重复说明，
+   * 完整规则仍在计划表单 / 月计划面板里可见，故这里直接短路。
    */
   function repeatLabel(repeat, meta) {
     if (!repeat) return '';
+    if (meta && meta.origin === 'weekPlan') return '周计划';
+    if (meta && meta.origin === 'monthPlan') return '月计划';
     var head = '';
     if (repeat.type === 'daily') {
       var iv = Math.max(1, Math.floor(repeat.interval || 1));
@@ -631,8 +638,6 @@
       tail += '（至 ' + lastDay + '）';
     }
     var label = head + tail;
-    if (meta && meta.origin === 'weekPlan') label = '周计划 · ' + label;
-    else if (meta && meta.origin === 'monthPlan') label = '月计划 · ' + label;
     // F-47.6：开启该规则时在文案末尾如实标注；不含该键（或非 true）时输出逐字节不变。
     // 未注入 resolver 也照样标注 —— 文案描述的是规则本身，不是本次运行是否生效。
     // 三十四轮：节假日 + 周末同时开启时合并为一条，避免两个括号叠在一起。

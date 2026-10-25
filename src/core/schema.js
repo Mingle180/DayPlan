@@ -39,6 +39,13 @@
   var MONTH_PLAN_TEXT_MAX = 80;
   var MONTH_PLAN_MAX = 50;         /* 单月条目上限（防御异常数据撑爆面板） */
 
+  /* 五十一轮：倒计时（全局截止时刻清单）
+     · 与 items / notes 并列，**不产生事项**；数组顺序即显示顺序（拖动排序 = 数组重排）。
+     · targetAt 用本地墙钟 "YYYY-MM-DDTHH:mm"（分钟精度）：
+       用户设的是「那天几点」，不能因为换时区/夏令时把时刻挪走。 */
+  var COUNTDOWN_AT_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;
+  var COUNTDOWN_MAX = 200;         /* 条目上限（防御异常数据撑爆栏） */
+
   /** 迭代 4（DM-18）：紧急特殊类别 id（冻结接口） */
   var URGENT_CATEGORY_ID = 'urgent';
   /** DM-18.1：紧急类别的固定 order（严格小于所有普通类别） */
@@ -146,6 +153,18 @@
     if (!dt.isValidDate(iso)) return false;
     if (typeof dt.isMonday === 'function') return !!dt.isMonday(iso);
     return dt.startOfWeek(iso) === iso;
+  }
+
+  /**
+   * 五十一轮：倒计时目标时刻是否合法。
+   * 只接受本地墙钟 "YYYY-MM-DDTHH:mm"（秒/时区不参与，避免「几点」被时区挪走）。
+   */
+  function isCountdownTargetAt(value) {
+    if (typeof value !== 'string') return false;
+    var m = COUNTDOWN_AT_RE.exec(value);
+    if (!m) return false;
+    if (!dt.isValidDate(m[1] + '-' + m[2] + '-' + m[3])) return false;
+    return dt.isValidTime(m[4] + ':' + m[5]);
   }
 
   /** DM-3 类别次序比较：order 升序 → createdAt 升序 → id 字典序 */
@@ -523,6 +542,9 @@
     // 2026-10-20 六轮：本月计划（存在时校验；旧数据没有该字段同样合法）
     validateMonthPlans(doc.monthPlans, '$.monthPlans').forEach(function (e) { errors.push(e); });
 
+    // 五十一轮：倒计时（存在时校验；旧数据没有该字段同样合法）
+    validateCountdowns(doc.countdowns, '$.countdowns', catIds).forEach(function (e) { errors.push(e); });
+
     return { ok: errors.length === 0, errors: errors };
   }
 
@@ -762,6 +784,10 @@
     out.notes = notes;
     out.weekNotes = weekNotes;
     out.monthPlans = sanitizeMonthPlans(doc.monthPlans, warnings);
+    out.countdowns = sanitizeCountdowns(doc.countdowns, {
+      categoryIds: categoryIds,
+      fallbackCategoryId: fallbackCategoryId
+    }, warnings);
     out.settings = sanitizeSettings(doc.settings);
     /* 四十八轮：默认类别可能已被用户删除 —— 归一到一个仍然存在的类别（优先紧急）。 */
     if (!categoryIds[out.settings.defaultCategoryId]) {
@@ -914,6 +940,118 @@
     return errors;
   }
 
+  /** 五十一轮：单条倒计时校验 */
+  function validateCountdown(cd, path) {
+    var errors = [];
+    if (!isPlainObject(cd)) return [err(path, '必须是对象')];
+    if (!isNonEmptyString(cd.id)) errors.push(err(path + '.id', 'id 不能为空'));
+    if (!isNonEmptyString(cd.title)) {
+      errors.push(err(path + '.title', '标题不能为空'));
+    } else if (String(cd.title).trim().length > TITLE_MAX) {
+      errors.push(err(path + '.title', '标题不能超过 ' + TITLE_MAX + ' 字'));
+    }
+    if (!isNonEmptyString(cd.categoryId)) errors.push(err(path + '.categoryId', 'categoryId 不能为空'));
+    if (!isCountdownTargetAt(cd.targetAt)) {
+      errors.push(err(path + '.targetAt', '目标时刻必须是 YYYY-MM-DDTHH:mm'));
+    }
+    if (cd.note !== undefined && cd.note !== null) {
+      if (typeof cd.note !== 'string') errors.push(err(path + '.note', '备注必须是字符串'));
+      else if (cd.note.length > NOTE_MAX) errors.push(err(path + '.note', '备注不能超过 ' + NOTE_MAX + ' 字'));
+    }
+    ['createdAt', 'updatedAt'].forEach(function (k) {
+      if (cd[k] !== undefined && cd[k] !== null && typeof cd[k] !== 'string') {
+        errors.push(err(path + '.' + k, k + ' 必须是字符串'));
+      }
+    });
+    return errors;
+  }
+
+  /**
+   * 五十一轮：倒计时数组校验（缺失合法 —— 旧数据没有该字段）。
+   * 类别引用在这里交叉校验（与 items 同口径）。
+   */
+  function validateCountdowns(src, path, categoryIds) {
+    var errors = [];
+    if (src === undefined || src === null) return errors;
+    if (!Array.isArray(src)) return [err(path, '必须是数组')];
+    if (src.length > COUNTDOWN_MAX) errors.push(err(path, '最多 ' + COUNTDOWN_MAX + ' 条'));
+    var seen = {};
+    src.forEach(function (cd, i) {
+      var p = path + '[' + i + ']';
+      validateCountdown(cd, p).forEach(function (e) { errors.push(e); });
+      if (!isPlainObject(cd)) return;
+      if (isNonEmptyString(cd.id)) {
+        if (seen[cd.id]) errors.push(err(p + '.id', 'id 重复：' + cd.id));
+        seen[cd.id] = true;
+      }
+      if (isNonEmptyString(cd.categoryId) && categoryIds && !categoryIds[cd.categoryId]) {
+        errors.push(err(p + '.categoryId', '引用了不存在的类别 ' + cd.categoryId));
+      }
+    });
+    return errors;
+  }
+
+  /**
+   * 五十一轮：倒计时归一。
+   * 丢弃：非对象 / 缺 id / 缺标题 / 目标时刻非法 / id 重复 / 超过上限（均告警）。
+   * 类别不存在时回退到文档默认类别；数组顺序保持原样（= 显示顺序）。
+   */
+  function sanitizeCountdowns(src, ctx, warnings) {
+    var out = [];
+    if (src === undefined || src === null) return out;
+    if (!Array.isArray(src)) {
+      if (warnings) warnings.push(err('$.countdowns', '必须是数组，已重置为空'));
+      return out;
+    }
+    var known = (ctx && ctx.categoryIds) || {};
+    var fallback = (ctx && ctx.fallbackCategoryId) || URGENT_CATEGORY_ID;
+    var seen = {};
+    var stamp = new Date().toISOString();
+    for (var i = 0; i < src.length; i += 1) {
+      var path = '$.countdowns[' + i + ']';
+      if (out.length >= COUNTDOWN_MAX) {
+        if (warnings) warnings.push(err('$.countdowns', '超过上限 ' + COUNTDOWN_MAX + ' 条，其余已丢弃'));
+        break;
+      }
+      var cd = src[i];
+      if (!isPlainObject(cd)) {
+        if (warnings) warnings.push(err(path, '必须是对象，已丢弃'));
+        continue;
+      }
+      if (!isNonEmptyString(cd.id)) {
+        if (warnings) warnings.push(err(path + '.id', 'id 为空，已丢弃'));
+        continue;
+      }
+      if (seen[cd.id]) {
+        if (warnings) warnings.push(err(path + '.id', 'id 重复，已丢弃：' + cd.id));
+        continue;
+      }
+      if (!isCountdownTargetAt(cd.targetAt)) {
+        if (warnings) warnings.push(err(path + '.targetAt', '目标时刻不合法，已丢弃'));
+        continue;
+      }
+      var title = isNonEmptyString(cd.title) ? String(cd.title).trim().slice(0, TITLE_MAX) : '';
+      if (!title) {
+        if (warnings) warnings.push(err(path + '.title', '标题为空，已丢弃'));
+        continue;
+      }
+      var entry = {};
+      Object.keys(cd).forEach(function (k) { entry[k] = cd[k]; }); // 未知字段保留
+      entry.id = cd.id;
+      entry.title = title;
+      if (!isNonEmptyString(cd.categoryId) || !known[cd.categoryId]) {
+        entry.categoryId = fallback;
+      }
+      entry.targetAt = cd.targetAt;
+      entry.note = typeof cd.note === 'string' ? cd.note.slice(0, NOTE_MAX) : '';
+      if (!isNonEmptyString(entry.createdAt)) entry.createdAt = stamp;
+      if (!isNonEmptyString(entry.updatedAt)) entry.updatedAt = entry.createdAt;
+      seen[entry.id] = true;
+      out.push(entry);
+    }
+    return out;
+  }
+
   /** DM-10：设置校验；缺失键合法（由 sanitizeSettings 补默认），存在则必须合法 */
   function validateSettings(settings, path) {
     path = path || 'settings';
@@ -956,6 +1094,7 @@
       notes: {},
       weekNotes: {},
       monthPlans: {},
+      countdowns: [],
       settings: sanitizeSettings(null)
     };
   }
@@ -1240,11 +1379,26 @@
       });
     });
 
+    /* 五十一轮：倒计时按 id 合并 —— 同 id 取较新；本机次序为权威，导入方新条目追加到末尾 */
+    var countdowns = (out.countdowns || []).slice();
+    var cdIndex = {};
+    countdowns.forEach(function (e, i) { cdIndex[e.id] = i; });
+    (incomingClean.countdowns || []).forEach(function (e) {
+      var idx = cdIndex[e.id];
+      if (idx === undefined) {
+        cdIndex[e.id] = countdowns.length;
+        countdowns.push(e);
+        return;
+      }
+      if (newer(e, countdowns[idx])) countdowns[idx] = e;
+    });
+
     out.categories = categories;
     out.items = items;
     out.notes = notes;
     out.weekNotes = weekNotes;
     out.monthPlans = monthPlans;
+    out.countdowns = countdowns;
     out.meta.updatedAt = new Date().toISOString();
     var v = validateDocument(out);
     return { doc: out, ok: v.ok, errors: v.errors, warnings: warnings };
@@ -1286,6 +1440,7 @@
     CATEGORY_NAME_MAX: CATEGORY_NAME_MAX,
     MONTH_PLAN_TEXT_MAX: MONTH_PLAN_TEXT_MAX,
     MONTH_PLAN_MAX: MONTH_PLAN_MAX,
+    COUNTDOWN_MAX: COUNTDOWN_MAX,
     NAMED_MONTHS: NAMED_MONTHS,
     COLOR_RE: COLOR_RE,
     URGENT_CATEGORY_ID: URGENT_CATEGORY_ID,
@@ -1301,6 +1456,7 @@
     isNonEmptyString: isNonEmptyString,
     isMondayISO: isMondayISO,
     isMonthKey: isMonthKey,
+    isCountdownTargetAt: isCountdownTargetAt,
     isUrgentCategory: isUrgentCategory,
     compareCategoryOrder: compareCategoryOrder,
     compactCategories: compactCategories,
@@ -1318,6 +1474,9 @@
     sanitizeDocument: sanitizeDocument,
     sanitizeMonthPlans: sanitizeMonthPlans,
     validateMonthPlans: validateMonthPlans,
+    validateCountdown: validateCountdown,
+    validateCountdowns: validateCountdowns,
+    sanitizeCountdowns: sanitizeCountdowns,
     sanitizeSettings: sanitizeSettings,
     mergeSettings: mergeSettings,
     migrateDocument: migrateDocument,

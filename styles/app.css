@@ -249,6 +249,9 @@ html[data-theme='dark'] .brand-logo { filter: invert(1); }
 }
 .btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 .btn[disabled] { opacity: .4; cursor: not-allowed; }
+/* .btn 自带 display:inline-flex，会盖掉 UA 的 [hidden]{display:none} ——
+   倒计时空态曾因此同时露出框内 + 与右上角 +。补回 [hidden] 语义。 */
+.btn[hidden] { display: none; }
 
 .btn-primary {
   background: var(--primary);
@@ -364,6 +367,17 @@ html[data-theme='dark'] .brand-logo { filter: invert(1); }
 }
 .view-main { min-width: 0; }
 
+/* ---------- 五十一轮：下方一行「未排时段 | 事项完成台」 ---------- *
+ * 完成台原先占着右栏顶部；现在右栏顶部换成倒计时，完成台挪到未排事项右侧空出的位置。
+ * 右侧列宽与 .view-body 的右栏取同一组 clamp 值 —— 两块卡片右边缘对齐。 */
+.lower-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(240px, 27%, 380px);
+  gap: 20px;
+  align-items: stretch;
+}
+.lower-row > .untimed-section { margin-bottom: 0; min-width: 0; }
+
 .side-rail {
   position: sticky;
   /* 顶栏是 sticky（约 56px），留 12px 呼吸位，避免压在顶栏下面 */
@@ -402,21 +416,31 @@ html[data-theme='dark'] .side-rail { background: var(--surface-2); }
   min-height: 96px;
 }
 
-/* 事项完成台（批次 5：拖入 + 三种计时） */
+/* 事项完成台（批次 5：拖入 + 三种计时；五十一轮挪到未排事项右侧，独立白底卡片） */
 .finish-dock {
   display: flex;
   flex-direction: column;
   flex: 0 0 auto;
+  min-width: 0;
+  /* 最小高度沿用原先右栏里的 148px；左边未排事项更高时由 grid 拉伸与之对齐 */
   min-height: 148px;
-  padding-bottom: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  /* 高度由左边未排事项决定：台里条数更多时在内部滚动，不把这一行继续撑高 */
+  overflow: hidden;
 }
+html[data-theme='dark'] .lower-row > .finish-dock { background: var(--surface-2); }
 /* 标题行：音效铃铛贴到右上角（不跟标题挤在一起） */
 .finish-dock .section-head { align-items: center; }
 .finish-dock-tools { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
 
 .finish-dock-body {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   min-height: 96px;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -433,6 +457,134 @@ html[data-theme='dark'] .side-rail { background: var(--surface-2); }
   border-color: var(--primary);
   background: var(--primary-weak);
 }
+
+/* ---------- 五十一轮：倒计时 ---------- *
+ * 外观参照完成台，但内部没有灰色底板；没有条目时只有一枚横向撑满的 +。
+ * 右栏里最多占到 2/3（记录区不少于 1/3），再长就在列表内部滚动；
+ * 手机端自然撑高、显示全部，且不压缩记录区。 */
+.countdown-section {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-height: 0;
+  /* 扣掉与记录区之间的 14px gap 后正好占 2/3 —— 记录区:倒计时 ≥ 1:2 时才开始内部滚动 */
+  max-height: calc((100% - 14px) * 2 / 3);
+}
+.countdown-section .section-head { align-items: center; }
+
+.countdown-list {
+  list-style: none;
+  /* 滚动容器按 padding 盒裁子元素的投影：只留 2px 时卡片四周的阴影被切成硬边，
+     白底栏里看起来像「白框」压住了阴影。现留 10/12px 的投影通道
+     （--shadow-block 实际外扩横向 5px、纵向 8px），再用负外边距抵回去，
+     卡片的位置与宽度都与原来一致。 */
+  margin: -8px -10px;
+  padding: 10px 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+  /* 只纵向滚动：横向跟随区域宽度，不出现横向滚动条 */
+  overflow-x: hidden;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 空台：横向撑满、居中一个加号的白色块（灰色阴影） */
+.cd-empty-add {
+  width: 100%;
+  min-height: 96px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font: inherit;
+  font-size: 24px;
+  line-height: 1;
+  color: var(--text-3);
+  background: var(--surface);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-block);
+  cursor: pointer;
+  /* 悬停只提阴影、不做横向放大 —— 放大后的卡片会撑出可滚动溢出，在列表里冒出一条横向滚动条 */
+  transition: box-shadow var(--ease);
+}
+.cd-empty-add[hidden] { display: none; }
+@media (hover: hover) {
+  .cd-empty-add:hover { box-shadow: var(--shadow); }
+}
+.cd-empty-add:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+/* 条目块：与排定事项块同款的白底 + 阴影卡片 */
+.cd-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px 10px;
+  background: var(--surface);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-block);
+  cursor: pointer;
+  touch-action: pan-y;
+  /* 手机长按拖动：不要选中文字、不要弹系统菜单 */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  transition: box-shadow var(--ease);
+}
+@media (hover: hover) {
+  .cd-item:hover { box-shadow: var(--shadow); z-index: 3; }
+}
+.cd-item:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.cd-item.is-dragging { opacity: .45; }
+/* 拖动中的跟手虚拟块：克隆的白卡压在页面最上层，位置由 translate3d 跟手，
+   不接收指针事件（否则会挡住指针下的落点判定）。 */
+.cd-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  margin: 0;
+  pointer-events: none;
+  z-index: 9999;
+  opacity: .92;
+  box-shadow: var(--shadow);
+  will-change: transform;
+}
+.cd-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.cd-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--cat, var(--text-3)); }
+.cd-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 与完成台计时器同字号 */
+.cd-clock {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 10px;
+  font-size: clamp(30px, 7.6vw, 34px);
+  font-weight: 600;
+  letter-spacing: .5px;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+/* 数字 + 单位成组；单位是数字右下角的灰色小字（与数字同一基线），
+   数字按 2ch 定宽，位数变化时单位位置不跳动。两个组之间由 .cd-clock 的 gap 隔开。 */
+.cd-value { display: inline-flex; align-items: baseline; gap: 2px; }
+.cd-num { min-width: 2ch; text-align: right; }
+.cd-unit { font-size: 12px; font-weight: 500; letter-spacing: 0; color: var(--text-3); }
+.cd-expired { align-self: center; font-size: 12px; font-weight: 500; color: var(--text-3); }
+.cd-expired[hidden] { display: none; }
+.cd-item.is-expired .cd-title,
+.cd-item.is-expired .cd-num { color: var(--text-3); }
 
 /* ---------- 完成台条目 ---------- */
 .dock-item {
@@ -568,6 +720,11 @@ html[data-theme='dark'] .side-rail { background: var(--surface-2); }
   .view-body { grid-template-columns: minmax(0, 1fr); }
   .side-rail { position: static; height: auto; min-height: 0; }
   .side-rail .notes-section .notes-input { min-height: 120px; }
+  /* 五十一轮：完成台折到未排事项下方 → 倒计时 → 今日记录；倒计时可一直撑高、显示全部 */
+  .lower-row { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .countdown-section { max-height: none; }
+  /* 不再滚动就不会裁投影，投影通道收回去，保持原来的上下间距 */
+  .countdown-list { overflow: visible; margin: 0; padding: 2px; }
 }
 
 /* ------------------------------------------------------------------ *
@@ -1538,6 +1695,16 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
 /* 类别设置列表（规范 12 / LA-5：行高 ≥44px）
    2026-10-21（用户反馈）：行改成与未排事项一致的白块 + 静止阴影 + 悬停抬升；整行拖动排序。 */
 .cat-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+/* 五十一轮（用户口径）：已有类别改左右两列。设置弹窗上限 680px，两列每格约 316px；
+   手机档（≤640 底部抽屉）仍单列，故以 720px 视口为界。 */
+@media (min-width: 720px) {
+  .cat-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+  }
+  .cat-list > .cat-item { min-width: 0; }
+}
 .cat-item {
   position: relative;
   display: flex;
@@ -1571,6 +1738,23 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
 }
 .cat-item.is-drop-before::after { top: -5px; }
 .cat-item.is-drop-after::after { bottom: -5px; }
+/* 两列档的落点提示改成格的左/右缘竖线（is-drop-x 由 settings.js 按实际排版挂上） */
+.cat-item.is-drop-x.is-drop-before::after {
+  left: -6px;
+  right: auto;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  height: auto;
+}
+.cat-item.is-drop-x.is-drop-after::after {
+  left: auto;
+  right: -6px;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  height: auto;
+}
 .cat-swatch { width: 14px; height: 14px; border-radius: 5px; flex: none; border: 1px solid rgba(0,0,0,.1); }
 /* 四十八轮（用户口径）：「紧急」色块不再画虚线「毛边」，与其他类别同一实线细边；
    仍保留不可点的语义（span + not-allowed）。 */
@@ -1630,6 +1814,7 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
   }
   .panel-day { padding: 14px; border-radius: var(--radius); }
   .view-body { gap: 12px; }
+  .lower-row { gap: 12px; }
 
   /* 日 / 周头部：标题一行、导航 + 新建换到第二行，控件统一 44px 热区 */
   .day-head, .week-head { flex-wrap: wrap; row-gap: 10px; }

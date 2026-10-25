@@ -90,6 +90,10 @@
       untimedCount: document.getElementById('untimed-count'),
       untimedList: document.getElementById('untimed-list'),
       untimedEmpty: document.getElementById('untimed-empty'),
+      countdownList: document.getElementById('countdown-list'),
+      countdownEmpty: document.getElementById('btn-countdown-empty'),
+      countdownAdd: document.getElementById('btn-new-countdown'),
+      countdownCount: document.getElementById('countdown-count'),
       notesInput: document.getElementById('notes-input'),
       notesStatus: document.getElementById('notes-status')
     };
@@ -114,6 +118,8 @@
     var dragSuppressUntil = 0;
     /** 完成台实例（finishdock 模块缺失时为 null → 右侧栏保持空台） */
     var dock = null;
+    /** 五十一轮：倒计时实例（模块缺失时为 null → 右栏只留记录区） */
+    var countdown = null;
 
     /* US-24 / DM-25：展开卡临时脱离裁切上下文（模块缺失或无 rect 时降级为原位展开） */
     var pinner = (Overlay && typeof Overlay.createExpandPinner === 'function')
@@ -1718,12 +1724,34 @@
       });
     }
 
+    /* ---------------- 五十一轮：倒计时 ---------------- */
+
+    function setupCountdown() {
+      var CD = root.DayPlan.countdown;
+      if (!CD || typeof CD.create !== 'function' || !els.countdownList) return;
+      countdown = CD.create({
+        list: els.countdownList,
+        emptyBtn: els.countdownEmpty,
+        addBtn: els.countdownAdd,
+        countEl: els.countdownCount,
+        store: store,
+        getCat: function (id) { return categoryMap()[id]; },
+        onChange: function () { afterWrite(); }
+      });
+      countdown.render();
+    }
+
+    function renderCountdowns() {
+      if (countdown) countdown.render();
+    }
+
     /* ---------------- 渲染总入口 ---------------- */
 
     function renderAll() {
       renderHead();
       renderTimeline();
       renderUntimed();
+      renderCountdowns();
       renderNotes();
     }
 
@@ -1736,6 +1764,7 @@
     /* 迭代 10 批次 5（条9）：完成台必须在首次渲染前就位（visible() 依赖它判断「已空出」） */
     setupFinishDock();
     setupDrag();
+    setupCountdown();
 
     nowTimer = setInterval(updateNowLine, 60000);
     if (nowTimer && typeof nowTimer.unref === 'function') nowTimer.unref();
@@ -1753,7 +1782,9 @@
       openEdit: openEdit,
       renderTimeline: renderTimeline,
       /** 事项完成台实例（冒烟断言与后续扩展用；模块缺失时为 null） */
-      finishDock: function () { return dock; }
+      finishDock: function () { return dock; },
+      /** 倒计时实例（五十一轮，冒烟断言用；模块缺失时为 null） */
+      countdown: function () { return countdown; }
     };
   }
 

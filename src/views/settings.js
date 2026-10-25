@@ -40,15 +40,41 @@
 
       function clearDropMarks() {
         Array.prototype.slice.call(list.children).forEach(function (n) {
-          if (n.classList) n.classList.remove('is-drop-before', 'is-drop-after');
+          if (n.classList) n.classList.remove('is-drop-before', 'is-drop-after', 'is-drop-x');
         });
+      }
+
+      /* 两列布局（五十一轮反馈）：与下一格同排即视为两列，落点改按左右半判定 */
+      function isTwoColumn(node) {
+        var parent = node && node.parentNode;
+        if (!parent || !parent.children) return false;
+        var kids = Array.prototype.slice.call(parent.children);
+        var next = kids[kids.indexOf(node) + 1];
+        if (!next || typeof node.getBoundingClientRect !== 'function'
+            || typeof next.getBoundingClientRect !== 'function') return false;
+        var a = node.getBoundingClientRect();
+        var b = next.getBoundingClientRect();
+        return Math.abs(a.top - b.top) < 2 && b.left > a.left + 1;
       }
 
       function dropSide(node, ev) {
         if (!node || typeof node.getBoundingClientRect !== 'function') return false;
         var r = node.getBoundingClientRect();
+        if (isTwoColumn(node)) {
+          var x = (ev && typeof ev.clientX === 'number') ? ev.clientX : 0;
+          return x > r.left + r.width / 2;
+        }
         var y = (ev && typeof ev.clientY === 'number') ? ev.clientY : 0;
         return y > r.top + r.height / 2;
+      }
+
+      /* 落点提示：单列画格的上下横线，两列画格的左右竖线 */
+      function markDrop(node, ev) {
+        var after = dropSide(node, ev);
+        clearDropMarks();
+        node.classList.add(after ? 'is-drop-after' : 'is-drop-before');
+        if (isTwoColumn(node)) node.classList.add('is-drop-x');
+        return after;
       }
 
       /* 拖动落点 → 非紧急子序列的新次序（紧急恒首位，不参与） */
@@ -128,9 +154,7 @@
             if (!draggingId || draggingId === cat.id) return;
             e.preventDefault();
             try { if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'; } catch (err) { /* 忽略 */ }
-            var after = dropSide(li, e);
-            clearDropMarks();
-            li.classList.add(after ? 'is-drop-after' : 'is-drop-before');
+            markDrop(li, e);
           });
           li.addEventListener('drop', function (e) {
             if (!draggingId || draggingId === cat.id) return;

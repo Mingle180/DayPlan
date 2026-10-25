@@ -82,27 +82,44 @@
               </div>
             </section>
 
-            <!-- 无时段事项（时间表下方） -->
-            <section class="untimed-section" aria-label="未排时段事项">
-              <div class="section-head">
-                <h2 id="untimed-title">未排时段</h2>
-                <span id="untimed-count" class="muted"></span>
-              </div>
-              <ul id="untimed-list" class="untimed-list"></ul>
-              <p id="untimed-empty" class="empty-hint" hidden></p>
-            </section>
+            <!-- 五十一轮：下方一行 —— 左「未排时段」收窄，右「事项完成台」挪进空出的位置 -->
+            <div class="lower-row">
+              <!-- 无时段事项（时间表下方） -->
+              <section class="untimed-section" aria-label="未排时段事项">
+                <div class="section-head">
+                  <h2 id="untimed-title">未排时段</h2>
+                  <span id="untimed-count" class="muted"></span>
+                </div>
+                <ul id="untimed-list" class="untimed-list"></ul>
+                <p id="untimed-empty" class="empty-hint" hidden></p>
+              </section>
+
+              <section class="finish-dock" id="day-finish-dock" aria-label="事项完成台">
+                <div class="section-head">
+                  <h2>事项完成台</h2>
+                  <span class="finish-dock-tools">
+                    <span class="muted" id="finish-dock-count"></span>
+                  </span>
+                </div>
+                <div class="finish-dock-body" id="finish-dock-body"></div>
+              </section>
+            </div>
           </div>
 
-          <!-- 右侧栏：上「事项完成台」（批次 5 接入交互）+ 下「今日记录」 -->
-          <aside class="side-rail" id="day-rail" aria-label="今日记录与完成台">
-            <section class="finish-dock" id="day-finish-dock" aria-label="事项完成台">
+          <!-- 右侧栏：上「倒计时」（五十一轮）+ 下「今日记录」 -->
+          <aside class="side-rail" id="day-rail" aria-label="倒计时与今日记录">
+            <section class="countdown-section" id="countdown-section" aria-label="倒计时">
               <div class="section-head">
-                <h2>事项完成台</h2>
+                <h2>倒计时</h2>
                 <span class="finish-dock-tools">
-                  <span class="muted" id="finish-dock-count"></span>
+                  <span class="muted" id="countdown-count"></span>
+                  <button id="btn-new-countdown" class="btn btn-ghost btn-icon" type="button"
+                          title="新建倒计时" aria-label="新建倒计时" hidden>+</button>
                 </span>
               </div>
-              <div class="finish-dock-body" id="finish-dock-body"></div>
+              <ul id="countdown-list" class="countdown-list"></ul>
+              <button id="btn-countdown-empty" class="cd-empty-add" type="button"
+                      aria-label="新建倒计时">+</button>
             </section>
 
             <section class="notes-section" aria-label="今日记录">
@@ -147,6 +164,7 @@
 <script src="src/ui/itemcard.js"></script>
 <script src="src/ui/finishdock.js"></script>
 <script src="src/ui/form.js"></script>
+<script src="src/ui/countdown.js"></script>
 <script src="src/views/month.js"></script>
 <script src="src/views/week.js"></script>
 <script src="src/views/day.js"></script>
