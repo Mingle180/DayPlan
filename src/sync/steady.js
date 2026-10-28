@@ -207,11 +207,20 @@
         return Promise.resolve({ ok: false, code: 'E_DISPOSED', message: '已停止' });
       }
       if (!isSyncing()) {
+        var pausedState = engine.getState();
+        /* D17（2026-10-28 用户反馈）：paused-error / awaiting-choice 下，横幅与面板
+           已经在解释「为什么停」（比如另一个标签页改了数据）。切回页面触发的
+           pullNow 再记一条「拉取失败：同步未启用（E_BAD_STATE）」，只会把更有
+           信息量的最近同步状态冲掉，用户看到的是一句看不懂的错误。这两类状态
+           保持安静；其余状态（checking 等）仍如实上报（ST-06）。 */
+        if (pausedState === 'paused-error' || pausedState === 'awaiting-choice') {
+          return Promise.resolve({ ok: false, code: 'E_BAD_STATE', message: '同步未启用：' + pausedState, silent: true });
+        }
         // 拦下也要上报：否则「切回页面什么都没发生」时，用户无法区分
         // 「云端没更新」和「当前根本没在同步」。
         var blocked = {
           kind: 'pull', ok: false, code: 'E_BAD_STATE',
-          message: '同步未启用：' + engine.getState(), at: now()
+          message: '同步未启用：' + pausedState, at: now()
         };
         report(blocked);
         return Promise.resolve({ ok: false, code: 'E_BAD_STATE', message: blocked.message });

@@ -35,6 +35,22 @@
     return document.getElementById('modal-root') || document.body;
   }
 
+  /* 2026-10-28（用户反馈）：弹窗（新建事项/设置等）打开时，滑动会带动下层被
+     遮住的页面一起滚（触摸滚动链）。弹窗在栈上就给根元素挂 has-modal 锁住
+     文档滚动；弹窗内部的滚动不受影响，全部关闭后自动解锁。 */
+  function syncScrollLock() {
+    var locked = openStack.length > 0;
+    try {
+      if (locked) {
+        document.documentElement.classList.add('has-modal');
+        if (document.body) document.body.classList.add('has-modal');
+      } else {
+        document.documentElement.classList.remove('has-modal');
+        if (document.body) document.body.classList.remove('has-modal');
+      }
+    } catch (e) { /* 极老环境没有 classList：退化为原行为，只多一层穿透滚动 */ }
+  }
+
   /**
    * 打开一个弹窗。
    * @param {object} opts
@@ -139,6 +155,7 @@
       backdrop.remove();
       var i = openStack.indexOf(handle);
       if (i >= 0) openStack.splice(i, 1);
+      syncScrollLock();
       if (previouslyFocused && previouslyFocused.focus) {
         try { previouslyFocused.focus({ preventScroll: true }); } catch (e) { /* 元素可能已移除 */ }
       }
@@ -176,6 +193,11 @@
     backdrop.addEventListener('mousedown', function (e) {
       if (e.target === backdrop) close('backdrop');
     });
+    /* 手机上直接摸遮罩（弹窗外露的边缘）拖动时，不让触摸穿透到下层页面；
+       摸到弹窗内部（e.target 不是遮罩）则照常滚动弹窗内容。 */
+    backdrop.addEventListener('touchmove', function (e) {
+      if (e.target === backdrop && e.cancelable) e.preventDefault();
+    }, { passive: false });
     document.addEventListener('keydown', onKeydown, true);
 
     var handle = {
@@ -183,6 +205,7 @@
       close: close, setError: showError, submit: doSubmit
     };
     openStack.push(handle);
+    syncScrollLock();
 
     // 焦点：优先第一个表单控件，否则弹窗本体
     var firstField = modal.querySelector('input:not([type=hidden]),select,textarea');

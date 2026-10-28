@@ -966,6 +966,55 @@
       return syncSteady;
     }
 
+    /* ---------------- D17：启动/登录路径的自动恢复 ----------------
+       resume 判成 recovery（记录丢失）/ lossy 时，走与同步面板完全同款的自动路径
+       （备份尽力而为 → 以云端为准 → 需要时写回）。成功后引擎回到 syncing，
+       这里负责把稳态同步重新挂上。 */
+
+    function autoResumeHelpers() {
+      var dl = SettingsView && typeof SettingsView.downloadJson === 'function'
+        ? SettingsView.downloadJson : null;
+      return {
+        /* 静默备份：尽力而为，失败不阻塞自动恢复（D16 口径）。 */
+        exportBackup: function () {
+          try {
+            var payload = store.exportDocument();
+            var name = 'dayplan-同步前备份-' + D.todayISO().replace(/-/g, '') + '-'
+              + new Date().toTimeString().slice(0, 5).replace(':', '') + '.json';
+            if (dl) dl(name, payload);
+          } catch (e) { /* 备份失败不阻塞 */ }
+        },
+        downloadJson: dl,
+        /* 会话没变（登录态不变），数据刷新由引擎 onDocApplied 钩子负责。 */
+        onSessionChanged: function () { /* 无需处理 */ },
+        onDataChanged: function () { /* 无需处理 */ }
+      };
+    }
+
+    function afterAutoResume() {
+      var eng = syncWiring && typeof syncWiring.getEngine === 'function' ? syncWiring.getEngine() : null;
+      var st = eng && typeof eng.getState === 'function' ? eng.getState() : null;
+      if (st === 'syncing') {
+        attachSteady();
+        if (syncSteady) syncSteady.schedule();
+      }
+      if (syncSectionInst && typeof syncSectionInst.render === 'function') {
+        try { syncSectionInst.render(); } catch (e) { /* 面板未打开 */ }
+      }
+    }
+
+    function autoResumeRecovery() {
+      var Panel = root.DayPlan && root.DayPlan.syncPanel;
+      if (!Panel || typeof Panel.autoRecoveryRemote !== 'function' || !syncWiring) return;
+      Panel.autoRecoveryRemote(syncWiring, autoResumeHelpers(), afterAutoResume);
+    }
+
+    function autoResumeLossy() {
+      var Panel = root.DayPlan && root.DayPlan.syncPanel;
+      if (!Panel || typeof Panel.autoLossyApply !== 'function' || !syncWiring) return;
+      Panel.autoLossyApply(syncWiring, autoResumeHelpers(), afterAutoResume);
+    }
+
     /**
      * 登录 / 刷新后的四象限（契约 §1.9、§4.6）。
      *
@@ -996,19 +1045,24 @@
             ]);
           return;
         }
-        /* 记录丢失/损坏，或云端行已经不在了：这是「需要人工判断」的一类，
-           不是网络失败。不告诉用户的话，界面看起来只是「同步暂停」，
-           而改天换设备才会发现两边根本不是一份数据。 */
+        /* 记录丢失/损坏，或云端行已经不在了。D17（2026-10-28）：
+           - 本机同步记录丢失（recovery）→ 按 D16 裁定「记录丢失时默认以云端为准」
+             直接自动恢复，不再弹红色横幅等人点（弹窗路径与面板同款）；
+           - remote-missing（云端被另一台设备删掉）→ 不自动：自动重建会违背删除意图，
+             仍用横幅说明并让用户到「同步」里决定。 */
         if (r.action === 'recovery') {
-          var bubble = r.kind === 'remote-missing'
-            ? '云端已经没有这个账号的数据了（可能是在别的设备上删掉了）。本机这一份还在，'
-              + '这次没有自动上传。请到「同步」里决定是否重新上传。'
-            : '这台设备曾经同步过，但本机保存的同步记录丢失或损坏了。为了不让两边互相覆盖，'
-              + '这次没有自动同步。请到「同步」里选择保留哪一边。';
-          warn('danger', bubble, [
-            { label: '去同步设置', onClick: function () { SettingsView.openSettings(settingsOpts); } },
-            { label: '稍后再说', onClick: function () { /* 仅关闭 */ } }
-          ]);
+          if (r.kind === 'remote-missing') {
+            warn('danger',
+              '云端已经没有这个账号的数据了（可能是在别的设备上删掉了）。本机这一份还在，'
+              + '这次没有自动上传。请到「同步」里决定是否重新上传。',
+              [
+                { label: '去同步设置', onClick: function () { SettingsView.openSettings(settingsOpts); } },
+                { label: '稍后再说', onClick: function () { /* 仅关闭 */ } }
+              ]);
+            return;
+          }
+          teardownSteady();
+          autoResumeRecovery();
           return;
         }
         /* 租约被另一个标签页占着（§5.4）：这次没有上传，但同步是开着的，
@@ -1020,21 +1074,12 @@
           M.toast('另一个标签页正在同步，这次改动稍后自动重试');
           return;
         }
-        /* 有损修复（§1.8）：停在这里是**故意的**，不是故障。
-           绝不能挂稳态——一旦挂上，用户下一次编辑就会把「差一点被丢掉的」修复结果
-           推上云，而云端那份原件也就没了。 */
+        /* 有损修复（§1.8）：D17（2026-10-28）——按 D16 裁定「记录丢失时默认以云端为准」，
+           启动/登录路径判到 lossy 时同样**自动应用修复并写回**（先静默备份，尽力而为），
+           不再弹红色横幅停下。修复失败时 toast 说明，面板「继续选择」仍是兜底出口。 */
         if (r.action === 'lossy') {
           teardownSteady();
-          var pv = (r.preview && r.preview.counts) || {};
-          var n = r.preview && typeof r.preview.total === 'number' ? r.preview.total : 0;
-          warn('danger',
-            '云端这份数据里有会被丢弃或改写的条目（' + n + ' 处'
-            + (pv.monthPlans ? '，其中月计划 ' + pv.monthPlans + ' 条' : '') + '），'
-            + '这次没有自动应用，本机一个字节都没动。请到「同步」里查看预览并决定。',
-            [
-              { label: '去同步设置', onClick: function () { SettingsView.openSettings(settingsOpts); } },
-              { label: '稍后再说', onClick: function () { /* 仅关闭 */ } }
-            ]);
+          autoResumeLossy();
           return;
         }
         /* 修复结果还没写回云端：不稳态同步 = 不上传，这是对的。提示一次即可。 */

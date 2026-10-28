@@ -539,61 +539,6 @@
       });
     }
 
-    /** D16 自动恢复：本机同步记录丢失时以云端为准（静默备份尽力而为，不阻塞）。 */
-    function autoRecoveryRemote(w, onDone) {
-      var engine = w.getEngine();
-      try { if (typeof opts.exportBackup === 'function') opts.exportBackup(); } catch (eBak) { /* 自动路径不被备份失败卡住 */ }
-      Promise.resolve(engine.resolveRecovery('remote')).then(function (res) {
-        if (!res || !res.ok) {
-          M.toast('未能自动恢复：' + ((res && (res.message || res.code)) || '未知错误') + '，可点「继续选择」手动处理');
-        } else {
-          M.toast('已以云端为准恢复同步');
-        }
-        if (typeof opts.onSessionChanged === 'function') opts.onSessionChanged(true);
-        if (typeof opts.onDataChanged === 'function') opts.onDataChanged();
-        if (onDone) onDone();
-      }, function (err) {
-        M.toast('未能自动恢复：' + (err && err.message ? err.message : '未知错误'));
-        if (onDone) onDone();
-      });
-    }
-
-    /** D16 自动有损修复：应用修复后的云端数据并写回，全程不弹框。
-        备份两份（本机账号副本 + 云端原始 payload）都尽力而为；
-        下载在手机上常被拦，所以引擎按 auto 标记放行下载门槛（契约 §4.6.5 例外）。 */
-    function autoLossyApply(w, onDone) {
-      var engine = w.getEngine();
-      try { if (typeof opts.exportBackup === 'function') opts.exportBackup(); } catch (eBak) { /* 同上 */ }
-      try {
-        if (typeof opts.downloadJson === 'function' && typeof engine.getLossyPayload === 'function') {
-          opts.downloadJson('remote-raw.json', engine.getLossyPayload());
-        }
-      } catch (eRaw) { /* 下载失败不阻塞自动修复 */ }
-      Promise.resolve(engine.applyLossy({ confirmed: true, downloads: [], auto: true })).then(function (res) {
-        if (!res || !res.ok) {
-          M.toast('云端数据未能自动修复：' + ((res && (res.message || res.code)) || '未知错误') + '，两端数据都还在');
-          if (onDone) onDone();
-          return;
-        }
-        if (res.requires === 'confirm-push') {
-          /* 修复已落到本机，写回云端按同一裁定自动完成 */
-          Promise.resolve(engine.confirmLossyPush()).then(function (r2) {
-            M.toast((r2 && r2.ok) ? '云端数据已自动修复并写回' : '修复已应用，写回云端失败（可稍后重试）');
-            if (onDone) onDone();
-          }, function () {
-            M.toast('修复已应用，写回云端失败（可稍后重试）');
-            if (onDone) onDone();
-          });
-          return;
-        }
-        M.toast('云端数据已自动修复并应用');
-        if (onDone) onDone();
-      }, function (err) {
-        M.toast('云端数据未能自动修复：' + (err && err.message ? err.message : '未知错误'));
-        if (onDone) onDone();
-      });
-    }
-
     function openChoiceFor(w, chk, exportBackup, onDone) {
       var kind = chk && chk.kind;
       /* D16（2026-10-28 用户裁定「记录丢失时默认以云端为准」）：有损修复不再弹框
@@ -601,13 +546,22 @@
          程序化下载经常被拦，「先下载两份 JSON 才解锁」的门槛会把用户卡死在
          点不动的「继续应用」上；自动路径由静默备份兜底，不再依赖下载成功。 */
       if (kind === 'lossy') {
-        autoLossyApply(w, onDone);
+        autoLossyApply(w, {
+          exportBackup: opts.exportBackup,
+          downloadJson: opts.downloadJson,
+          onSessionChanged: opts.onSessionChanged,
+          onDataChanged: opts.onDataChanged
+        }, onDone);
         return;
       }
       /* D16：本机同步记录丢失（recovery）→ 默认以云端为准，自动 resolveRecovery('remote')。
          remote-missing（云端被另一台设备删掉）不自动：那会违背删除意图，仍走人工。 */
       if (kind === 'recovery' && chk.options && chk.options.remote) {
-        autoRecoveryRemote(w, onDone);
+        autoRecoveryRemote(w, {
+          exportBackup: opts.exportBackup,
+          onSessionChanged: opts.onSessionChanged,
+          onDataChanged: opts.onDataChanged
+        }, onDone);
         return;
       }
       if (kind === 'lossy-applied') {
@@ -1661,6 +1615,73 @@
   }
 
   /**
+   * D16 自动恢复：本机同步记录丢失时以云端为准（静默备份尽力而为，不阻塞）。
+   * D17：提到模块级并显式收 helpers（exportBackup / onSessionChanged / onDataChanged）
+   * ——除了面板内的自动路径，app.js 的启动/登录恢复路径（resume 后判 recovery）
+   * 也复用同一段逻辑，不再弹红色横幅把用户拦下来。
+   */
+  function autoRecoveryRemote(w, helpers, onDone) {
+    if (typeof helpers === 'function') { onDone = helpers; helpers = {}; }
+    helpers = helpers || {};
+    var engine = w.getEngine();
+    try { if (typeof helpers.exportBackup === 'function') helpers.exportBackup(); } catch (eBak) { /* 自动路径不被备份失败卡住 */ }
+    Promise.resolve(engine.resolveRecovery('remote')).then(function (res) {
+      if (!res || !res.ok) {
+        M.toast('未能自动恢复：' + ((res && (res.message || res.code)) || '未知错误') + '，可点「继续选择」手动处理');
+      } else {
+        M.toast('已以云端为准恢复同步');
+      }
+      if (typeof helpers.onSessionChanged === 'function') helpers.onSessionChanged(true);
+      if (typeof helpers.onDataChanged === 'function') helpers.onDataChanged();
+      if (onDone) onDone();
+    }, function (err) {
+      M.toast('未能自动恢复：' + (err && err.message ? err.message : '未知错误'));
+      if (onDone) onDone();
+    });
+  }
+
+  /**
+   * D16 自动有损修复：应用修复后的云端数据并写回，全程不弹框。
+   * 备份两份（本机账号副本 + 云端原始 payload）都尽力而为；
+   * 下载在手机上常被拦，所以引擎按 auto 标记放行下载门槛（契约 §4.6.5 例外）。
+   * D17：提到模块级并显式收 helpers，app.js 的启动/登录恢复路径同样复用。
+   */
+  function autoLossyApply(w, helpers, onDone) {
+    if (typeof helpers === 'function') { onDone = helpers; helpers = {}; }
+    helpers = helpers || {};
+    var engine = w.getEngine();
+    try { if (typeof helpers.exportBackup === 'function') helpers.exportBackup(); } catch (eBak) { /* 同上 */ }
+    try {
+      if (typeof helpers.downloadJson === 'function' && typeof engine.getLossyPayload === 'function') {
+        helpers.downloadJson('remote-raw.json', engine.getLossyPayload());
+      }
+    } catch (eRaw) { /* 下载失败不阻塞自动修复 */ }
+    Promise.resolve(engine.applyLossy({ confirmed: true, downloads: [], auto: true })).then(function (res) {
+      if (!res || !res.ok) {
+        M.toast('云端数据未能自动修复：' + ((res && (res.message || res.code)) || '未知错误') + '，两端数据都还在');
+        if (onDone) onDone();
+        return;
+      }
+      if (res.requires === 'confirm-push') {
+        /* 修复已落到本机，写回云端按同一裁定自动完成 */
+        Promise.resolve(engine.confirmLossyPush()).then(function (r2) {
+          M.toast((r2 && r2.ok) ? '云端数据已自动修复并写回' : '修复已应用，写回云端失败（可稍后重试）');
+          if (onDone) onDone();
+        }, function () {
+          M.toast('修复已应用，写回云端失败（可稍后重试）');
+          if (onDone) onDone();
+        });
+        return;
+      }
+      M.toast('云端数据已自动修复并应用');
+      if (onDone) onDone();
+    }, function (err) {
+      M.toast('云端数据未能自动修复：' + (err && err.message ? err.message : '未知错误'));
+      if (onDone) onDone();
+    });
+  }
+
+  /**
    * §1.8.5 + Q-32：修复结果**不自动回写云端**，这里问第二次。
    *
    * 两个出口都合法，但性质不同：
@@ -1801,6 +1822,8 @@
     openLossy: openLossy,
     openLossyPush: openLossyPush,
     openUploadConfirm: openUploadConfirm,
+    autoRecoveryRemote: autoRecoveryRemote,
+    autoLossyApply: autoLossyApply,
     STATE_TEXT: STATE_TEXT,
     CASE_TEXT: CASE_TEXT
   };

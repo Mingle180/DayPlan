@@ -1255,6 +1255,19 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
  * 弹窗
  * ------------------------------------------------------------------ */
 
+/* 2026-10-28（用户反馈）：弹窗打开时锁住下层页面滚动——手机上滑动弹窗会
+   带着被遮住的页面一起滚。弹窗在栈上时根元素挂 has-modal（见 modal.js）；
+   弹窗内部滚动不受影响，全部关闭后自动解锁。overscroll-behavior 兜住
+   弹窗内容滚到头后继续拖的滚动链（iOS 16+ / 现代浏览器）。 */
+html.has-modal,
+html.has-modal body {
+  overflow: hidden;
+}
+.modal-backdrop,
+.modal-body {
+  overscroll-behavior: contain;
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
