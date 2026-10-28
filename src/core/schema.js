@@ -723,11 +723,17 @@
     categories.forEach(function (c) { categoryIds[c.id] = true; });
 
     /* 事项类别兜底：优先文档设置的默认类别，其次紧急，最后第一个类别。
-       旧实现固定回退 cat_short_task —— 该类别四十八轮起可能已被删除。 */
-    var fallbackCategoryId = (isNonEmptyString(doc.settings && doc.settings.defaultCategoryId)
-      && categoryIds[doc.settings.defaultCategoryId])
-      ? doc.settings.defaultCategoryId
-      : (categoryIds[URGENT_CATEGORY_ID] ? URGENT_CATEGORY_ID : (categories[0] && categories[0].id));
+       旧实现固定回退 cat_short_task —— 该类别四十八轮起可能已被删除。
+       opts.fallbackCategoryId（D20）供合并使用：远端 payload 本身不带 settings，
+       拿它单独归一会让所有悬空类别退到「紧急」，而用户真正的默认类别在本机。 */
+    var preferFallback = isNonEmptyString(opts && opts.fallbackCategoryId) &&
+      categoryIds[opts.fallbackCategoryId];
+    var fallbackCategoryId = preferFallback
+      ? opts.fallbackCategoryId
+      : ((isNonEmptyString(doc.settings && doc.settings.defaultCategoryId)
+        && categoryIds[doc.settings.defaultCategoryId])
+        ? doc.settings.defaultCategoryId
+        : (categoryIds[URGENT_CATEGORY_ID] ? URGENT_CATEGORY_ID : (categories[0] && categories[0].id)));
 
     // 事项
     var items = [];
@@ -1492,10 +1498,119 @@
     return { ok: true, errors: [], doc: migrated, warnings: warnings };
   }
 
-  /** 合并两份文档（DM-9：按 id 去重，冲突取 updatedAt 较新者；类别次序保留本机） */
-  function mergeDocuments(base, incoming) {
-    var out = sanitizeDocument(base).doc;
-    var incomingClean = sanitizeDocument(incoming).doc;
+  function safeClone(v) {
+    if (v === undefined || v === null || typeof v !== 'object') return v;
+    try {
+      return cloneJSON(v);
+    } catch (e) {
+      return v; // 含循环引用的脏数据：原样交给 sanitizeDocument 去判非法
+    }
+  }
+
+  /**
+   * 三向按 key 合并一组条目（D20）。
+   *
+   * 为什么需要 prev：只比较「本机 / 远端」两边无法区分「对端新增」与「我方删除」——
+   * 两者在数据上长得一模一样（本机没有这条）。有了上次同步的共同祖先 prev，
+   * 才能判定「本机没有 + prev 有」= 本机删掉了 → 不再复活；
+   * 「本机没有 + prev 没有」= 远端新增 → 收下。
+   *
+   * prev 缺失（老记录没存基线）时退化为二向并集：宁可把删掉的条目复活，
+   * 也绝不因为判不出来而丢掉用户的数据。
+   *
+   * @param {Array} local 本机条目（顺序权威）
+   * @param {Array} remote 远端条目（新 key 追加到末尾）
+   * @param {Array|null} prev 上次同步的共同祖先
+   * @param {function(*):string} keyOf 取 key；返回空则不参与合并
+   * @param {function(*,*):boolean} preferIncoming 同 key 时远端是否胜出
+   * @param {{onConflict?:function(string), onDrop?:function(string)}} [opts]
+   * @returns {Array}
+   */
+  function mergeKeyed(local, remote, prev, keyOf, preferIncoming, opts) {
+    opts = opts || {};
+    var out = [];
+    var index = {};
+    (Array.isArray(local) ? local : []).forEach(function (e) {
+      var k = keyOf(e);
+      if (!k || index[k] !== undefined) return;
+      index[k] = out.length;
+      out.push(e);
+    });
+
+    var remoteList = Array.isArray(remote) ? remote : [];
+    var remoteIndex = {};
+    remoteList.forEach(function (e) {
+      var k = keyOf(e);
+      if (k && remoteIndex[k] === undefined) remoteIndex[k] = e;
+    });
+
+    var prevIndex = null;
+    if (Array.isArray(prev)) {
+      prevIndex = {};
+      prev.forEach(function (e) {
+        var k = keyOf(e);
+        if (k) prevIndex[k] = e;
+      });
+    }
+
+    /* 本机有、远端没有：prev 也有 → 远端删了 → 跟着删；
+       prev 没有 → 本机新增 → 保留。 */
+    if (prevIndex) {
+      out = out.filter(function (e) {
+        var k = keyOf(e);
+        if (!k || remoteIndex[k]) return true;
+        if (prevIndex[k]) {
+          if (opts.onDrop) opts.onDrop(k);
+          delete index[k];
+          return false;
+        }
+        return true;
+      });
+      // 重建索引（filter 之后位置全变了）
+      index = {};
+      out.forEach(function (e, i) { index[keyOf(e)] = i; });
+    }
+
+    remoteList.forEach(function (e) {
+      var k = keyOf(e);
+      if (!k) return;
+      var idx = index[k];
+      if (idx === undefined) {
+        /* 本机没有这条：prev 有 → 本机删过，不复活；prev 没有 → 远端新增，收下。 */
+        if (prevIndex && prevIndex[k]) return;
+        index[k] = out.length;
+        out.push(e);
+        return;
+      }
+      if (preferIncoming(e, out[idx])) out[idx] = e;
+      else if (opts.onConflict) opts.onConflict(k);
+    });
+
+    return out;
+  }
+
+  /**
+   * 合并两份文档（DM-9：按 id 去重，冲突取 updatedAt 较新者；类别次序保留本机）。
+   *
+   * D20（2026-10-28）：新增第三个参数 prev —— 上次同步成功的共同祖先。
+   * 传了 prev 才是真正的三向合并（能正确识别双向删除）；不传则维持二向并集语义，
+   * 供「手工导入」使用（导入没有祖先概念，只能保守保留）。
+   *
+   * @param {object} base 本机文档（严格说：合并的左侧 / 顺序权威）
+   * @param {object} incoming 远端 / 导入文档
+   * @param {object} [prev] 上次同步的共同祖先
+   */
+  function mergeDocuments(base, incoming, prev) {
+    /* 先深拷贝再归一：sanitizeDocument 是浅拷贝（Object.keys 逐键赋值），
+       它会直接在入参的 meta / 数组元素上改字段。合并要返回新文档，
+       绝不能顺手把调用方的 store 文档改掉（那会造成「没同步却变了」）。 */
+    var out = sanitizeDocument(safeClone(base)).doc;
+    /* 远端 payload 不带 settings，单独归一会把它的悬空类别统一退到「紧急」。
+       用本机的默认类别当兜底，合并后这些条目才落在用户真正在用的类别里。 */
+    var baseFallback = (out.settings && isNonEmptyString(out.settings.defaultCategoryId))
+      ? out.settings.defaultCategoryId : null;
+    var incomingClean = sanitizeDocument(safeClone(incoming), { fallbackCategoryId: baseFallback }).doc;
+    var prevClean = isPlainObject(prev) ? sanitizeDocument(safeClone(prev)).doc : null;
     var warnings = [];
 
     // 类别：本机次序为权威（导入方的 order 不覆盖本机），导入方的新类别追加到末尾
@@ -1518,24 +1633,34 @@
     });
     var categories = compactCategories(ordered);
 
-    var itemById = {};
-    out.items.forEach(function (it) { itemById[it.id] = it; });
-    incomingClean.items.forEach(function (it) {
-      var cur = itemById[it.id];
-      if (!cur) {
-        itemById[it.id] = it;
-        return;
+    /* items：三向按 id 合并。prev 存在时，双向删除都能正确生效；
+       同 id 两边都改则取 updatedAt 较新者（后者赢）。 */
+    var items = mergeKeyed(
+      out.items, incomingClean.items, prevClean ? prevClean.items : null,
+      function (it) { return it && it.id; },
+      function (incomingItem, localItem) { return newer(incomingItem, localItem); },
+      {
+        onConflict: function (id) { warnings.push(err('$.items', 'id 冲突，保留较新版本：' + id)); },
+        onDrop: function (id) { warnings.push(err('$.items', '远端已删除，本机跟随删除：' + id)); }
       }
-      if (newer(it, cur)) itemById[it.id] = it;
-      else warnings.push(err('$.items', 'id 冲突，保留本地较新版本：' + it.id));
-    });
-    var items = Object.keys(itemById).map(function (k) { return itemById[k]; });
+    );
+    /* 本机条目顺序权威：mergeKeyed 已经保留了 out.items 的相对次序，
+       远端新增的追加在末尾，因此这里直接用结果，不再重排。 */
 
+
+    /* notes / weekNotes 是按日期键的对象，没有 id，用键本身当合并 key。
+       prev 存在时：「远端没有该日」= 远端清空了这天 → 跟随删除；
+       「本机没有该日 + prev 有」= 本机清空过 → 不复活。 */
+    var prevNotes = prevClean && isPlainObject(prevClean.notes) ? prevClean.notes : null;
     var notes = {};
-    Object.keys(out.notes).forEach(function (k) { notes[k] = out.notes[k]; });
+    Object.keys(out.notes).forEach(function (k) {
+      if (prevNotes && prevNotes[k] && !incomingClean.notes[k]) return;
+      notes[k] = out.notes[k];
+    });
     Object.keys(incomingClean.notes).forEach(function (k) {
       var cur = notes[k];
       if (!cur) {
+        if (prevNotes && prevNotes[k]) return;
         notes[k] = incomingClean.notes[k];
         return;
       }
@@ -1543,68 +1668,60 @@
     });
 
     // DM-8.1：当周记录同样按日期键合并（与 notes 互不覆盖）
+    var prevWeek = prevClean && isPlainObject(prevClean.weekNotes) ? prevClean.weekNotes : null;
     var weekNotes = {};
-    Object.keys(out.weekNotes || {}).forEach(function (k) { weekNotes[k] = out.weekNotes[k]; });
+    Object.keys(out.weekNotes || {}).forEach(function (k) {
+      if (prevWeek && prevWeek[k] && !(incomingClean.weekNotes || {})[k]) return;
+      weekNotes[k] = out.weekNotes[k];
+    });
     Object.keys(incomingClean.weekNotes || {}).forEach(function (k) {
       var cur = weekNotes[k];
       if (!cur) {
+        if (prevWeek && prevWeek[k]) return;
         weekNotes[k] = incomingClean.weekNotes[k];
         return;
       }
       if (newer(incomingClean.weekNotes[k], cur)) weekNotes[k] = incomingClean.weekNotes[k];
     });
 
-    /* 2026-10-20 六轮：本月计划按月合并 —— 同 id 取较新；本机次序为权威，导入方新条目追加到月末 */
+    /* 本月计划：外层按月键（整个月的增删），内层按 id 三向合并。
+       本机次序为权威，远端新条目追加到月末。 */
+    var prevMP = prevClean && isPlainObject(prevClean.monthPlans) ? prevClean.monthPlans : null;
     var monthPlans = {};
-    Object.keys(out.monthPlans || {}).forEach(function (k) { monthPlans[k] = out.monthPlans[k].slice(); });
-    Object.keys(incomingClean.monthPlans || {}).forEach(function (k) {
-      var local = monthPlans[k];
-      if (!local) { monthPlans[k] = incomingClean.monthPlans[k].slice(); return; }
-      var byId = {};
-      local.forEach(function (e, i) { byId[e.id] = i; });
-      incomingClean.monthPlans[k].forEach(function (e) {
-        var idx = byId[e.id];
-        if (idx === undefined) {
-          byId[e.id] = local.length;
-          local.push(e);
-          return;
-        }
-        if (newer(e, local[idx])) local[idx] = e;
-      });
-    });
-
-    /* 五十一轮：倒计时按 id 合并 —— 同 id 取较新；本机次序为权威，导入方新条目追加到末尾 */
-    var countdowns = (out.countdowns || []).slice();
-    var cdIndex = {};
-    countdowns.forEach(function (e, i) { cdIndex[e.id] = i; });
-    (incomingClean.countdowns || []).forEach(function (e) {
-      var idx = cdIndex[e.id];
-      if (idx === undefined) {
-        cdIndex[e.id] = countdowns.length;
-        countdowns.push(e);
+    Object.keys(out.monthPlans || {}).forEach(function (k) {
+      var remoteList = (incomingClean.monthPlans || {})[k];
+      var prevList = prevMP && Array.isArray(prevMP[k]) ? prevMP[k] : null;
+      if (!Array.isArray(remoteList)) {
+        if (prevList) return; // 远端把这个月清空了
+        monthPlans[k] = out.monthPlans[k].slice();
         return;
       }
-      if (newer(e, countdowns[idx])) countdowns[idx] = e;
+      monthPlans[k] = mergeKeyed(out.monthPlans[k], remoteList, prevList, keyOfId, preferNewerId, {});
     });
+    Object.keys(incomingClean.monthPlans || {}).forEach(function (k) {
+      if (monthPlans[k]) return;
+      if (prevMP && prevMP[k]) return; // 本机删过这个月，不复活
+      monthPlans[k] = incomingClean.monthPlans[k].slice();
+    });
+
+    /* 倒计时：按 id 三向合并，同 id 取较新者；本机次序为权威。 */
+    var countdowns = mergeKeyed(
+      out.countdowns, incomingClean.countdowns, prevClean ? prevClean.countdowns : null,
+      keyOfId, preferNewerId, {}
+    );
 
     /* D9（2026-10-27）：完成台按 occ.key 合并 —— 同 key 取 lastTs 较新者（最近动过的
-       快照赢）；导入方新条目追加到末尾。完成台条目没有 updatedAt（非关键状态），
-       lastTs 是它唯一可信的「最近触碰」信号。 */
-    var dock = (out.finishDock || []).slice();
-    var dockIndex = {};
-    dock.forEach(function (e, i) { if (e && e.occ) dockIndex[e.occ.key] = i; });
-    (incomingClean.finishDock || []).forEach(function (e) {
-      if (!e || !e.occ || !isNonEmptyString(e.occ.key)) return;
-      var idx = dockIndex[e.occ.key];
-      if (idx === undefined) {
-        dockIndex[e.occ.key] = dock.length;
-        dock.push(e);
-        return;
-      }
-      var a = Number(e.lastTs) || 0;
-      var b = Number(dock[idx].lastTs) || 0;
-      if (a > b) dock[idx] = e;
-    });
+       快照赢）。完成台条目没有 updatedAt（非关键状态），lastTs 是它唯一可信的
+       「最近触碰」信号。D20 起同样走三向，远端清空的条目不会再被本机复活。 */
+    var dock = mergeKeyed(
+      out.finishDock, incomingClean.finishDock, prevClean ? prevClean.finishDock : null,
+      function (e) { return e && e.occ && isNonEmptyString(e.occ.key) ? e.occ.key : null; },
+      function (incomingEntry, localEntry) {
+        return (Number(incomingEntry && incomingEntry.lastTs) || 0) >
+          (Number(localEntry && localEntry.lastTs) || 0);
+      },
+      {}
+    );
 
     out.categories = categories;
     out.items = items;
@@ -1624,6 +1741,16 @@
     if (isNaN(ta)) ta = 0;
     if (isNaN(tb)) tb = 0;
     return ta > tb;
+  }
+
+  /** 带 id 的条目（事项 / 月计划 / 倒计时的合并 key 都是 id）。 */
+  function keyOfId(e) {
+    return e && isNonEmptyString(e.id) ? e.id : null;
+  }
+
+  /** 同 id 两边都改过：updatedAt 较新的一方赢（后者 = 远端胜出）。 */
+  function preferNewerId(incomingEntry, localEntry) {
+    return newer(incomingEntry, localEntry);
   }
 
   /** 按模式导入，返回 {doc, ok, code, errors, warnings} */
@@ -1702,6 +1829,7 @@
     createEmptyDocument: createEmptyDocument,
     validateImportPayload: validateImportPayload,
     mergeDocuments: mergeDocuments,
+    mergeKeyed: mergeKeyed,
     importInto: importInto
   };
 });

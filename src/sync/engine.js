@@ -376,6 +376,37 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
      * 超过上限的条目会按上限截断/丢弃，但这件事会以有损审计的形式如实上报，
      * 不会静默发生（归一的 audit 由调用方决定要不要提示）。
      */
+    /* ------------------------------------------------------------------ *
+     * D20：合并基线（三向合并的共同祖先）
+     * ------------------------------------------------------------------ */
+
+    /**
+     * 读「上次同步成功时两端共同的内容」。
+     *
+     * 唯一的用途是让合并能分辨「对端新增」与「我方删除」——这两个情况在数据上
+     * 完全一样（本机没有这条）。基线缺失（老记录 / 新装配）一律返回 null，
+     * 合并退化为二向并集：宁可把删掉的条目复活，也不能因为判不出来就丢数据。
+     */
+    function readBase() {
+      if (!uid || typeof K.syncBaseKey !== 'function') return null;
+      var raw;
+      try {
+        raw = readKv(kv, K.syncBaseKey(uid));
+      } catch (e) {
+        return null;
+      }
+      return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null;
+    }
+
+    /** 记录本次同步后两端的共同内容。基线只影响删除判定，写失败不影响同步本身。 */
+    function writeBase(doc) {
+      if (!uid || !doc || typeof K.syncBaseKey !== 'function') return;
+      try {
+        var proj = H.payloadProjection(doc);
+        if (proj) writeKv(kv, K.syncBaseKey(uid), proj);
+      } catch (e) { /* 基线丢了只是删除判定退化，不报错、不阻塞同步 */ }
+    }
+
     function buildPushPayload(doc) {
       try {
         var norm = remoteApply.normalizeAndAudit(doc);
@@ -685,12 +716,16 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
 
       if (choice === 'remote') {
         /* §1.7/§1.8：先把归一会丢的东西摆到台面上，再谈合并。
-           位置刻意在「写账号副本」之前 —— 有损时**一个字节都不能落盘**（T-V10）。 */
+           位置刻意在「写账号副本」之前 —— 有损时**一个字节都不能落盘**（T-V10）。
+           D20：这是用户显式选的「以云端为准」，整份应用，不参与合并 ——
+           否则本机旧条目会以「本机新增」的名义留下来，与用户的选择相反。 */
         var insp = auditRemote(lastCheck.remote.payload);
         if (insp.lossy) {
           return enterLossy(insp, 'confirm', lastCheck.remote);
         }
-        var merged = remoteApply.mergeRemote(insp.doc, localDoc, { now: now() });
+        var merged = remoteApply.mergeRemote(insp.doc, localDoc, {
+          now: now(), prev: readBase(), replace: true
+        });
         if (!merged.ok) {
           return fail('E_MERGE_FAILED', '远端文档合并失败', merged.errors);
         }
@@ -762,6 +797,10 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
         return fail('E_RECORD_INVALID', '同步记录形状非法，未写入', recCheck.errors);
       }
       writeKv(kv, recKey, record);
+
+      /* D20：这次提交完成后两端内容一致，把它记为下次三向合并的基线 ——
+         没有基线就分不清「对端删了」和「对端还没有」，删除永远不会生效。 */
+      writeBase(targetDoc);
 
       /* 远端文档落到哪里：有切源回调时，activityDoc 由装配层在切源后从**账号副本**
          读回（那份就是 targetDoc）。此时若再 setLocalDoc，写的是切换前的作用域——
@@ -861,11 +900,22 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
 
       var payload = buildPushPayload(doc);
       var pushed = await backend.write(uid, payload, record.lastKnownRevision);
-      /* D10（2026-10-27 用户裁定「任何设备均以本地覆盖云端」）：revision 分歧
-         不再是冲突——读到云端当前行后无条件覆盖写。稳态同步的语义从此是
-         「后写入者胜」：谁的本机内容最新，云端就是谁的。 */
+      /* D20（2026-10-28）：远端在这期间被别的设备改过 —— 先合并再推。
+         以前这里是无条件覆盖（D10 的「后写入者胜」），代价是对方那次编辑消失：
+         两台设备各自编辑，谁后保存谁把对方的内容抹掉，用户感受就是「只能有一台为主」。
+         合并只保留真正冲突的那一条（同 id 同字段）的让步，互不相干的新增全都留住。 */
       if (!pushed.ok && pushed.code === 'E_CONFLICT') {
-        pushed = await forceOverwrite(payload);
+        var pulled = await backend.read(uid);
+        if (!pulled.ok) {
+          return isTransient(pulled.code)
+            ? transientFail(pulled.code, pulled.message || '读取云端失败')
+            : fail(pulled.code, pulled.message || '读取云端失败');
+        }
+        if (!pulled.row) {
+          /* 云端行被删了：不凭空重建（T-R06），交给上层决定是否重新上传。 */
+          return fail('E_REMOTE_MISSING', '云端行已不存在，本次推送中止');
+        }
+        return mergeAndPush(record, doc, hash, pulled.row);
       }
       if (!pushed.ok) {
         /* D18：写失败若是网络/超时/5xx/限流，保持 syncing，交给稳态退避重试——
@@ -944,7 +994,7 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
          因为它「平时都好好的」，直到某天云端出现一份超限文档。 */
       var insp = inc.insp;
       if (insp.lossy) return enterLossy(insp, 'pull', res.row);
-      var merged = remoteApply.mergeRemote(insp.doc, getLocalDoc(), { now: now() });
+      var merged = remoteApply.mergeRemote(insp.doc, getLocalDoc(), { now: now(), prev: readBase() });
       if (!merged.ok) {
         return fail('E_MERGE_FAILED', '合并失败', merged.errors);
       }
@@ -1117,9 +1167,10 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
         return pushOut(record, cand.doc, h.hash);
       }
 
-      /* D10（2026-10-27 用户裁定「任何设备均以本地覆盖云端」）：活动记录下两边
-         都改过，不再是对等冲突——本机内容无条件胜出（forceOverwrite）。
-         覆盖前的账号候选备份由界面层负责（首次同步与四象限入口都有 exportBackup）。
+      /* D20（2026-10-28）替代 D10 的「本机无条件覆盖云端」：两边都改过时先合并再推。
+         覆盖是排他的，必然有一方的编辑消失；合并把两边的改动都留住，推上去的是并集，
+         随后两台设备看到同一份内容 —— 这才是「两台设备都能以本机为主」。
+         覆盖前的账号候选备份仍由界面层负责（首次同步与四象限入口都有 exportBackup）。
          **例外**：关闭记录的重新开启（uploadNeedsConfirm）维持 Q-31/Q-32 的
          显式确认——那是用户亲手关掉的同步，重开是另一条受保护的路。 */
       if (opts.uploadNeedsConfirm) {
@@ -1134,7 +1185,7 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
         };
         return lastCheck;
       }
-      return pushOut(record, cand.doc, h.hash, { force: true });
+      return mergeAndPush(record, cand.doc, h.hash, res.row);
     }
 
     /**
@@ -1254,10 +1305,14 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
            合并的 settings/meta 取自这份「现在」的副本，不是那份快照。 */
         var fresh = readDocKey(kv, dbKey);
         var baseDoc = fresh.ok ? fresh.doc : { meta: {}, settings: {} };
-        /* 恢复里的「以云端为准」也是往本机写远端内容，同样要过有损闸门。 */
+        /* 恢复里的「以云端为准」也是往本机写远端内容，同样要过有损闸门。
+           D20：这是用户显式选的「听云端的」，必须整份应用 —— 不能合并，
+           否则账号副本里的旧条目会以「本机新增」的名义留下来，与用户的选择相反。 */
         var insp = auditRemote(ck.remote.payload);
         if (insp.lossy) return enterLossy(insp, 'recovery', ck.remote);
-        var merged = remoteApply.mergeRemote(insp.doc, baseDoc, { now: now() });
+        var merged = remoteApply.mergeRemote(insp.doc, baseDoc, {
+          now: now(), prev: readBase(), replace: true
+        });
         if (!merged.ok) return fail('E_MERGE_FAILED', '远端文档合并失败', merged.errors);
 
         /* 先算哈希再落盘：反过来一旦算不出来，账号副本已被换掉、锚点没跟上。 */
@@ -1432,7 +1487,7 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
       var fresh = readDocKey(kv, dbKey);
       var baseDoc = fresh.ok ? fresh.doc : { meta: {}, settings: {} };
 
-      var merged = remoteApply.mergeRemote(pendingLossy.doc, baseDoc, { now: now() });
+      var merged = remoteApply.mergeRemote(pendingLossy.doc, baseDoc, { now: now(), prev: readBase() });
       if (!merged.ok) return fail('E_MERGE_FAILED', '有损修复的应用失败', merged.errors);
 
       /* 先算哈希再落盘：算不出来时账号副本不能被换掉（§4.6.5）。 */
@@ -1658,6 +1713,47 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
     }
 
     /** 只远端变：校验 → 有损审计 → 合并 → 写账号副本 → 回读 → 更新记录 → 切指针。 */
+    /**
+     * D20（2026-10-28）：两端都有未同步改动时的收口 —— 先合并，再推合并结果。
+     *
+     * 以前这里是 `pushOut(record, cand.doc, h.hash, { force: true })`：本机无条件
+     * 覆盖云端。代价是对方的编辑被无声抹掉，两台设备永远只有一台的内容能活下来，
+     * 用户感受到的就是「只能有一台以本机为主」。
+     *
+     * 覆盖是排他的，合并不是：按 id / 日期键取并集、同 id 取较新者，两边的新增与
+     * 编辑都留下来，推上去的是并集，随后两台设备看到同一份内容。只有「同一字段
+     * 在同一秒被两边改成不同值」这种真冲突才需要一方让步（updatedAt 较新者赢）。
+     *
+     * 合并结果必须先落本机再推：推成功而本机没写，界面就还是旧内容，用户一编辑
+     * 又把旧内容推回去（Q-29 的翻版）。
+     */
+    async function mergeAndPush(record, localDoc, localHash, row) {
+      var inc = auditIncoming(row.payload);
+      if (!inc.ok) return fail(inc.code, inc.message, inc.errors);
+
+      /* 远端有损：不在这里硬合 —— 交给有损闸门先修再合，它会走同一条合并路径。 */
+      if (inc.insp && inc.insp.lossy) return enterLossy(inc.insp, 'merge-push', row);
+
+      var merged = remoteApply.mergeRemote(inc.insp.doc, localDoc, {
+        now: now(), prev: readBase()
+      });
+      if (!merged.ok) return fail('E_MERGE_FAILED', '合并失败', merged.errors);
+
+      var h = await safeHash(merged.doc);
+      if (!h.ok) return fail(h.code, h.message, h.detail);
+
+      var w = writeDocKey(kv, K.dbKeyForScope(K.userScope(uid)), merged.doc);
+      if (!w.ok) return fail(w.code, w.message, w.detail);
+
+      if (onDocApplied) {
+        try { onDocApplied(K.scopeId(K.userScope(uid)), merged.doc); } catch (e) { /* 刷新界面失败不影响数据正确性 */ }
+      }
+
+      /* 合并基于刚读到的最新 revision，条件推送必然对不上（远端 revision 已前进），
+         所以这里显式 force：内容已经并进去了，覆盖是安全的。 */
+      return pushOut(record, merged.doc, h.hash, { force: true, merged: true, baseHash: localHash });
+    }
+
     async function pullInto(record, row) {
       var inc = auditIncoming(row.payload);
       if (!inc.ok) return fail(inc.code, inc.message, inc.errors);
@@ -1668,7 +1764,15 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
       var cand = readDocKey(kv, K.dbKeyForScope(K.userScope(uid)));
       if (!cand.ok) return fail(cand.code, cand.message, cand.detail);
 
-      var merged = remoteApply.mergeRemote(insp.doc, cand.doc, { now: now() });
+      /* D20：本机自上次同步后没动过（哈希 == 锚点）→ 远端就是唯一真相，整份应用；
+         本机也有未同步改动 → 三方合并，两边的编辑都留住。
+         判不出来（哈希算不了）时按「有改动」处理，走合并这条保守的路。 */
+      var localH = await safeHash(cand.doc);
+      var localDirty = !localH.ok || localH.hash !== record.lastSyncedHash;
+
+      var merged = remoteApply.mergeRemote(insp.doc, cand.doc, {
+        now: now(), prev: readBase(), replace: !localDirty
+      });
       if (!merged.ok) return fail('E_MERGE_FAILED', '合并失败', merged.errors);
 
       var h = await safeHash(merged.doc);
@@ -1764,6 +1868,16 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
 
       var out = { ok: true, state: state, action: action };
       Object.assign(out, extra || {});
+
+      /* D20：把「本次同步后两端的共同内容」记为下次三向合并的共同祖先。
+         读盘时机有讲究：pushOut 不写盘（本机早就是待推的那份内容），pullInto 与
+         mergeAndPush 都先写盘再 settle —— 两种情况读到的都是刚同步完的内容。 */
+      if (uid) {
+        try {
+          var baseDoc = readDocKey(kv, K.dbKeyForScope(K.userScope(uid)));
+          if (baseDoc.ok) writeBase(baseDoc.doc);
+        } catch (e) { /* 基线写不进去只影响删除判定，不影响数据本身 */ }
+      }
       if (scopeSwitch) out.scopeSwitch = scopeSwitch;
       bootInfo = bootNow();
       lastCheck = out;

@@ -138,6 +138,18 @@
     return 'dayplan.sync.history.' + uid;
   }
 
+  /**
+   * 合并基线键（D20）：上次同步成功时两端的共同内容。
+   *
+   * 只给三向合并判定「谁删了什么」用，不参与任何展示。
+   * 与同步记录分开存：记录的形状由 §1.9 严格约束，塞一份文档进去会把
+   * 校验规则搞脏；基线缺失时合并自动退化为二向并集（宁可复活不丢）。
+   */
+  function syncBaseKey(uid) {
+    assertUid(uid);
+    return 'dayplan.sync.base.' + uid;
+  }
+
   function syncLeaseKey(uid) {
     assertUid(uid);
     return 'dayplan.sync.lease.' + uid;
@@ -172,6 +184,7 @@
     syncRecordKey: syncRecordKey,
     syncHistoryKey: syncHistoryKey,
     syncLeaseKey: syncLeaseKey,
+    syncBaseKey: syncBaseKey,
     isSeedDoneMarker: isSeedDoneMarker,
     scopeEquals: scopeEquals
   };

@@ -97,26 +97,75 @@
    * ------------------------------------------------------------------ */
 
   /**
-   * 八个内容字段取远端，settings 整块取本机，meta 重建，最后执行 §1.4 兜底。
+   * 把远端文档并进本机（D20 起是真合并，不再整块替换）。
+   *
+   * 语义边界：
+   *   · 八类内容（categories / items / notes / weekNotes / monthPlans / countdowns /
+   *     finishDock）按 id / 日期键做三向合并 —— 两端各自新增的都保留，同 id 取较新者；
+   *     opts.prev（上次同步成功的共同祖先）在场时，双向删除也能正确生效。
+   *   · settings 整块取本机：它是设备本地偏好（默认类别、视图密度），不参与云端合并。
+   *   · meta 重建：createdAt 沿用本机，updatedAt 沿用远端。
+   *
    * @param {object} remoteDoc 已通过 G2–G7 的远端文档
-   * @param {object} localDoc 本机活动文档（只读取 settings / meta.createdAt）
-   * @param {{now?:string}} [opts]
-   * @returns {{ok:boolean, doc:(object|null), errors:Array}}
+   * @param {object} localDoc 本机活动文档
+   * @param {{now?:string, prev?:object}} [opts] prev = 上次同步的共同祖先，缺省退化为二向并集
+   * @returns {{ok:boolean, doc:(object|null), errors:Array, warnings:Array}}
    */
   function mergeRemote(remoteDoc, localDoc, opts) {
     opts = opts || {};
     var errors = [];
     if (!isPlainObject(remoteDoc)) errors.push(err('$remote', '远端文档必须是对象'));
     if (!isPlainObject(localDoc)) errors.push(err('$local', '本地文档必须是对象'));
-    if (errors.length) return { ok: false, doc: null, errors: errors };
+    if (errors.length) return { ok: false, doc: null, errors: errors, warnings: [] };
 
     if (!Array.isArray(remoteDoc.categories) || remoteDoc.categories.length === 0) {
-      return { ok: false, doc: null, errors: [err('$remote.categories', '类别为空，拒绝应用')] };
+      return {
+        ok: false, doc: null, warnings: [],
+        errors: [err('$remote.categories', '类别为空，拒绝应用')]
+      };
     }
 
     var now = opts.now || new Date().toISOString();
     var localMeta = isPlainObject(localDoc.meta) ? localDoc.meta : {};
     var localCreatedAt = isNonEmptyString(localMeta.createdAt) ? localMeta.createdAt : now;
+
+    /* D20（2026-10-28）：这段以前是直接 cloneJson(remoteDoc.xxx) —— 名字叫 mergeRemote，
+       实际是「整份取远端」。后果：本机还没推上去的改动，在一次拉取里被无声抹掉；
+       两台设备谁后动谁赢，另一台的编辑必然消失，用户看到的就是「只能有一台为主」。
+       现在分两种口径，由调用方按「本机有没有未同步的改动」决定：
+         · opts.replace = true —— 本机干净（自上次同步后没动过），远端就是唯一真相，
+           整份应用。此时合并反而有害：本机残留的旧条目会被当成「本机新增」留下来。
+         · 默认 —— 本机也有改动，按 id / 日期键三向合并，两边的改动都留住。 */
+    var content;
+    var mergedWarnings = [];
+    if (opts.replace) {
+      content = {
+        categories: cloneJson(remoteDoc.categories),
+        items: cloneJson(remoteDoc.items),
+        notes: cloneJson(remoteDoc.notes),
+        weekNotes: cloneJson(remoteDoc.weekNotes),
+        monthPlans: cloneJson(remoteDoc.monthPlans),
+        countdowns: cloneJson(remoteDoc.countdowns),
+        finishDock: cloneJson(remoteDoc.finishDock)
+      };
+    } else {
+      var merged = schema.mergeDocuments(
+        localDoc, remoteDoc, isPlainObject(opts.prev) ? opts.prev : null
+      );
+      if (!merged.doc) {
+        return { ok: false, doc: null, warnings: [], errors: [err('$', '两端文档无法归一，合并中止')] };
+      }
+      mergedWarnings = merged.warnings || [];
+      content = {
+        categories: merged.doc.categories,
+        items: merged.doc.items,
+        notes: merged.doc.notes,
+        weekNotes: merged.doc.weekNotes,
+        monthPlans: merged.doc.monthPlans,
+        countdowns: merged.doc.countdowns,
+        finishDock: merged.doc.finishDock
+      };
+    }
 
     var doc = {
       schemaVersion: remoteDoc.schemaVersion,
@@ -126,34 +175,32 @@
         updatedAt: isNonEmptyString(remoteDoc.updatedAt) ? remoteDoc.updatedAt : now,
         app: 'DayPlan'
       },
-      categories: cloneJson(remoteDoc.categories),
-      items: cloneJson(remoteDoc.items),
-      notes: cloneJson(remoteDoc.notes),
-      weekNotes: cloneJson(remoteDoc.weekNotes),
-      monthPlans: cloneJson(remoteDoc.monthPlans),
+      categories: cloneJson(content.categories),
+      items: cloneJson(content.items),
+      notes: cloneJson(content.notes),
+      weekNotes: cloneJson(content.weekNotes),
+      monthPlans: cloneJson(content.monthPlans),
       // settings 整块取本机，不逐项合并；先归一以补齐缺省与剔除非法值。
       settings: schema.sanitizeSettings(localDoc.settings)
     };
 
     var resolved = resolveDefaultCategoryId(doc.settings.defaultCategoryId, doc.categories);
     if (!resolved.ok) {
-      return { ok: false, doc: null, errors: [err('$.settings.defaultCategoryId', '无法为入云类别选择默认类别（' + resolved.reason + '）')] };
+      return { ok: false, doc: null, warnings: mergedWarnings, errors: [err('$.settings.defaultCategoryId', '无法为入云类别选择默认类别（' + resolved.reason + '）')] };
     }
     doc.settings.defaultCategoryId = resolved.id;
 
-    // D7：倒计时随远端整块替换（过渡期的「整块保留本机」分支已删除）。
-    // 仍按合并后的类别表归一，防止留下悬空类别引用；数组顺序不变（= 显示顺序）。
-    doc.countdowns = schema.sanitizeCountdowns(remoteDoc.countdowns, {
+    // D7：倒计时不再整块替换，随合并结果走；仍按合并后的类别表归一，
+    // 防止留下悬空类别引用。数组顺序不变（= 显示顺序）。
+    doc.countdowns = schema.sanitizeCountdowns(content.countdowns, {
       categoryIds: categoryIdMap(doc.categories),
       fallbackCategoryId: resolved.id
     });
 
-    // D9（2026-10-27）：完成台快照同样随远端整块替换（条目没有 updatedAt，
-    // 没有可逐条合并的可靠依据；整体 LWW 由文档级 revision 冲突机制兜底）。
-    // 不查类别表：occ.categoryId 是嵌入副本，悬空引用只是不显示胶囊。
-    doc.finishDock = schema.sanitizeFinishDock(remoteDoc.finishDock);
+    // D9 / D20：完成台同样走合并（同 occ.key 取 lastTs 较新者）
+    doc.finishDock = schema.sanitizeFinishDock(content.finishDock);
 
-    return { ok: true, doc: doc, errors: [] };
+    return { ok: true, doc: doc, errors: [], warnings: mergedWarnings };
   }
 
   /* ------------------------------------------------------------------ *
