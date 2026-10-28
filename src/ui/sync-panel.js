@@ -126,6 +126,9 @@
     if (st.kind === 'push') {
       if (st.ok && st.skipped) return '没有变化，已跳过' + when;
       if (st.ok) return '已上传到云端' + when;
+      /* D18：可重试失败（网络/超时/5xx/限流）正在按退避自动重试，
+         不需要用户做任何事——只陈述事实，不写成「上传失败」。 */
+      if (st.retryable) return '网络不稳，稍后自动重试（改动已在本机）' + when;
       /* 暂停期间的变更没有发请求，带错误码说「上传失败」会误导（像是网络问题）。
          这里只说事实：改动在本机。 */
       if (st.code === 'E_PAUSED') return (st.message || '同步已暂停，改动只留在本机') + when;
@@ -138,6 +141,7 @@
     if (st.kind === 'pull') {
       if (st.ok && st.skipped) return '云端没有更新' + when;
       if (st.ok) return '已从云端拉取' + when;
+      if (st.retryable) return '网络不稳，稍后自动重试' + when;
       return '拉取失败：' + (st.message || st.code) + (st.code ? '（' + st.code + '）' : '') + when;
     }
     return (st.ok ? '完成' : '失败') + when;
@@ -312,7 +316,13 @@
 
       /* ---------- D11 极简排版：状态 / 账号 / 最近一次同步合并成一个紧凑信息块 ---------- */
       var metaRows = [];
-      metaRows.push({ label: '状态', value: STATE_TEXT[d.engineState] || d.engineState, error: false });
+      /* D18：可重试的失败（网络/超时/5xx/限流）不再写成「同步已暂停」——
+         那句话读起来像坏了、要人处理。实际上界面正在自动重试，用户什么都不用做。 */
+      var stateText = STATE_TEXT[d.engineState] || d.engineState;
+      if (d.engineState === 'paused-error' && d.error && d.error.retryable) {
+        stateText = '网络不稳，正在自动重试…';
+      }
+      metaRows.push({ label: '状态', value: stateText, error: false });
 
       if (d.uid) {
         /* D12（2026-10-27）：账号行优先显示用户名（登录/注册时由装配层缓存），
@@ -335,7 +345,8 @@
           metaRows.push({
             label: '最近同步',
             value: describeStatus(st),
-            error: !!(st && st.ok === false)
+            /* D18：可重试的失败不算「错误」（正在自动重试），不上红字。 */
+            error: !!(st && st.ok === false && !st.retryable)
           });
         }
       }
@@ -412,8 +423,11 @@
         }
         if (!needsReopen && (d.engineState === 'signed-in' || d.engineState === 'paused-error')) {
           /* blocked 不给「开始检查」：记录形状无法判定，检查只会再拒一次，
-             点下去是个绕不出去的圈。给它的是「重新登录」（唯一能重建记录的路）。 */
-          if (!bootBlocked) {
+             点下去是个绕不出去的圈。给它的是「重新登录」（唯一能重建记录的路）。
+             D18：可重试的暂停（网络/超时/5xx/限流）也不给——界面正在自动重试，
+             放一个按钮只会让用户以为「必须点一下才会恢复」。 */
+          var autoHealing = d.engineState === 'paused-error' && d.error && d.error.retryable;
+          if (!bootBlocked && !autoHealing) {
             buttons.push(el('button', {
               class: 'btn btn-sm btn-primary', type: 'button', text: '开始检查',
               onclick: function () { runCheck(w, render); }

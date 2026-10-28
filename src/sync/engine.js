@@ -202,6 +202,29 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
       return { ok: false, code: code, message: message, detail: detail || null };
     }
 
+    /* D18（2026-10-28 用户口径「登录后不该有任何需要额外操作的地方」）：
+       网络抖动 / 超时 / 5xx / 限流不是「故障」。以前它们和真正的数据问题一样走
+       fail() 把引擎按进 paused-error 死状态，界面上就是「同步已暂停 + 点开始检查」——
+       手机上 Wi-Fi 切 4G 的瞬间就够触发一次。现在分两种情况处理：
+         · 已在稳态（syncing）→ 状态不动，调度层按退避自动重试；
+         · 需要重新对齐的阶段（check / resume / 恢复）→ 只能停，但 lastError
+           带 retryable，界面会定时自愈（连上网/切回页面即自动重跑），
+           同样不需要用户点任何按钮。 */
+    var TRANSIENT_CODES = {
+      E_NETWORK: 1, E_TIMEOUT: 1, E_SERVER: 1, E_RATE_LIMIT: 1,
+      E_BAD_RESPONSE: 1, E_PERSIST: 1
+    };
+
+    function isTransient(code) {
+      return !!(code && TRANSIENT_CODES[code]);
+    }
+
+    function transientFail(code, message, detail) {
+      lastError = { code: code, message: message || '', detail: detail || null, retryable: true };
+      if (state !== STATES.syncing) state = STATES.pausedError;
+      return { ok: false, code: code, message: message || '', detail: detail || null, retryable: true };
+    }
+
     function getState() {
       return state;
     }
@@ -483,7 +506,10 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
 
       var res = await backend.read(uid);
       if (!res.ok) {
-        return fail(res.code, res.message || '读取云端失败');
+        /* D18：网络/超时/5xx/限流只暂停并标记可重试，界面会自愈（不要求点「开始检查」）。 */
+        return isTransient(res.code)
+          ? transientFail(res.code, res.message || '读取云端失败')
+          : fail(res.code, res.message || '读取云端失败');
       }
 
       var remote = res.row || null;
@@ -625,7 +651,11 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
         }
         if (!pushed.ok) {
           kv.remove(dbKey);
-          return fail(pushed.code, pushed.message || '云端写入失败', { rolledBack: true });
+          /* D18：网络类写入失败同样标可重试——界面会自愈重跑检查并自动重传，
+             不需要用户再点一次。 */
+          return isTransient(pushed.code)
+            ? transientFail(pushed.code, pushed.message || '云端写入失败', { rolledBack: true })
+            : fail(pushed.code, pushed.message || '云端写入失败', { rolledBack: true });
         }
         revision = pushed.revision;
         hash = h.hash;
@@ -763,7 +793,11 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
         pushed = await forceOverwrite(payload);
       }
       if (!pushed.ok) {
-        return fail(pushed.code, pushed.message || '推送失败');
+        /* D18：写失败若是网络/超时/5xx/限流，保持 syncing，交给稳态退避重试——
+           绝不把一次手机网络抖动变成「同步已暂停」要用户点「开始检查」。 */
+        return isTransient(pushed.code)
+          ? transientFail(pushed.code, pushed.message || '推送失败')
+          : fail(pushed.code, pushed.message || '推送失败');
       }
 
       var at = now();
@@ -816,7 +850,12 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
       var record = parsed.record;
 
       var res = await backend.read(uid);
-      if (!res.ok) return fail(res.code, res.message || '读取失败');
+      if (!res.ok) {
+        /* D18：稳态拉取遇到网络问题不换状态，轮询下一拍会再试。 */
+        return isTransient(res.code)
+          ? transientFail(res.code, res.message || '读取失败')
+          : fail(res.code, res.message || '读取失败');
+      }
       if (!res.row) {
         return fail('E_NO_REMOTE', '云端没有该用户的行');
       }
@@ -941,8 +980,11 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
 
       var res = await backend.read(uid);
       if (!res.ok) {
-        /* Q-26：读不到云端 ≠ 从未同步。直接暂停，零写入、零本地改动。 */
-        return fail(res.code, res.message || '读取云端失败');
+        /* Q-26：读不到云端 ≠ 从未同步。直接暂停，零写入、零本地改动。
+           D18：网络类失败标 retryable，界面会自愈重跑，不要求点「开始检查」。 */
+        return isTransient(res.code)
+          ? transientFail(res.code, res.message || '读取云端失败')
+          : fail(res.code, res.message || '读取云端失败');
       }
       if (!res.row) {
         /* 记录说同步过，云端却没有行：只可能是被删或换了项目。
@@ -1054,8 +1096,11 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
 
       var res = await backend.read(uid);
       if (!res.ok) {
-        /* Q-26 同样适用：读不到云端不等于两端一致，也不等于从未同步。 */
-        return fail(res.code, res.message || '读取云端失败');
+        /* Q-26 同样适用：读不到云端不等于两端一致，也不等于从未同步。
+           D18：网络类失败标 retryable，由界面定时自愈。 */
+        return isTransient(res.code)
+          ? transientFail(res.code, res.message || '读取云端失败')
+          : fail(res.code, res.message || '读取云端失败');
       }
       var row = res.row || null;
       var remoteValid = true;
@@ -1174,7 +1219,11 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
       /* 用**刚读到的** revision 做条件更新（§5.5）。云端无行时传 null 走插入——
          那是用户明确选择的「重新上传」，不是自动重建。 */
       var pushed = await backend.write(uid, H.payloadProjection(cand.doc), rev);
-      if (!pushed.ok) return fail(pushed.code, pushed.message || '推送失败');
+      if (!pushed.ok) {
+        return isTransient(pushed.code)
+          ? transientFail(pushed.code, pushed.message || '推送失败')
+          : fail(pushed.code, pushed.message || '推送失败');
+      }
       return commitRecovery(pushed.revision, lh.hash, { scopeId: K.scopeId(scope), applied: null });
     }
 
@@ -1427,7 +1476,11 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
       }
 
       var pushed = await backend.write(uid, H.payloadProjection(cand.doc), record.lastKnownRevision);
-      if (!pushed.ok) return fail(pushed.code, pushed.message || '推送失败');
+      if (!pushed.ok) {
+        return isTransient(pushed.code)
+          ? transientFail(pushed.code, pushed.message || '推送失败')
+          : fail(pushed.code, pushed.message || '推送失败');
+      }
 
       var next = Object.assign({}, record, {
         lastKnownRevision: pushed.revision,
@@ -1580,7 +1633,11 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
       if (!pushed.ok && pushed.code === 'E_CONFLICT' && opts2 && opts2.force) {
         pushed = await forceOverwrite(payload);
       }
-      if (!pushed.ok) return fail(pushed.code, pushed.message || '推送失败');
+      if (!pushed.ok) {
+        return isTransient(pushed.code)
+          ? transientFail(pushed.code, pushed.message || '推送失败')
+          : fail(pushed.code, pushed.message || '推送失败');
+      }
       writeKv(kv, K.syncRecordKey(uid), Object.assign({}, record, {
         lastKnownRevision: pushed.revision,
         lastSyncedHash: hash,

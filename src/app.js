@@ -1112,6 +1112,44 @@
       });
     }
 
+    /* ---------------- D18：可重试失败的自愈循环 ----------------
+       用户口径（2026-10-28）：「登录后不要有任何需要额外操作的地方」。
+       手机网络抖动、Wi-Fi 切 4G、短暂超时，引擎会停在 paused-error 但把
+       lastError 标成 retryable。这里负责在「页面可见 + 浏览器有网」时
+       自动重跑一次 resume，成功即回到同步——不需要点「开始检查」。
+       真正的数据问题（冲突、记录损坏、云端被删）不带 retryable，仍走人工。 */
+    function retryablePaused() {
+      try {
+        var eng = syncWiring && typeof syncWiring.getEngine === 'function' ? syncWiring.getEngine() : null;
+        if (!eng || typeof eng.getState !== 'function') return false;
+        if (eng.getState() !== 'paused-error') return false;
+        var err = typeof eng.getError === 'function' ? eng.getError() : null;
+        return !!(err && err.retryable);
+      } catch (e) { return false; }
+    }
+
+    function tryAutoHeal() {
+      if (!retryablePaused()) return;
+      if (root.document && root.document.visibilityState === 'hidden') return;
+      if (root.navigator && root.navigator.onLine === false) return;
+      resumeSync();
+    }
+
+    if (root.setInterval) {
+      /* 15s 一次：够快让用户「回来就已经好了」，又不至于对着断网空转。
+         有网/切回页面时另有即时触发，见下方 online / visibilitychange。 */
+      var healTick = root.setInterval(tryAutoHeal, 15000);
+      if (healTick && typeof healTick.unref === 'function') healTick.unref();
+    }
+    if (root.addEventListener) {
+      root.addEventListener('online', function () { tryAutoHeal(); });
+    }
+    if (root.document && typeof root.document.addEventListener === 'function') {
+      root.document.addEventListener('visibilitychange', function () {
+        if (root.document.visibilityState === 'visible') tryAutoHeal();
+      });
+    }
+
     /* ---------------- 租约续期与释放（契约 §5.4） ----------------
        引擎只在「云端写之前」懒续期（在那里续期才有意义）；页面长时间不写就没人续，
        于是 30s 后自然过期。这一层补上「持有期间每 10s 续一次」，并在页面隐藏时跳过
@@ -1663,9 +1701,29 @@
         ]);
     }
 
+    /* D18（2026-10-28 用户口径「不要有任何需要额外操作的地方」）：
+       另一个标签页写了数据时，分两种情况——
+       · 本页没有待写改动（只是被动开着，最常见）：磁盘上那份就是最新真相，
+         静默载入并继续同步，不问任何问题（微信同时登录也不会问）；
+       · 本页刚有改动还没落盘：两份内容会互相覆盖，才需要人来选（保留三选一横幅）。 */
+    function autoAdoptExternal() {
+      var r;
+      try { r = store.resolveStale('reload'); } catch (e) { r = { ok: false, error: e && e.message }; }
+      if (!r || !r.ok) {
+        showStaleBanner();
+        return;
+      }
+      syncDockFromDoc(store.getState());
+      resumeSync();
+      M.toast('已载入另一个标签页的最新内容');
+    }
+
     function onExternalChange(key) {
+      var hadPending = false;
+      try { hadPending = typeof store.hasPendingSave === 'function' && store.hasPendingSave(); } catch (e) { hadPending = true; }
       if (!store.noteExternalChange(key)) return;
       pauseSyncForStale();
+      if (!hadPending) { autoAdoptExternal(); return; }
       showStaleBanner();
     }
 

@@ -32,6 +32,12 @@
      仍由 visibilitychange / focus 负责（那是真正"回来就看"的时刻）。 */
   var DEFAULT_PULL_INTERVAL_MS = 2000;
 
+  /* D18（2026-10-28）：可重试失败（网络/超时/5xx/限流）后的重试退避。
+     以前是 400ms 防抖直接重试，手机断网时会变成每秒两次无效请求；
+     现在 2s 起、逐次翻倍、封顶 30s，成功一次立刻回到 400ms 的常态节奏。 */
+  var RETRY_BASE_MS = 2000;
+  var RETRY_MAX_MS = 30000;
+
   /**
    * @param {{
    *   engine: object,
@@ -70,6 +76,7 @@
     var inflight = null;
     var dirty = false;      // 推送期间又发生变更
     var status = null;
+    var retryAttempt = 0;   // 连续可重试失败的次数（D18 退避用）
 
     function report(st) {
       status = st;
@@ -91,15 +98,16 @@
       }
     }
 
-    /** 排一次推送。已排队时不重复排（真正的防抖：每次变更重置等待） */
-    function schedule() {
+    /** 排一次推送。已排队时不重复排（真正的防抖：每次变更重置等待）。
+     *  delay 用于可重试失败后的退避重试（D18）；普通变更不传，走 debounceMs。 */
+    function schedule(delay) {
       if (disposed) return;
       dirty = true;
       if (timer !== null) clearTimer(timer);
       timer = setTimer(function () {
         timer = null;
         runPush();
-      }, debounceMs);
+      }, typeof delay === 'number' ? delay : debounceMs);
     }
 
     function runPush() {
@@ -114,9 +122,14 @@
            其余状态（local / checking / awaiting-choice）是流程中的正常停顿，
            由界面按状态提示，不必每条变更都念一遍。 */
         if (engine.getState() === 'paused-error') {
+          /* D18：暂停若是可重试的（网络/超时/5xx/限流），界面正在自愈，
+             别写成「同步已暂停」吓人——那句话读起来像坏了、要人点按钮。 */
+          var err = typeof engine.getError === 'function' ? engine.getError() : null;
+          var soft = !!(err && err.retryable);
           report({
             kind: 'push', ok: false, code: 'E_PAUSED',
-            message: '同步已暂停，这次改动只留在本机',
+            retryable: soft,
+            message: soft ? '改动已在本机，正在自动重试' : '同步已暂停，这次改动只留在本机',
             at: now()
           });
         }
@@ -135,6 +148,7 @@
       inflight = p.then(function (res) {
         inflight = null;
         if (res && res.ok) {
+          retryAttempt = 0;                       // D18：成功即回到常态（400ms）节奏
           report({
             kind: 'push', ok: true, skipped: !!res.skipped,
             code: res.skipped ? 'E_NO_CHANGE' : 'OK',
@@ -149,10 +163,17 @@
             retryable: !!(res && res.retryable),
             at: now()
           });
-          /* 租约被另一个标签页占着（§5.4）：这次改动**没有**上传，而它不会自己再
-             触发一次变更事件。不在这里补一次重试，这次改动就一直躺在本地，
-             用户既看不到失败细节，也不知道何时会上云。 */
-          if (res && res.retryable && !disposed) dirty = true;
+          /* D18：可重试失败（网络/超时/5xx/限流/租约被占）按指数退避自动重排。
+             引擎在稳态下遇到这些错误不会掉出 syncing，所以这里重排就能自愈——
+             用户不需要点任何按钮（契约原来要求点「开始检查」的口径作废）。 */
+          if (res && res.retryable && !disposed) {
+            retryAttempt = Math.min(retryAttempt + 1, 5);
+            var delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * Math.pow(2, retryAttempt - 1));
+            dirty = true;
+            schedule(delay);
+            return res;
+          }
+          if (res && !res.retryable) retryAttempt = 0;
         }
         // 推送期间攒下的变更：尾随再推一次，否则最后一次改动永远上不了云
         if (dirty && !disposed) schedule();
@@ -238,6 +259,7 @@
           skipped: !!(res && res.skipped),
           code: (res && res.ok) ? ((res && res.skipped) ? 'E_NO_CHANGE' : 'OK') : ((res && res.code) || 'E_UNKNOWN'),
           message: (res && res.ok) ? ((res && res.skipped) ? '云端无更新' : '已拉取') : ((res && res.message) || '拉取失败'),
+          retryable: !!(res && res.retryable),
           at: now()
         });
         return res;
