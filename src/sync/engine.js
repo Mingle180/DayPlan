@@ -1827,9 +1827,30 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
       }
       var payload = buildPushPayload(candDoc);
       var pushed = await backend.write(uid, payload, record.lastKnownRevision);
-      /* D10：force 时 revision 分歧按「本机胜出」无条件覆盖（见 forceOverwrite）。 */
-      if (!pushed.ok && pushed.code === 'E_CONFLICT' && opts2 && opts2.force) {
-        pushed = await forceOverwrite(payload);
+      /* D22c（2026-10-29）：条件推送撞上 revision 分歧不再区不区分 force 一律自愈。
+         以前非 force（resume 的「本机干净」分支、confirmReopenUpload）撞 E_CONFLICT
+         直接 fail() → paused-error 死状态，「点开始检查选择保留哪一边」——而这恰是
+         两台设备同时开始同步时的高概率竞态：read 与 write 之间对方插进一次推送。
+         现在：force → 无条件覆盖（合并结果本来就基于最新 revision）；非 force →
+         读当前行走 mergeAndPush（D20 三向合并），两边编辑都留住。 */
+      if (!pushed.ok && pushed.code === 'E_CONFLICT') {
+        if (opts2 && opts2.force) {
+          pushed = await forceOverwrite(payload);
+        }
+        /* force 覆盖期间对方又推了一次（或本来就没带 force）：落回三向合并。
+           mergeAndPush 的推送带 force，最坏情况循环到这里也只会再读一次最新行。 */
+        if (!pushed.ok && pushed.code === 'E_CONFLICT') {
+          var clash = await backend.read(uid);
+          if (!clash.ok) {
+            return isTransient(clash.code)
+              ? transientFail(clash.code, clash.message || '读取云端失败')
+              : fail(clash.code, clash.message || '读取云端失败');
+          }
+          if (!clash.row) {
+            return fail('E_REMOTE_MISSING', '云端行已不存在，本次推送中止');
+          }
+          return mergeAndPush(record, candDoc, hash, clash.row);
+        }
       }
       if (!pushed.ok) {
         return isTransient(pushed.code)

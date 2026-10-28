@@ -1220,6 +1220,19 @@
         ensureCheckFlow();
         return;
       }
+      /* D22c（2026-10-29）：冲突类 paused-error 也自愈。引擎侧已把条件推送的
+         revision 分歧改为自动合并，但历史会话/极端竞态仍可能落进这个死状态
+         （「点开始检查选择保留哪一边」）。check() → autoResolveChoice 的
+         case C 自动路径（先快照再 LWW）就是它的解药，15 秒内闭环。 */
+      if (es.st === 'paused-error' && syncWiring && typeof syncWiring.describe === 'function') {
+        var snap = null;
+        try { snap = syncWiring.describe(); } catch (e) { snap = null; }
+        var errCode = snap && snap.error && snap.error.code;
+        if (errCode === 'E_CONFLICT' || errCode === 'E_MERGE_FAILED') {
+          ensureCheckFlow();
+          return;
+        }
+      }
       if (retryablePaused()) resumeSync();
     }
 
