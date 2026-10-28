@@ -203,9 +203,30 @@
       });
     }
 
-    function render() {
-      wrap.textContent = '';
-      wrap.appendChild(el('h3', { text: '同步' }));
+  /** 页面加载后恢复会话的一次性自动检查（D15：免点「开始检查」）。
+      D14 已把登录 / 验证 / 重置三个出口挂上 autoCheck；这里补的是「刷新 / 重开页面」：
+      引擎从本机恢复会话后停在 signed-in（等待首次检查），以前要用户手点。
+      只触发一次（防止后续每次 render 重复跑）；closed / reset（重新开启语义，
+      Q-31 的确认链路）与 blocked（记录形状无法判定，检查必败）不自动跑，
+      按钮保留作手动恢复入口。 */
+  var restoreAutoCheckDone = false;
+  function maybeRestoreAutoCheck(w, d) {
+    if (restoreAutoCheckDone) return;
+    if (!d || d.mode !== 'real' || d.engineState !== 'signed-in') return;
+    var bk = d.bootKind || null;
+    if (bk === 'closed' || bk === 'reset' || bk === 'blocked') return;
+    restoreAutoCheckDone = true;
+    setTimeout(function () {
+      /* 延迟期间可能已被登录出口的 autoCheck 抢先：状态已离开 signed-in 就不重复 */
+      var cur = null;
+      try { cur = w.describe(); } catch (e) { cur = null; }
+      if (cur && cur.engineState === 'signed-in') runCheck(w, null);
+    }, 0);
+  }
+
+  function render() {
+    wrap.textContent = '';
+    wrap.appendChild(el('h3', { text: '同步' }));
 
       var w = getWiring();
 
@@ -270,6 +291,9 @@
       var bootKind = d.bootKind || null;
       var inRecovery = bootKind === 'recovery';
       var bootBlocked = bootKind === 'blocked';
+
+      /* D15：恢复会话的自动检查（刷新 / 重开页面后免点「开始检查」）。 */
+      maybeRestoreAutoCheck(w, d);
 
       if (mode === 'mock') {
         wrap.appendChild(note('演示模式：数据写进内存，**不联网、不写云端**。刷新页面后回到本机模式。'));
