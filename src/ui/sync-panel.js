@@ -580,155 +580,28 @@
     }
 
     /** 按判定结果选对话框：首次同步 / 保守恢复 / 有损修复 / 重开确认。 */
-    /** D9：校验错误是否**只有**「云端版本较低」一条类（升级推送的自动确认条件）。 */
-    function onlyVersionLower(chk) {
-      var errs = (chk && chk.errors) || [];
-      if (!errs.length) return false;
-      return errs.every(function (e) {
-        return !!e && e.path === '$.schemaVersion'
-          && String(e.message || '').indexOf('版本较低') !== -1;
-      });
-    }
+    /** D9 的 onlyVersionLower 已提升为模块级（D21：autoChoiceFor 也要用它）。 */
 
     function openChoiceFor(w, chk, exportBackup, onDone) {
-      var kind = chk && chk.kind;
-      /* D19（2026-10-28）：自动定向分支一律**只写本地快照、不下载文件**。
-         以前这些分支各自调用了一次 exportBackup()，等于每次「首次同步 / 重开同步 /
-         两端内容一致」都往浏览器灌一个 JSON 文件——用户看到的就是「一直在下载
-         各种备份」。要文件的人可以在设置里手动导出，自动路径不该碰下载。 */
-      function snap(reason) {
-        try {
-          if (typeof opts.snapshotBackup === 'function') opts.snapshotBackup(reason);
-        } catch (e) { /* 快照失败不影响同步 */ }
-      }
-      /* D16（2026-10-28 用户裁定「记录丢失时默认以云端为准」）：有损修复不再弹框
-         等确认——静默导出备份（尽力而为）后直接应用修复并写回。手机浏览器上
-         程序化下载经常被拦，「先下载两份 JSON 才解锁」的门槛会把用户卡死在
-         点不动的「继续应用」上；自动路径由静默备份兜底，不再依赖下载成功。 */
-      if (kind === 'lossy') {
-        autoLossyApply(w, {
-          snapshotBackup: opts.snapshotBackup,
-          onSessionChanged: opts.onSessionChanged,
-          onDataChanged: opts.onDataChanged
-        }, onDone);
-        return;
-      }
-      /* D16：本机同步记录丢失（recovery）→ 默认以云端为准，自动 resolveRecovery('remote')。
-         remote-missing（云端被另一台设备删掉）不自动：那会违背删除意图，仍走人工。 */
-      if (kind === 'recovery' && chk.options && chk.options.remote) {
-        autoRecoveryRemote(w, {
-          snapshotBackup: opts.snapshotBackup,
-          onSessionChanged: opts.onSessionChanged,
-          onDataChanged: opts.onDataChanged
-        }, onDone);
-        return;
-      }
-      if (kind === 'lossy-applied') {
-        /* D19：修复已落到本机，只差写回云端——自动完成，不再问第二次。 */
-        autoLossyPush(w, {
-          onDataChanged: opts.onDataChanged
-        }, onDone);
-        return;
-      }
-      if (kind === 'reopen-upload') {
-        return openUploadConfirm({ wiring: w, check: chk, onDone: onDone });
-      }
-      if (kind === 'recovery' || kind === 'remote-missing') {
-        return openRecovery({ wiring: w, check: chk, exportBackup: exportBackup, onDone: onDone });
-      }
-      /* 2026-10-27 所有者口径：一端为空时不再问，直接定向——
-         A（云端空，本机有）→ 上传本机；B（本机空，云端有）→ 下载云端；
-         D（两边都空）→ 建行开同步。这三个方向都不会覆盖任何已存在的数据，
-         询问只是在增加一道没有信息量的选择题。唯一保留确认的是 C
-         （两边都有内容）：那才是真的会丢一边，必须让用户选 + 先导出。 */
-      if (chk.case === 'A' || chk.case === 'B' || chk.case === 'D') {
-        if (chk.case !== 'B' || (chk.remote && chk.remoteValid)) {
-          var autoChoice = chk.case === 'B' ? 'remote' : 'local';
-          var engine = w.getEngine();
-          engine.confirm(autoChoice).then(function (res) {
-            if (!res || !res.ok) {
-              M.toast('同步失败：' + ((res && res.message) || (res && res.code) || '未知错误'));
-              return;
-            }
-            M.toast(chk.case === 'B' ? '已下载云端数据' : '已开启同步');
-          }, function (err) {
-            M.toast('同步失败：' + (err && err.message ? err.message : '未知错误'));
-          }).then(onDone, onDone);
-          return;
+      /* D21：定向与提交统一走模块级 autoResolveChoice（app.js 的自愈循环也用它）。
+         这里只剩「必须人工」的分支：按 manual 的 kind 打开对应对话框。 */
+      autoResolveChoice(w, {
+        snapshotBackup: opts.snapshotBackup,
+        onSessionChanged: opts.onSessionChanged,
+        onDataChanged: opts.onDataChanged
+      }, function (r) {
+        if (!r) { if (onDone) onDone(r); return; }
+        if (r.manual) {
+          if (r.kind === 'reopen-upload') {
+            return openUploadConfirm({ wiring: w, check: chk, onDone: onDone });
+          }
+          if (r.kind === 'recovery' || r.kind === 'remote-missing') {
+            return openRecovery({ wiring: w, check: chk, exportBackup: exportBackup, onDone: onDone });
+          }
+          return openFirstSync({ wiring: w, check: chk, exportBackup: exportBackup, onDone: onDone });
         }
-      }
-      /* D9（2026-10-27）：云端是**旧版本**文档（v4 时代推送）时，C 不再询问——
-         旧版本过不了严格校验，「以云端为准」本来就被禁止；唯一有意义的动作就是
-         用本机当前版本接管（升级推送）。只在**全部**校验错误都是「版本较低」时自动，
-         云端真损坏（其他字段错误）仍走人工确认。覆盖前照例先导出本机备份。 */
-      if (chk.case === 'C' && chk.remote && !chk.remoteValid && onlyVersionLower(chk)) {
-        snap('auto');
-        var engineUp = w.getEngine();
-        engineUp.confirm('local').then(function (res) {
-          if (!res || !res.ok) {
-            M.toast('同步失败：' + ((res && res.message) || (res && res.code) || '未知错误'));
-            return;
-          }
-          M.toast('云端是旧版本数据，已用本机当前版本接管');
-        }, function (err) {
-          M.toast('同步失败：' + (err && err.message ? err.message : '未知错误'));
-        }).then(onDone, onDone);
-        return;
-      }
-      /* D9.2（2026-10-27）：C 但本机只是**原封未动的演示内容**——里面没有一行
-         用户数据。新设备第一次启动都会注入演示数据，不拦的话每台新设备登录
-         都要先被「两边都有内容」吓一次。直接以云端为准（照例先静默导出备份），
-         演示内容被账号数据整块替换，全程不需要任何额外操作。 */
-      if (chk.case === 'C' && chk.remoteValid && chk.localIsDemo) {
-        snap('auto');
-        var engineDemo = w.getEngine();
-        engineDemo.confirm('remote').then(function (res) {
-          if (!res || !res.ok) {
-            M.toast('同步失败：' + ((res && res.message) || (res && res.code) || '未知错误'));
-            return;
-          }
-          M.toast('已下载云端数据（本机的演示内容已替换）');
-        }, function (err) {
-          M.toast('同步失败：' + (err && err.message ? err.message : '未知错误'));
-        }).then(onDone, onDone);
-        return;
-      }
-      /* D9.1（2026-10-27）：C 但两边内容哈希相同——选哪边都不丢数据，不再问。
-         照例先静默导出账号候选备份（契约 §4.7），然后按「以本机为准」提交
-         （提交只 establishes 锚点 + 原样上传，本机数据一个字节都不变）。 */
-      if (chk.case === 'C' && chk.remoteValid && chk.sameContent) {
-        snap('auto');
-        var engineSame = w.getEngine();
-        engineSame.confirm('local').then(function (res) {
-          if (!res || !res.ok) {
-            M.toast('同步失败：' + ((res && res.message) || (res && res.code) || '未知错误'));
-            return;
-          }
-          M.toast('本机与云端内容一致，已直接继续同步');
-        }, function (err) {
-          M.toast('同步失败：' + (err && err.message ? err.message : '未知错误'));
-        }).then(onDone, onDone);
-        return;
-      }
-      /* D10（2026-10-27 用户裁定「任何设备均以本地覆盖云端」）：C 兜底——
-         两边都有真实且不同的内容，也自动以本机为准（先静默导出账号候选备份，
-         云端被覆盖的那一份可从备份找回）。至此 C 不再有人工分支：
-         「两边都有内容」的选择框退出首次同步流程。 */
-      if (chk.case === 'C' && chk.remoteValid) {
-        snap('auto');
-        var engineLWW = w.getEngine();
-        engineLWW.confirm('local').then(function (res) {
-          if (!res || !res.ok) {
-            M.toast('同步失败：' + ((res && res.message) || (res && res.code) || '未知错误'));
-            return;
-          }
-          M.toast('已以本机为准开启同步');
-        }, function (err) {
-          M.toast('同步失败：' + (err && err.message ? err.message : '未知错误'));
-        }).then(onDone, onDone);
-        return;
-      }
-      return openFirstSync({ wiring: w, check: chk, exportBackup: exportBackup, onDone: onDone });
+        if (onDone) onDone(r);
+      });
     }
 
     render();
@@ -1776,6 +1649,125 @@
   }
 
   /**
+   * D21：检查结果的**自动定向判定**（从 openChoiceFor 提炼，独立于面板存在）。
+   * 返回 'local' | 'remote' | null；null = 这类结果必须由人决定，不许自动。
+   * 判定顺序与 openChoiceFor 一致：A/D 无条件本机；B 必须云端合法才取云端；
+   * C 依次为「云端仅版本低 → 本机接管」「本机是演示内容 → 取云端」「内容相同 → 本机」
+   * 「两边都有真实内容 → 本机（LWW）」；都不匹配才落回人工。
+   */
+  function onlyVersionLower(chk) {
+    var errs = (chk && chk.errors) || [];
+    if (!errs.length) return false;
+    return errs.every(function (e) {
+      return !!e && e.path === '$.schemaVersion'
+        && String(e.message || '').indexOf('版本较低') !== -1;
+    });
+  }
+
+  function autoChoiceFor(chk) {
+    if (!chk) return null;
+    if (chk.case === 'A' || chk.case === 'D') return 'local';
+    if (chk.case === 'B') {
+      return (chk.remote && chk.remoteValid) ? 'remote' : null;
+    }
+    if (chk.case === 'C') {
+      if (chk.remote && !chk.remoteValid && onlyVersionLower(chk)) return 'local';
+      if (chk.remoteValid && chk.localIsDemo) return 'remote';
+      if (chk.remoteValid && chk.sameContent) return 'local';
+      if (chk.remoteValid) return 'local';
+      return null;
+    }
+    return null;
+  }
+
+  /**
+   * D21（2026-10-29）：检查结果的**自动定向 + 提交**，不再依赖设置面板打开。
+   *
+   * 为什么要独立成模块级函数：D16~D20 已把 A/B/C/D、lossy、recovery 全部裁定为
+   * 自动路径，但执行体一直住在设置面板里——面板没打开（或用户从不点设置）时
+   * 没有任何人执行它们。自动 confirm 一旦失败（一次网络抖动就够），引擎停在
+   * awaiting-choice 或 signed-in，而自愈循环只认 paused-error+retryable、
+   * engine.resume 对无记录的 signed-in 只回 E_NOT_ACTIVE skip——从此整条同步
+   * 链死寂，直到用户碰巧再点开设置。用户看到的就是「每次点设置都在检查云端、
+   * 都有继续选择」，而云端从来没收到过数据。
+   *
+   * @returns {Promise<{ok:boolean, manual?:boolean, kind?:string, code?, message?}>}
+   *   manual=true → 必须人工（reopen-upload / remote-missing / 恢复对话框 / 未识别），
+   *                 调用方决定是否打开面板；ok=true 已提交；ok=false 提交失败。
+   */
+  function autoResolveChoice(w, helpers, onDone) {
+    if (typeof helpers === 'function') { onDone = helpers; helpers = {}; }
+    helpers = helpers || {};
+
+    function finish(r) {
+      if (onDone) onDone(r);
+      return Promise.resolve(r);
+    }
+    var engine = w && typeof w.getEngine === 'function' ? w.getEngine() : null;
+    if (!engine) return finish({ ok: false, code: 'E_NO_ENGINE', message: '同步引擎不可用' });
+    var chk = typeof engine.getCheck === 'function' ? engine.getCheck() : null;
+    if (!chk) return finish({ ok: false, code: 'E_NO_CHECK', message: '没有可用的检查结果' });
+
+    var kind = chk.kind;
+    /* 这三个分支的执行体（autoLossyApply 等）不返回 promise、只回调 onDone——
+       用 promise 包住回调，保证 autoResolveChoice 的返回值等到真正完成才 resolve。 */
+    if (kind === 'lossy') {
+      return new Promise(function (res) {
+        autoLossyApply(w, helpers, function () { res({ ok: true, kind: 'lossy' }); });
+      }).then(finish);
+    }
+    if (kind === 'recovery' && chk.options && chk.options.remote) {
+      return new Promise(function (res) {
+        autoRecoveryRemote(w, helpers, function () { res({ ok: true, kind: 'recovery' }); });
+      }).then(finish);
+    }
+    if (kind === 'lossy-applied') {
+      return new Promise(function (res) {
+        autoLossyPush(w, helpers, function () { res({ ok: true, kind: 'lossy-applied' }); });
+      }).then(finish);
+    }
+    /* 这些必须人来：重开上传确认（违背删除意图的关闭期上传）、云端行丢失、
+       恢复对话框里「以云端为准」不可用（缺远端候选）——自动做任何一个都越权。 */
+    if (kind === 'reopen-upload' || kind === 'recovery' || kind === 'remote-missing') {
+      return finish({ ok: true, manual: true, kind: kind });
+    }
+
+    var choice = autoChoiceFor(chk);
+    if (!choice) {
+      return finish({ ok: true, manual: true, kind: 'first-sync' });
+    }
+    /* 覆盖方向才需要快照：C 类选本机会替换云端那份；B 取云端替换本机演示内容。
+       A/D（云端为空）不覆盖任何已存在数据，不需要。 */
+    if (typeof helpers.snapshotBackup === 'function'
+        && (chk.case === 'C' || (chk.case === 'B' && choice === 'remote'))) {
+      try { helpers.snapshotBackup('auto'); } catch (eBak) { /* 备份失败不阻塞定向 */ }
+    }
+    return Promise.resolve(engine.confirm(choice)).then(function (res) {
+      if (!res || !res.ok) {
+        return finish({
+          ok: false,
+          code: (res && res.code) || 'E_CONFIRM_FAILED',
+          message: (res && res.message) || '自动提交失败',
+          retryable: !!(res && res.retryable),
+          choice: choice
+        });
+      }
+      M.toast(choice === 'remote' ? '已下载云端数据' : '已开启同步');
+      if (typeof helpers.onSessionChanged === 'function') helpers.onSessionChanged(true);
+      if (typeof helpers.onDataChanged === 'function') helpers.onDataChanged();
+      return finish({ ok: true, kind: 'first-sync', choice: choice });
+    }, function (err) {
+      return finish({
+        ok: false,
+        code: (err && err.code) || 'E_CONFIRM_FAILED',
+        message: (err && err.message) || '自动提交失败',
+        retryable: !!(err && err.retryable),
+        choice: choice
+      });
+    });
+  }
+
+  /**
    * §1.8.5 + Q-32：修复结果**不自动回写云端**，这里问第二次。
    *
    * 两个出口都合法，但性质不同：
@@ -1919,6 +1911,8 @@
     openUploadConfirm: openUploadConfirm,
     autoRecoveryRemote: autoRecoveryRemote,
     autoLossyApply: autoLossyApply,
+    autoResolveChoice: autoResolveChoice,
+    autoChoiceFor: autoChoiceFor,
     STATE_TEXT: STATE_TEXT,
     CASE_TEXT: CASE_TEXT
   };

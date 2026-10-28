@@ -1012,6 +1012,60 @@
       }
     }
 
+    /* ---------------- D21：signed-in / awaiting-choice 的自动闭环 ----------------
+       D16~D20 把 A/B/C/D、lossy、recovery 全部裁定为自动路径，但执行体一直住在
+       设置面板里——面板没打开（用户从不点设置）时没有任何人执行它们。自动
+       confirm 一旦失败（一次网络抖动就够），引擎停在 awaiting-choice；而
+       engine.resume 对无记录的 signed-in 只回 E_NOT_ACTIVE skip，自愈循环只认
+       paused-error+retryable——整条同步链从此死寂，云端从未收到过数据。这就是
+       「跨设备同步从未实现过」的根因。这里补上闭环：
+       · signed-in（登录后没完成首次提交）→ 主动 check + 自动定向提交；
+       · awaiting-choice（上次自动提交失败/被打断）→ 重新定向提交；
+       · paused-error 且可重试 → 原有 resumeSync（见 tryAutoHeal）。
+       确认框开着时不抢：用户可能正在看人工对话框（reopen-upload / 恢复框）。 */
+    function engineStateNow() {
+      var eng = syncWiring && typeof syncWiring.getEngine === 'function' ? syncWiring.getEngine() : null;
+      var st = null;
+      try { st = eng && typeof eng.getState === 'function' ? eng.getState() : null; } catch (e) { st = null; }
+      return { eng: eng, st: st };
+    }
+
+    var ensureCheckBusy = false;
+    function ensureCheckFlow() {
+      if (ensureCheckBusy) return;
+      var es = engineStateNow();
+      if (!es.eng) return;
+      if (es.st !== 'signed-in' && es.st !== 'awaiting-choice') return;
+      if (root.document && typeof root.document.querySelector === 'function'
+        && root.document.querySelector('.modal-backdrop')) return;
+      var Panel = root.DayPlan && root.DayPlan.syncPanel;
+      if (!Panel || typeof Panel.autoResolveChoice !== 'function') return;
+      ensureCheckBusy = true;
+      var helpers = autoResumeHelpers();
+      Promise.resolve()
+        .then(function () {
+          if (es.st === 'awaiting-choice') {
+            /* 检查结果还在（engine.getCheck），直接重新定向提交。 */
+            return Panel.autoResolveChoice(syncWiring, helpers);
+          }
+          /* signed-in：先补一次 check（等价面板 runCheck 的引擎部分，但静默），
+             结果落盘后由同一套自动定向提交。 */
+          return Promise.resolve(es.eng.check()).then(function (chk) {
+            if (!chk || !chk.ok) {
+              return { ok: false, code: (chk && chk.code) || 'E_CHECK_FAILED', message: (chk && chk.message) || '检查失败' };
+            }
+            return Panel.autoResolveChoice(syncWiring, helpers);
+          });
+        })
+        .then(function (r) {
+          ensureCheckBusy = false;
+          if (r && r.manual) return; /* 人工类等面板，不背后抢跑 */
+          afterAutoResume(r);
+        }, function () {
+          ensureCheckBusy = false;
+        });
+    }
+
     function autoResumeRecovery() {
       var Panel = root.DayPlan && root.DayPlan.syncPanel;
       if (!Panel || typeof Panel.autoRecoveryRemote !== 'function' || !syncWiring) return;
@@ -1112,6 +1166,15 @@
           teardownSteady();
           return;
         }
+        /* D21：resume 对「登录了但没有同步记录」（boot.kind==='none'）回
+           E_NOT_ACTIVE skip——这不是失败，是首次提交还没发生过。以前这里
+           什么都不做，启动后引擎永远停在 signed-in，除非用户碰巧打开设置
+           面板（maybeRestoreAutoCheck 是唯一触发点）。现在自动补 check +
+           定向提交，同步在登录后 15s 内自己跑起来。 */
+        if (r.action === 'skip' || r.code === 'E_NOT_ACTIVE') {
+          ensureCheckFlow();
+          return;
+        }
         /* paused-error：不挂 steady。错误文案与重试入口由同步面板显示，
            这里不再弹第二个横幅，避免一个失败刷两条提示。 */
       }, function () { /* 静默：启动不该被同步拖住 */ });
@@ -1148,10 +1211,16 @@
     }
 
     function tryAutoHeal() {
-      if (!retryablePaused()) return;
       if (root.document && root.document.visibilityState === 'hidden') return;
       if (root.navigator && root.navigator.onLine === false) return;
-      resumeSync();
+      /* D21：signed-in / awaiting-choice 的死寂状态优先补闭环——
+         这两类不是错误，是「自动化没跑完」，重跑就对了。 */
+      var es = engineStateNow();
+      if (es.st === 'signed-in' || es.st === 'awaiting-choice') {
+        ensureCheckFlow();
+        return;
+      }
+      if (retryablePaused()) resumeSync();
     }
 
     if (root.setInterval) {
@@ -1742,8 +1811,17 @@
       try { hadPending = typeof store.hasPendingSave === 'function' && store.hasPendingSave(); } catch (e) { hadPending = true; }
       if (!store.noteExternalChange(key)) return;
       pauseSyncForStale();
-      if (!hadPending) { autoAdoptExternal(); return; }
-      showStaleBanner();
+      /* D21（2026-10-29）：本页有未落盘改动也不再停下来问。先把这个瞬时状态
+         快照到本机（dayplan.sync-snapshot.v1 环形 3 份），然后自动采纳磁盘上
+         的最新内容。真正丢掉的最多是另一页写入前 0.8s 内本页的编辑，而且
+         快照里查得到——「停下来要人选」的保护，代价是每个被动标签页都可能
+         变成永久停止保存的死状态（用户点过「暂不处理」后就是这样），不值。 */
+      if (hadPending) {
+        try {
+          autoResumeHelpers().snapshotBackup('tab-conflict', store.exportDocument());
+        } catch (e) { /* 快照失败照旧自动采纳 */ }
+      }
+      autoAdoptExternal();
     }
 
     window.addEventListener('storage', function (e) {
