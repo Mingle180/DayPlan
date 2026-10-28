@@ -212,15 +212,20 @@
   var restoreAutoCheckDone = false;
   function maybeRestoreAutoCheck(w, d) {
     if (restoreAutoCheckDone) return;
-    if (!d || d.mode !== 'real' || d.engineState !== 'signed-in') return;
+    if (!d || d.mode !== 'real') return;
+    /* D16：awaiting-choice（上次的选择没做完）也重跑一次检查——
+       检查会拿到全新结果，D16 的自动定向直接把它解套，无需用户手点。 */
+    if (d.engineState !== 'signed-in' && d.engineState !== 'awaiting-choice') return;
     var bk = d.bootKind || null;
     if (bk === 'closed' || bk === 'reset' || bk === 'blocked') return;
     restoreAutoCheckDone = true;
     setTimeout(function () {
-      /* 延迟期间可能已被登录出口的 autoCheck 抢先：状态已离开 signed-in 就不重复 */
+      /* 延迟期间可能已被登录出口的 autoCheck 抢先：状态已离开就不重复 */
       var cur = null;
       try { cur = w.describe(); } catch (e) { cur = null; }
-      if (cur && cur.engineState === 'signed-in') runCheck(w, null);
+      if (cur && (cur.engineState === 'signed-in' || cur.engineState === 'awaiting-choice')) {
+        runCheck(w, null);
+      }
     }, 0);
   }
 
@@ -534,15 +539,76 @@
       });
     }
 
+    /** D16 自动恢复：本机同步记录丢失时以云端为准（静默备份尽力而为，不阻塞）。 */
+    function autoRecoveryRemote(w, onDone) {
+      var engine = w.getEngine();
+      try { if (typeof opts.exportBackup === 'function') opts.exportBackup(); } catch (eBak) { /* 自动路径不被备份失败卡住 */ }
+      Promise.resolve(engine.resolveRecovery('remote')).then(function (res) {
+        if (!res || !res.ok) {
+          M.toast('未能自动恢复：' + ((res && (res.message || res.code)) || '未知错误') + '，可点「继续选择」手动处理');
+        } else {
+          M.toast('已以云端为准恢复同步');
+        }
+        if (typeof opts.onSessionChanged === 'function') opts.onSessionChanged(true);
+        if (typeof opts.onDataChanged === 'function') opts.onDataChanged();
+        if (onDone) onDone();
+      }, function (err) {
+        M.toast('未能自动恢复：' + (err && err.message ? err.message : '未知错误'));
+        if (onDone) onDone();
+      });
+    }
+
+    /** D16 自动有损修复：应用修复后的云端数据并写回，全程不弹框。
+        备份两份（本机账号副本 + 云端原始 payload）都尽力而为；
+        下载在手机上常被拦，所以引擎按 auto 标记放行下载门槛（契约 §4.6.5 例外）。 */
+    function autoLossyApply(w, onDone) {
+      var engine = w.getEngine();
+      try { if (typeof opts.exportBackup === 'function') opts.exportBackup(); } catch (eBak) { /* 同上 */ }
+      try {
+        if (typeof opts.downloadJson === 'function' && typeof engine.getLossyPayload === 'function') {
+          opts.downloadJson('remote-raw.json', engine.getLossyPayload());
+        }
+      } catch (eRaw) { /* 下载失败不阻塞自动修复 */ }
+      Promise.resolve(engine.applyLossy({ confirmed: true, downloads: [], auto: true })).then(function (res) {
+        if (!res || !res.ok) {
+          M.toast('云端数据未能自动修复：' + ((res && (res.message || res.code)) || '未知错误') + '，两端数据都还在');
+          if (onDone) onDone();
+          return;
+        }
+        if (res.requires === 'confirm-push') {
+          /* 修复已落到本机，写回云端按同一裁定自动完成 */
+          Promise.resolve(engine.confirmLossyPush()).then(function (r2) {
+            M.toast((r2 && r2.ok) ? '云端数据已自动修复并写回' : '修复已应用，写回云端失败（可稍后重试）');
+            if (onDone) onDone();
+          }, function () {
+            M.toast('修复已应用，写回云端失败（可稍后重试）');
+            if (onDone) onDone();
+          });
+          return;
+        }
+        M.toast('云端数据已自动修复并应用');
+        if (onDone) onDone();
+      }, function (err) {
+        M.toast('云端数据未能自动修复：' + (err && err.message ? err.message : '未知错误'));
+        if (onDone) onDone();
+      });
+    }
+
     function openChoiceFor(w, chk, exportBackup, onDone) {
       var kind = chk && chk.kind;
+      /* D16（2026-10-28 用户裁定「记录丢失时默认以云端为准」）：有损修复不再弹框
+         等确认——静默导出备份（尽力而为）后直接应用修复并写回。手机浏览器上
+         程序化下载经常被拦，「先下载两份 JSON 才解锁」的门槛会把用户卡死在
+         点不动的「继续应用」上；自动路径由静默备份兜底，不再依赖下载成功。 */
       if (kind === 'lossy') {
-        return openLossy({
-          wiring: w, check: chk,
-          downloadJson: opts.downloadJson,
-          exportDocument: opts.exportDocument,
-          onDone: onDone
-        });
+        autoLossyApply(w, onDone);
+        return;
+      }
+      /* D16：本机同步记录丢失（recovery）→ 默认以云端为准，自动 resolveRecovery('remote')。
+         remote-missing（云端被另一台设备删掉）不自动：那会违背删除意图，仍走人工。 */
+      if (kind === 'recovery' && chk.options && chk.options.remote) {
+        autoRecoveryRemote(w, onDone);
+        return;
       }
       if (kind === 'lossy-applied') {
         return openLossyPush({ wiring: w, onDone: onDone });

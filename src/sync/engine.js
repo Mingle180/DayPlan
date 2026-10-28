@@ -1290,13 +1290,19 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
       if (!ack || ack.confirmed !== true) {
         return rejectLossy('E_LOSSY_UNCONFIRMED', '需要先勾选确认才能继续');
       }
-      var downloads = Array.isArray(ack.downloads) ? ack.downloads : [];
-      var missing = LZ.REQUIRED_DOWNLOADS.filter(function (n) {
-        return downloads.indexOf(n) === -1;
-      });
-      if (missing.length) {
-        return rejectLossy('E_LOSSY_DOWNLOADS',
-          '必须先成功下载两份 JSON 才能继续，缺少：' + missing.join('、'));
+      /* D16（2026-10-28 用户裁定「记录丢失时默认以云端为准」）：自动路径放行
+         下载门槛——手机浏览器的程序化下载经常被拦，硬性要求会把用户卡死在
+         点不动的对话框上。auto 标记只由界面自动路径传入（先静默导出备份，
+         尽力而为）；人工对话框路径仍强制两份 JSON，契约 §4.6.5 不变。 */
+      if (!ack.auto) {
+        var downloads = Array.isArray(ack.downloads) ? ack.downloads : [];
+        var missing = LZ.REQUIRED_DOWNLOADS.filter(function (n) {
+          return downloads.indexOf(n) === -1;
+        });
+        if (missing.length) {
+          return rejectLossy('E_LOSSY_DOWNLOADS',
+            '必须先成功下载两份 JSON 才能继续，缺少：' + missing.join('、'));
+        }
       }
 
       var scope = K.userScope(uid);
