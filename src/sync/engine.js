@@ -932,6 +932,9 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
         lastSyncedAt: at
       });
       writeKv(kv, recKey, next);
+      /* D20：稳态推送成功也要更新基线 —— 这是最频繁的一条路，漏了它基线会长期
+         停在上一次四象限的时刻，删除判定就永远慢一拍。刚推上去的这份就是共同内容。 */
+      writeBase(doc);
       var out = { ok: true, skipped: false, revision: pushed.revision, hash: hash };
       if (gate.warning) out.lease = gate.warning;
       return out;
@@ -2070,6 +2073,9 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
       if (!resetCheck.ok) return fail('E_RECORD_INVALID', 'reset 记录形状非法，未写入', resetCheck.errors);
 
       writeKv(kv, recKey, reset);
+      /* D20：云端行了没了，旧基线不再代表任何共同内容 —— 留着会让下一次合并
+         拿一份早已不存在的历史去判删除。 */
+      if (typeof K.syncBaseKey === 'function') kv.remove(K.syncBaseKey(uid));
       var back = readKv(kv, recKey);
       if (!back || H.canonicalJson(back) !== H.canonicalJson(reset)) {
         return fail('E_RECORD_WRITE', '删除云端后：reset 记录回读不一致', { key: recKey });
@@ -2099,6 +2105,10 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
     function noteLocalCleared() {
       var l = getLease();
       if (l) l.release();
+      /* D20：本机已空，旧基线不再代表共同内容（云端那份还在，但用户明确选了清本机）。 */
+      if (uid && typeof K.syncBaseKey === 'function') {
+        try { kv.remove(K.syncBaseKey(uid)); } catch (e) { /* 清不掉只影响删除判定 */ }
+      }
       lastCheck = null;
       pendingLossy = null;
       state = STATES.pausedError;
