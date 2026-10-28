@@ -1901,3 +1901,23 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* 同步分组极简信息块（D11，2026-10-27）：状态 / 账号 / 最近同步合并为紧凑行，
+   标签定宽灰字、值右对齐，替代原先三个各占两行的 .field。 */
+.sync-meta {
+  margin: 4px 0 12px;
+  padding: 10px 12px;
+  background: var(--surface-weak, rgba(127, 127, 127, 0.08));
+  border-radius: var(--radius-md, 8px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sync-meta-row { display: flex; align-items: baseline; gap: 10px; font-size: 13px; }
+.sync-meta-label {
+  flex: 0 0 4.5em;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-weak, #888);
+}
+.sync-meta-value { flex: 1; min-width: 0; overflow-wrap: anywhere; }

@@ -488,7 +488,7 @@
 
     var initial = {
       title: baseValue('title', '') || '',
-      categoryId: baseValue('categoryId', opts.defaultCategoryId || 'cat_short_task'),
+      categoryId: baseValue('categoryId', opts.defaultCategoryId || (categories[0] && categories[0].id) || URGENT_ID),
       date: (item && item.kind === 'single' ? item.date : null) || opts.date || D.todayISO(),
       time: baseValue('time', opts.time || null),
       note: baseValue('note', '') || '',
@@ -1015,7 +1015,7 @@
 
     /* ---------------- 类别（迭代 8 / F-54：删除「列入紧急」，类别下拉是唯一入口） ----------------
      * 用户裁定：已有紧急周计划在编辑保存时按类别下拉的结果走（不再保留旧紧急态）。 */
-    var defaultCategoryId = opts.defaultCategoryId || (categories[0] && categories[0].id) || 'cat_short_task';
+    var defaultCategoryId = opts.defaultCategoryId || (categories[0] && categories[0].id) || URGENT_ID;
     var catOptions = ensureUrgentOption(categories);
     var catSelect = el('select', { 'aria-label': '类别' });
     catOptions.forEach(function (c) {
@@ -1198,7 +1198,7 @@
 
     /* ---------------- 类别 ---------------- */
     var defaultCategoryId = (item && item.categoryId) || opts.defaultCategoryId
-      || (categories[0] && categories[0].id) || 'cat_short_task';
+      || (categories[0] && categories[0].id) || URGENT_ID;
     var catOptions = ensureUrgentOption(categories);
     var catSelect = el('select', { 'aria-label': '类别' });
     catOptions.forEach(function (c) {

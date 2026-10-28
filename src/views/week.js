@@ -387,6 +387,16 @@
 
     function settingsOf(doc) { return (doc && doc.settings) || {}; }
 
+    /* 默认类别可能已被删除（四十八轮起）：兜底必须落在仍然存在的类别上。 */
+    function defaultCategoryIdOf(doc) {
+      var cats = (doc && doc.categories) || [];
+      var preferred = settingsOf(doc).defaultCategoryId;
+      for (var i = 0; i < cats.length; i += 1) {
+        if (cats[i] && cats[i].id === preferred) return preferred;
+      }
+      return cats[0] ? cats[0].id : null;
+    }
+
     function weekDays(monday) {
       var out = [];
       for (var i = 0; i < 7; i += 1) out.push(D.addDays(monday, i));
@@ -1139,7 +1149,7 @@
           item: item,
           occurrence: isSeriesOccurrence ? occ : null,
           categories: doc.categories || [],
-          defaultCategoryId: settingsOf(doc).defaultCategoryId || 'cat_short_task',
+          defaultCategoryId: defaultCategoryIdOf(doc),
           allowScope: isSeriesOccurrence
         });
       } catch (e) {
@@ -1242,7 +1252,7 @@
           weekStart: monday,
           date: monday,
           categories: doc.categories || [],
-          defaultCategoryId: settingsOf(doc).defaultCategoryId || 'cat_short_task'
+          defaultCategoryId: defaultCategoryIdOf(doc)
         });
       } catch (e) { form = null; }
       if (!form || !form.element) { M.toast('周计划表单尚未就绪'); return; }

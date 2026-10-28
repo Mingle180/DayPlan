@@ -21,6 +21,27 @@
 
   var VIEW_MODES = ['month', 'week', 'day'];
 
+  /**
+   * 启动时窥探持久凭据里的会话 uid（只读：不刷新令牌、不写盘）。
+   *
+   * Store 创建时要用它解析活动指针。拿不到 uid，`resolveBootScope` 只能按
+   * 契约 §2.2 把 `user:<uid>` 回落成 guest 并写回——用户看到的现象是
+   * 「刷新一下同步就断了、还让你重新选择」（Q-28 实测）。
+   * 真正的会话恢复仍然只有 wiring.restore() 一条路；它失败时由装配层回落 guest。
+   */
+  function peekBootSessionUid() {
+    var S = root.DayPlan.session;
+    var W = root.DayPlan.syncWiring;
+    if (!S || typeof S.peekPersistedUserId !== 'function') return null;
+    var storage = null;
+    try { storage = typeof Store.detectLocalStorage === 'function' ? Store.detectLocalStorage() : null; } catch (e) { storage = null; }
+    if (!storage) return null;
+    var kv = null;
+    try { kv = (W && typeof W.adaptKv === 'function') ? W.adaptKv(storage) : null; } catch (e) { kv = null; }
+    if (!kv) return null;
+    try { return S.peekPersistedUserId(kv); } catch (e) { return null; }
+  }
+
   function boot() {
     /* 迭代 7（F-47）：先注入节假日判定，再做任何展开/渲染（顺序敏感） */
     wireHolidayResolver();
@@ -63,7 +84,11 @@
     /* ---------------- store ---------------- */
 
     var store = Store.createStore({
-      seedFactory: function () { return Seed.createDemoDocument(); }
+      seedFactory: function () { return Seed.createDemoDocument(); },
+      /* 有可恢复的凭据就把 uid 交给 Store：否则指针 `user:<uid>` 会在启动时
+         被当成「未登录」回落成 guest（契约 §2.2 的回落规则本身是对的，
+         错的是启动时没告诉 Store 会话还在）。 */
+      sessionUid: peekBootSessionUid()
     });
 
     var loadResult = store.load();
@@ -627,6 +652,13 @@
         if (animate) targetRoot.style.visibility = 'hidden';
       }
       if (changed && prevRoot && prevRoot !== targetRoot) prevRoot.hidden = true;
+      /* 启动恢复档位（state.viewMode 已持久化）时 changed=false，上面那行不会跑；
+         而 index.html 里只有月 / 周两个容器带 hidden，day-panel 默认可见——
+         于是「刷新时停在周 / 月档」会同时挂出两套视图（下方多出一个空白日视图）。
+         这里按最终状态统一收口：目标之外的容器一律隐藏，幂等。 */
+      [els.monthRoot, els.weekRoot, els.dayPanel].forEach(function (r) {
+        if (r && r !== targetRoot) r.hidden = true;
+      });
 
       if (mode === 'month' && instances.month) {
         instances.month.setDate(state.viewDate, { notify: false });
@@ -712,11 +744,475 @@
       setViewMode(key, { animate: true });
     }
 
+    /* ---------------- 同步装配（Phase 2 骨架，默认 off，绝不自动联网） ----------------
+       mode 由外部配置决定：window.DAYPLAN_SYNC = { mode:'mock'|'real', config:{url,anonKey} }。
+       默认 off —— 不登录、不建 engine、不产生任何请求。
+       mock 只用于界面自测（数据进内存）；real 缺 config 会由 wiring 抛 E_NOT_CONFIGURED，
+       这里接住并如实告知，**不降级**。 */
+    var syncWiring = null;
+
+    /* 真实连接配置：只存 url 与 publishable key（两者都是浏览器可见的公开值），
+       绝不存密码 —— 密码只在登录时用一次，不落盘。 */
+    var CONN_KEY = 'dayplan.sync.conn.v1';
+
+    /* 默认项目（2026-10-27 所有者口径）：用户不该被要求理解「Project URL /
+       publishable key」这两个概念——这是部署者的知识，不是使用者的。
+       没连过自己项目时，登录直接用这份默认配置；publishable key 本来就是
+       设计为放进浏览器的公开值（真正的权限边界在数据库 RLS）。想换成自己的
+       项目仍走「连接 Supabase…」，连过的优先用连过的。 */
+    var DEFAULT_SYNC_CONN = {
+      url: 'https://ceqcgiekjrgrtzsxvwpk.supabase.co',
+      anonKey: 'sb_publishable_FUQ6sA9gZjcrqdXMuDzifg_T0MfxNjl'
+    };
+
+    function connStorage() {
+      var s = null;
+      try { s = store.getStorage(); } catch (e) { s = null; }
+      return s;
+    }
+
+    function readConn() {
+      var s = connStorage();
+      if (!s) return null;
+      try {
+        var raw = s.getItem(CONN_KEY);
+        if (!raw) return null;
+        var o = JSON.parse(raw);
+        if (!o || typeof o.url !== 'string' || typeof o.anonKey !== 'string') return null;
+        if (o.url === '' || o.anonKey === '') return null;
+        return { url: o.url, anonKey: o.anonKey };
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function writeConn(conn) {
+      var s = connStorage();
+      if (!s) throw new Error('本机存储不可用，无法保存连接配置');
+      s.setItem(CONN_KEY, JSON.stringify({ url: String(conn.url || ''), anonKey: String(conn.anonKey || '') }));
+    }
+
+    function clearConn() {
+      var s = connStorage();
+      if (!s) return;
+      try { s.removeItem(CONN_KEY); } catch (e) { /* 删不掉也不影响内存态 */ }
+    }
+
+    /**
+     * 把 Store 的活动数据源切到某个作用域并重绘（契约 §2.2：activityDoc 由指针决定）。
+     * 切换失败不抛：调用方（引擎/会话流程）要能继续走完并如实告知用户。
+     * @returns {{ok:boolean, code?:string, id?:string}}
+     */
+    function switchStoreScope(scopeId, uid) {
+      if (uid) store.setSessionUid(uid);
+      var r = store.switchScope(scopeId, uid ? { sessionUid: uid } : undefined);
+      if (r && r.ok) {
+        onDataChanged();
+        if (syncSectionInst && typeof syncSectionInst.render === 'function') {
+          try { syncSectionInst.render(); } catch (e) { /* 面板已关闭 */ }
+        }
+      }
+      return r || { ok: false, code: 'E_SCOPE_SWITCH' };
+    }
+
+    /**
+     * 确认成功后的切源（Q-29）。引擎只负责写指针；不在这里切 Store 的话，
+     * 界面会继续写游客键：账号副本零更新，下一次推送还会把游客内容推到云端 uid 行。
+     * 这是「数据看着在、其实落错地方」那类最难查的缺陷，所以切源失败必须显式告警，
+     * 不能让用户以为一切正常继续编辑。
+     */
+    function onScopeChangedFromSync(scopeId) {
+      var uid = null;
+      try {
+        var s = syncWiring && typeof syncWiring.getSession === 'function' ? syncWiring.getSession() : null;
+        uid = s && typeof s.getUserId === 'function' ? s.getUserId() : null;
+      } catch (e) { uid = null; }
+      var r = switchStoreScope(scopeId, uid);
+      if (r.ok) {
+        /* D11（2026-10-27）：登录切源后同样按新作用域文档重建完成台，
+           否则上一作用域（guest）的台内条目会残留在界面上。 */
+        syncDockFromDoc(store.getState());
+      }
+      if (!r.ok) {
+        warn('danger',
+          '同步已完成，但界面没能切换到账号数据（' + (r.code || '未知原因') + '）。'
+          + '先不要继续编辑——接下来的改动可能落到游客数据里。请刷新页面后重试。',
+          [{ label: '重新加载', onClick: function () { if (root.location) root.location.reload(); } }]);
+      }
+      return r;
+    }
+
+    /** D9：文档被同步路径替换后，完成台按 doc.finishDock 整体重建（幂等，一致时跳过）。 */
+    function syncDockFromDoc(doc) {
+      try {
+        var dv = instances.day;
+        var d = dv && typeof dv.finishDock === 'function' ? dv.finishDock() : null;
+        if (d && typeof d.replace === 'function' && doc && Array.isArray(doc.finishDock)) {
+          d.replace(doc.finishDock);
+        }
+      } catch (e) { /* 非关键状态：重建失败不影响文档应用 */ }
+    }
+
+    function buildSyncWiring() {
+      var cfg = root.DAYPLAN_SYNC && typeof root.DAYPLAN_SYNC === 'object' ? root.DAYPLAN_SYNC : {};
+      var mode = cfg.mode === 'mock' || cfg.mode === 'real' ? cfg.mode : 'off';
+      var config = cfg.config;
+      if (mode === 'real' && !config) {
+        /* 兜底：调用方只给了 mode 没带 config 时，从连接记录补齐。
+           「点过连接」本身就是 opt-in 记录（见下方 off 分支同款逻辑）。 */
+        var savedConn = readConn();
+        if (savedConn) config = savedConn;
+      }
+      if (mode === 'off') {
+        // 没有显式指定模式时，看是否连接过真实项目。连接过就进 real ——
+        // 「点过连接」本身就是 opt-in 记录，不需要再让用户每次手动开。
+        var conn = readConn();
+        if (conn) {
+          mode = 'real';
+          config = conn;
+        }
+      }
+      if (mode === 'off') { teardownSteady(); syncWiring = null; return null; }
+      // 重建 wiring 意味着旧的 engine 作废，挂在它上面的 steady 必须一起拆掉
+      teardownSteady();
+      try {
+        syncWiring = root.DayPlan.syncWiring.createWiring({
+          mode: mode,
+          storage: store.getStorage(),
+          getLocalDoc: function () { return store.getState(); },
+          setLocalDoc: function (doc) { store.mutate(function () { return doc; }); syncDockFromDoc(doc); },
+          config: config,
+          demoUid: cfg.demoUid,
+          fetchImpl: cfg.fetchImpl,
+          /* 只有 real 模式由这里接管切源：mock 的 kv 是内存（persistMock 关闭时），
+             指针与账号副本都在内存里，而 Store 读的是真 storage——接上去会让界面
+             切到一份并不存在的账号副本。mock 走引擎原来的单文档替换路径。 */
+          onScopeChanged: mode === 'real' ? onScopeChangedFromSync : undefined,
+          /* 四象限拉取会把账号副本换掉。只有界面**正停在这个账号**时才换内容；
+             指针还是 guest 时什么都不做——那时必须继续显示游客数据（§4.6.6）。 */
+          onDocApplied: mode === 'real' ? function (scopeId, doc) {
+            if (store.getScopeId() === scopeId) {
+              store.mutate(function () { return doc; });
+              /* D9（2026-10-27）：远端文档可能带来新的完成台快照——整体重建台内条目。 */
+              syncDockFromDoc(doc);
+            }
+          } : undefined
+        });
+      } catch (e) {
+        syncWiring = null;
+        warn('danger',
+          '同步未能启用：' + (e && e.message ? e.message : '未知错误') +
+          (e && e.code ? '（' + e.code + '）' : ''),
+          [{ label: '我知道了', onClick: function () { /* 仅关闭 */ } }]);
+      }
+      return syncWiring;
+    }
+
+    buildSyncWiring();
+
+    /* ---------------- 稳态同步（首次同步之后的持续推送/拉取） ----------------
+       steady 只在引擎进入 syncing 后才真正工作：它订阅 store，数据一变就防抖推一次；
+       切回页面时拉一次。checking / paused-error 下一律不发请求。 */
+    var syncSteady = null;
+    var syncSectionInst = null;   // 设置页「同步」分组的实例，用于状态实时重渲染
+    var lastSyncStatus = null;    // steady 被拆掉后仍要能显示"最后一次同步结果"
+    var conflictNotified = false; // 冲突横幅每条会话只弹一次，避免连续编辑刷屏
+
+    function teardownSteady() {
+      if (syncSteady) {
+        syncSteady.dispose();
+        syncSteady = null;
+      }
+    }
+
+    function attachSteady() {
+      teardownSteady();
+      conflictNotified = false;   // 新会话允许再提示一次冲突
+      if (!syncWiring) return null;
+      var mod = root.DayPlan && root.DayPlan.syncSteady;
+      if (!mod || typeof mod.createSteady !== 'function') return null;
+      var engine = null;
+      try { engine = syncWiring.getEngine(); } catch (e) { engine = null; }
+      if (!engine || typeof engine.push !== 'function') return null;
+      try {
+        syncSteady = mod.createSteady({
+          engine: engine,
+          subscribe: function (fn) { return store.subscribe(fn); },
+          onStatus: function (st) {
+            lastSyncStatus = st;
+            // 推送是异步完成的：面板若开着，必须重渲染，否则用户看到的永远是打开那一刻的旧状态
+            if (syncSectionInst && typeof syncSectionInst.render === 'function') {
+              try { syncSectionInst.render(); } catch (e) { /* 面板已关闭 */ }
+            }
+            /* 冲突是唯一一种「用户必须立刻知道」的失败：引擎会转 paused-error，
+               steady 从此不再推送，本机继续编辑也上不了云。不弹一次提示，
+               用户会以为一切正常，直到换设备才发现数据没过去。 */
+            if (st && st.kind === 'push' && st.ok === false && st.code === 'E_CONFLICT'
+                && !conflictNotified) {
+              conflictNotified = true;
+              warn('danger',
+                '云端已被另一台设备改过，这次的改动没有上传（你的数据都还在本机，没有被覆盖）。'
+                + '请到「同步」里点「开始检查」，选择保留哪一边。',
+                [
+                  { label: '去同步设置', onClick: function () { SettingsView.openSettings(settingsOpts); } },
+                  { label: '稍后再说', onClick: function () { /* 仅关闭 */ } }
+                ]);
+            }
+          }
+        });
+      } catch (e) {
+        syncSteady = null;
+      }
+      return syncSteady;
+    }
+
+    /**
+     * 登录 / 刷新后的四象限（契约 §1.9、§4.6）。
+     *
+     * 引擎只把状态从 `checking` 推进到某个确定值，**界面怎么表现由这里决定**：
+     *   none / pulled / pushed → 挂上稳态同步（此时才允许推送）
+     *   conflict               → 停下来让用户选，绝不自动合并或覆盖
+     *   paused-error 等        → 不挂稳态，面板显示错误与重试入口
+     *
+     * 为什么不能一口气进 syncing：那样会跳过「本地改没改 × 远端变没变」，
+     * 两端都改过时先推的一方必然撞一次 E_CONFLICT（Q-28）。
+     */
+    function resumeSync() {
+      if (!syncWiring || typeof syncWiring.resume !== 'function') return Promise.resolve(null);
+      var p = Promise.resolve(syncWiring.resume());
+      p.then(function (r) {
+        if (!r) return;
+        if (r.ok && (r.action === 'none' || r.action === 'pulled' || r.action === 'pushed')) {
+          attachSteady();
+          if (r.action === 'pulled') M.toast('云端有更新，已下载到本机');
+          return;
+        }
+        if (r.action === 'conflict') {
+          warn('danger',
+            '本机和云端都改过，这次没有自动合并。请到「同步」里点「开始检查」，选择保留哪一边。',
+            [
+              { label: '去同步设置', onClick: function () { SettingsView.openSettings(settingsOpts); } },
+              { label: '稍后再说', onClick: function () { /* 仅关闭 */ } }
+            ]);
+          return;
+        }
+        /* 记录丢失/损坏，或云端行已经不在了：这是「需要人工判断」的一类，
+           不是网络失败。不告诉用户的话，界面看起来只是「同步暂停」，
+           而改天换设备才会发现两边根本不是一份数据。 */
+        if (r.action === 'recovery') {
+          var bubble = r.kind === 'remote-missing'
+            ? '云端已经没有这个账号的数据了（可能是在别的设备上删掉了）。本机这一份还在，'
+              + '这次没有自动上传。请到「同步」里决定是否重新上传。'
+            : '这台设备曾经同步过，但本机保存的同步记录丢失或损坏了。为了不让两边互相覆盖，'
+              + '这次没有自动同步。请到「同步」里选择保留哪一边。';
+          warn('danger', bubble, [
+            { label: '去同步设置', onClick: function () { SettingsView.openSettings(settingsOpts); } },
+            { label: '稍后再说', onClick: function () { /* 仅关闭 */ } }
+          ]);
+          return;
+        }
+        /* 租约被另一个标签页占着（§5.4）：这次没有上传，但同步是开着的，
+           改动仍在本地。挂上稳态并立刻排一次重试——不排的话，这次改动要等到
+           用户下一次编辑才会被推上去。用 toast 而不是横幅：它会自愈，不值得占一条警告。 */
+        if (r.action === 'leased') {
+          attachSteady();
+          if (syncSteady) syncSteady.schedule();
+          M.toast('另一个标签页正在同步，这次改动稍后自动重试');
+          return;
+        }
+        /* 有损修复（§1.8）：停在这里是**故意的**，不是故障。
+           绝不能挂稳态——一旦挂上，用户下一次编辑就会把「差一点被丢掉的」修复结果
+           推上云，而云端那份原件也就没了。 */
+        if (r.action === 'lossy') {
+          teardownSteady();
+          var pv = (r.preview && r.preview.counts) || {};
+          var n = r.preview && typeof r.preview.total === 'number' ? r.preview.total : 0;
+          warn('danger',
+            '云端这份数据里有会被丢弃或改写的条目（' + n + ' 处'
+            + (pv.monthPlans ? '，其中月计划 ' + pv.monthPlans + ' 条' : '') + '），'
+            + '这次没有自动应用，本机一个字节都没动。请到「同步」里查看预览并决定。',
+            [
+              { label: '去同步设置', onClick: function () { SettingsView.openSettings(settingsOpts); } },
+              { label: '稍后再说', onClick: function () { /* 仅关闭 */ } }
+            ]);
+          return;
+        }
+        /* 修复结果还没写回云端：不稳态同步 = 不上传，这是对的。提示一次即可。 */
+        if (r.action === 'lossy-push-pending') {
+          teardownSteady();
+          return;
+        }
+        /* 关闭同步期间攒下的改动，重新开启时要先问（§4.5.3）。面板会摆出确认框，
+           这里只负责别把稳态挂上去。 */
+        if (r.action === 'upload-confirm') {
+          teardownSteady();
+          return;
+        }
+        /* paused-error：不挂 steady。错误文案与重试入口由同步面板显示，
+           这里不再弹第二个横幅，避免一个失败刷两条提示。 */
+      }, function () { /* 静默：启动不该被同步拖住 */ });
+      return p;
+    }
+
+    // 切回页面就拉一次：别的设备可能已经改过。失败静默，不弹窗。
+    if (root.document && typeof root.document.addEventListener === 'function') {
+      root.document.addEventListener('visibilitychange', function () {
+        if (!syncSteady || root.document.visibilityState !== 'visible') return;
+        syncSteady.pullNow();
+      });
+    }
+    if (root.addEventListener) {
+      root.addEventListener('focus', function () {
+        if (syncSteady) syncSteady.pullNow();
+      });
+    }
+
+    /* ---------------- 租约续期与释放（契约 §5.4） ----------------
+       引擎只在「云端写之前」懒续期（在那里续期才有意义）；页面长时间不写就没人续，
+       于是 30s 后自然过期。这一层补上「持有期间每 10s 续一次」，并在页面隐藏时跳过
+       （§5.4：页面隐藏时停止续期）、页面卸载时释放。 */
+    function currentLease() {
+      if (!syncWiring || typeof syncWiring.getLease !== 'function') return null;
+      try { return syncWiring.getLease(); } catch (e) { return null; }
+    }
+
+    if (root.setInterval) {
+      var leaseTick = root.setInterval(function () {
+        if (root.document && root.document.visibilityState === 'hidden') return;
+        var l = currentLease();
+        if (!l || typeof l.renewIfNeeded !== 'function') return;
+        try { l.renewIfNeeded(); } catch (e) { /* 续不上就等过期，正确性不依赖它 */ }
+      }, 10000);
+      if (leaseTick && typeof leaseTick.unref === 'function') leaseTick.unref();
+    }
+
+    root.addEventListener('pagehide', function () {
+      var l = currentLease();
+      if (l && typeof l.release === 'function') {
+        try { l.release(); } catch (e) { /* 卸载路径不抛 */ }
+      }
+    });
+
+    // 恢复上次的登录态。失败（无凭据 / 过期 / 网断）一律静默回到未登录，
+    // 不打扰启动：同步是可选功能，启动不该被它拦住。
+    if (syncWiring && typeof syncWiring.restore === 'function') {
+      Promise.resolve(syncWiring.restore()).then(function (r) {
+        if (r && r.ok) {
+          if (r.uid) store.setSessionUid(r.uid);
+          /* 有有效 active 记录时引擎停在 checking（Q-28）：先按四象限判定，
+             判完再决定挂不挂稳态。直接 attachSteady 会让 steady 在
+             checking 下空转，界面停在「正在检查」再也不动。 */
+          if (r.needsCheck) {
+            resumeSync();
+          } else if (r.bootKind === 'blocked') {
+            /* 记录形状无法判定：面板负责说明与出口，不挂稳态（挂了也只会在
+               第一次推送时得到一个 E_BAD_STATE，徒增一条看不懂的错误）。 */
+          } else {
+            attachSteady();
+          }
+          return;
+        }
+        /* 凭据不可用 = 没有会话：契约 §2.2 要求指针回落 guest 并写回。
+           Store 启动时按「窥探到的 uid」进了账号作用域，这里必须纠正——
+           否则未登录的页面会继续往某个账号的副本里写。 */
+        store.setSessionUid(null);
+        if (store.getScopeId() !== 'guest') switchStoreScope('guest');
+      }, function () {
+        store.setSessionUid(null);
+        if (store.getScopeId() !== 'guest') switchStoreScope('guest');
+      });
+    }
+
+
     /* ---------------- 全局设置入口（迭代 4：侧栏月历已删除，见 S26 / ADR-26） ---------------- */
 
     settingsOpts = {
       store: store,
       onDataChanged: onDataChanged,
+      getWiring: function () { return syncWiring; },
+      getConn: function () { return readConn(); },
+      /* 面板的「登录并同步」：没连过自己项目时，用内置默认项目直接登录，
+         不再要求用户理解 URL / key（2026-10-27 所有者口径）。 */
+      getDefaultConn: function () { return DEFAULT_SYNC_CONN; },
+      /* 设置页读状态用。steady 被拆掉（退出登录）后回退到内存里最后一次结果，
+         免得刚退出就看到「还没有同步动作」这种误导性文案。 */
+      getSteady: function () {
+        if (syncSteady) return syncSteady;
+        return {
+          getStatus: function () { return lastSyncStatus; },
+          pushNow: null,
+          pullNow: null
+        };
+      },
+      registerSyncSection: function (inst) { syncSectionInst = inst; },
+      /* D12（2026-10-27）：onSyncStopped 钩子已随「关闭同步」按钮一并移除——
+         面板不再有停用同步的入口，稳态只由 onDataCleared / onSessionChanged 摘除。 */
+      /* 清空本机之后（T-R03）：清空只影响当前作用域，云端那份还在。
+         停同步是必须的——否则下一次编辑会走 push()，把空文档推上云端。 */
+      onDataCleared: function () {
+        teardownSteady();
+        lastSyncStatus = null;
+        if (!syncWiring || typeof syncWiring.noteLocalCleared !== 'function') return;
+        Promise.resolve(syncWiring.noteLocalCleared()).then(function () {}, function () {});
+      },
+      /* 登录/退出成功后由面板通知：登录后要挂上稳态同步，退出后必须摘掉。
+         同时把会话交给 Store——账号作用域的闸门认的是「当前会话」，
+         而 Store 创建时拿到的只是启动那一刻的快照。 */
+      onSessionChanged: function (signedIn) {
+        var uid = null;
+        try {
+          uid = (syncWiring && typeof syncWiring.describe === 'function') ? syncWiring.describe().uid : null;
+        } catch (e) { uid = null; }
+        store.setSessionUid(signedIn ? uid : null);
+        if (signedIn) {
+          /* 登录只建立会话（§4.6）。本机若有该账号的有效 active 记录，
+             必须先走四象限，不能直接开始推送。记录丢失/损坏时同样停在
+             checking，由 resumeSync 转成恢复流程。 */
+          var needsCheck = false;
+          var bootKind = null;
+          try {
+            var eng = syncWiring && typeof syncWiring.getEngine === 'function' ? syncWiring.getEngine() : null;
+            needsCheck = !!eng && eng.getState() === 'checking';
+            var boot = eng && typeof eng.getBoot === 'function' ? eng.getBoot() : null;
+            bootKind = boot ? boot.kind : null;
+          } catch (e) { needsCheck = false; }
+          if (needsCheck) {
+            resumeSync();
+          } else if (bootKind === 'blocked') {
+            /* 与启动恢复同款：面板负责说明，不挂稳态。 */
+          } else {
+            attachSteady();
+          }
+        } else {
+          teardownSteady();
+          /* 退出登录 → 活动数据源回 guest（契约 §2.2）。不切的话，界面继续写
+             账号副本：用户以为在看本机数据，实际改的是一个已登出账号的副本，
+             而且这些改动在下次登录前不会被推送。 */
+          if (store.getScopeId() !== 'guest') switchStoreScope('guest');
+          /* D11（2026-10-27）：完成台条目属于文档数据（finishDock 随作用域走）。
+             退出后不重建的话，账号的台内条目（含运行中的计时）会留在界面上，
+             甚至被 persist 写进 guest 文档——跨账号串数据。以 guest 文档为准重建。 */
+          syncDockFromDoc(store.getState());
+        }
+      },
+      onConnectReal: function (conn) {
+        writeConn(conn);
+        /* config 必须一起带上：buildSyncWiring 的 real 分支直接用 cfg.config，
+           只给 mode 不给 config，createWiring 会抛 E_NOT_CONFIGURED，
+           wiring 建不出来 → 面板渲染回「本机模式」，用户连接成功却看不到登录入口
+           （2026-10-26 e2e 实测抓到，.probe/debug-connect2.cjs）。 */
+        root.DAYPLAN_SYNC = { mode: 'real', config: conn };
+        buildSyncWiring();
+        return syncWiring;
+      },
+      onEnableDemoSync: function () {
+        root.DAYPLAN_SYNC = { mode: 'mock' };
+        buildSyncWiring();
+      },
+      onDisableDemoSync: function () {
+        root.DAYPLAN_SYNC = { mode: 'off' };
+        buildSyncWiring();
+      },
       /* 2026-10-22 二十三轮：响铃开关移入设置后，立即同步到已创建的完成台实例。 */
       onFinishSoundChange: function (on) {
         var dv = instances.day;
@@ -1055,6 +1551,92 @@
       store.saveNow();
     });
 
+    // 契约 §5.2 检测点 2：其他标签页改动了当前数据键 → 立即暂停本页写入，
+    // 避免用本页的旧快照覆盖对方。
+    // 只停本地是不够的：§5.2「冲突处理」第 3 条要求**同步同时保持 paused-error**。
+    // 只停本地、不停同步，会得到最坏的一种组合——本页不再落盘，却把内存里的旧内容
+    // 推上云端，等于用旧快照覆盖了两个标签页的内容。
+    var staleBanner = null;
+
+    /** 覆盖 / 重载之前先导出一份（§5.2，导出失败就不做不可逆动作）。 */
+    function exportBeforeResolve(prefix) {
+      var payload = store.exportDocument();
+      var name = prefix + '-' + D.todayISO().replace(/-/g, '') + '-'
+        + new Date().toTimeString().slice(0, 5).replace(':', '') + '.json';
+      SettingsView.downloadJson(name, payload);
+    }
+
+    function pauseSyncForStale() {
+      if (!syncWiring || typeof syncWiring.noteLocalStale !== 'function') return;
+      try {
+        syncWiring.noteLocalStale('其他页面改动了本地数据，同步已暂停');
+      } catch (e) { /* 同步层不可用时无所谓：本来就没在同步 */ }
+    }
+
+    function showStaleBanner() {
+      if (staleBanner) return;   // 一次只摆一条，避免连续编辑把横幅堆成墙
+      staleBanner = warn('danger',
+        '另一个标签页改动了数据，本页已停止保存与同步（避免互相覆盖）。请选择如何处理：',
+        [
+          {
+            label: '导出后重新加载',
+            onClick: function () {
+              staleBanner = null;
+              var backedUp = true;
+              try { exportBeforeResolve('dayplan-冲突前备份'); } catch (e) { backedUp = false; }
+              /* 导出失败也要让用户能走：这一项只丢弃本页未落盘的修改，
+                 磁盘上那份（对方写的）不会被毁掉。 */
+              var r = store.resolveStale('reload');
+              if (!r.ok) { showStaleBanner(); M.toast('重新加载失败：' + (r.error || '未知错误')); return; }
+              resumeSync();
+              M.toast(backedUp ? '已重新载入磁盘上的最新内容' : '已重新载入，但导出失败：本页修改已丢弃');
+            }
+          },
+          {
+            label: '用本页覆盖',
+            onClick: function () {
+              staleBanner = null;
+              /* 覆盖会毁掉对方那一份，所以先导出。导出失败就取消覆盖（fail closed）——
+                 宁可这次不同步，也不在用户不知情时删数据。 */
+              try {
+                exportBeforeResolve('dayplan-覆盖前备份');
+              } catch (e) {
+                showStaleBanner();
+                M.toast('导出失败，已取消覆盖');
+                return;
+              }
+              var r = store.resolveStale('overwrite');
+              if (!r.ok) { showStaleBanner(); M.toast('覆盖失败：' + (r.error || '未知错误')); return; }
+              resumeSync();
+              M.toast('已用本页内容覆盖（对方那份已备份到本机存储）');
+            }
+          },
+          {
+            label: '暂不处理',
+            onClick: function () { staleBanner = null; }   // 允许下一次改动时再提示
+          }
+        ]);
+    }
+
+    function onExternalChange(key) {
+      if (!store.noteExternalChange(key)) return;
+      pauseSyncForStale();
+      showStaleBanner();
+    }
+
+    window.addEventListener('storage', function (e) {
+      if (e && typeof e.key === 'string') onExternalChange(e.key);
+    });
+
+    /* 检测点 3（写后回读不一致）不会触发 storage 事件——它是本页自己写坏的。
+       在每次渲染/冲刷之后补一次检查，让两条路径落到同一个处置上。 */
+    store.subscribe(function () {
+      if (store.isStale() && !staleBanner) {
+        pauseSyncForStale();
+        showStaleBanner();
+      }
+    });
+
     /* ---------------- 初始化渲染 ---------------- */
 
     refreshTodayChip();
@@ -1072,7 +1654,26 @@
       goDay: goDay,
       goWeek: goWeek,
       goMonth: goMonth,
-      openSettings: function () { SettingsView.openSettings(settingsOpts); }
+      openSettings: function () { SettingsView.openSettings(settingsOpts); },
+      /* 同步线的只读快照：排障时最想知道的是「引擎停在哪一步」，
+         而它不在 DOM 里（状态行只显示一部分）。只读，不提供任何写入口。 */
+      sync: function () {
+        if (!syncWiring) return { mode: 'off', engineState: null, uid: null, error: null, steady: false };
+        var d = null;
+        try { d = syncWiring.describe(); } catch (e) { d = null; }
+        return {
+          mode: d && d.mode,
+          uid: d && d.uid,
+          sessionState: d && d.sessionState,
+          engineState: d && d.engineState,
+          bootKind: d && d.bootKind,
+          /* 租约（§5.4）。多标签问题在界面上几乎不可见，
+             排障时必须能一眼看出「本页到底有没有拿着租约、被谁挡着」。 */
+          lease: (d && d.lease) || null,
+          error: d && d.error,
+          steady: !!syncSteady
+        };
+      }
     };
 
     // 暴露后续可观测的错误

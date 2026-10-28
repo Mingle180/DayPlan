@@ -515,9 +515,13 @@
       }
     }
 
-    /* ---------------- 刷新持久化（用户裁定 2026-10-19） ----------------
+    /* ---------------- 刷新持久化（用户裁定 2026-10-19；D9 扩 2026-10-27） ----------------
      * 原先「计时状态与用时仅内存、不落盘」；用户要求刷新后完成台条目与计时都保留，
      * 故改为写入 UI 状态（`dayplan.ui.v1.finishDock`，非关键状态，不入事项库）。
+     *
+     * D9（2026-10-27）起落点升级：快照写入**文档字段 `doc.finishDock`**
+     * （store.setFinishDock），随文档参与多设备同步（用户裁定：完成台也要同步）；
+     * 旧 UI 状态键只作为无 setFinishDock 环境（独立测试 / 旧注入）的降级落点。
      *
      * 只存**状态快照**，不存派生读数：`running` 为真时真实读数 = elapsedMs/remainingMs
      * + (now − lastTs)，所以即使两次落盘之间隔了很久，恢复后依然精确——不需要按 tick 写盘。 */
@@ -525,6 +529,54 @@
     var DOCK_MAX = 20;
     var MODE_IDS = ['choose', 'stopwatch', 'countdown', 'pomodoro'];
     var restoring = false;
+
+    /* D14：运行中条目的读数容差。远端回放的快照最多落后一个同步周期
+       （拉取间隔 + 往返延迟），推算读数差在这个范围内视为同一状态。 */
+    var RUN_DERIVE_TOLERANCE_MS = 5000;
+
+    function numOr0(v) { return typeof v === 'number' && isFinite(v) ? v : 0; }
+
+    /**
+     * 快照与当前台是否**语义一致**（D14）。不能直接 JSON 比较：
+     * lastTs/elapsedMs 每秒都在变，全等比较会让运行中的计时在每次
+     * 拉取回放时都被判「不一致」→ 整台重建 → 界面闪烁。
+     * 语义口径：非时间字段必须全等；运行中条目把对方快照按时间差推算到
+     * 当前时刻，读数差在容差内即视为相同（谁后写谁是权威，LWW 语义不变）。
+     */
+    function dockSemanticallySame(incoming) {
+      if (!Array.isArray(incoming) || incoming.length !== items.length) return false;
+      var nowCmp = Date.now();
+      for (var i = 0; i < incoming.length; i++) {
+        var raw = incoming[i];
+        var it = items[i];
+        if (!raw || !isObj(raw.occ) || raw.occ.key !== it.key) return false;
+        if (!!raw.running !== it.running) return false;
+        if ((MODE_IDS.indexOf(raw.mode) >= 0 ? raw.mode : null) !== it.mode) return false;
+        if (!!raw.setting !== it.setting) return false;
+        if (!!raw.finished !== it.finished) return false;
+        if ((raw.phase === 'break' ? 'break' : 'focus') !== it.phase) return false;
+        if (numOr0(raw.countdownSec) !== numOr0(it.countdownSec)) return false;
+        if (numOr0(raw.cdH) !== numOr0(it.cdH)) return false;
+        if (numOr0(raw.cdM) !== numOr0(it.cdM)) return false;
+        if (numOr0(raw.cdS) !== numOr0(it.cdS)) return false;
+        if (numOr0(raw.focusMin) !== numOr0(it.focusMin)) return false;
+        if (numOr0(raw.breakMin) !== numOr0(it.breakMin)) return false;
+        if (!raw.running) {
+          /* 停着的条目读数就是权威值，必须精确相等 */
+          if (numOr0(raw.elapsedMs) !== numOr0(it.elapsedMs)) return false;
+          if (numOr0(raw.remainingMs) !== numOr0(it.remainingMs)) return false;
+        } else {
+          var gap = Math.max(0, nowCmp - numOr0(raw.lastTs));
+          var elapsed = numOr0(raw.elapsedMs) + gap;
+          if (Math.abs(elapsed - numOr0(it.elapsedMs)) > RUN_DERIVE_TOLERANCE_MS) return false;
+          if (it.mode === 'countdown' || it.mode === 'pomodoro') {
+            var remain = numOr0(raw.remainingMs) - gap;
+            if (Math.abs(remain - numOr0(it.remainingMs)) > RUN_DERIVE_TOLERANCE_MS) return false;
+          }
+        }
+      }
+      return true;
+    }
 
     function snapshotItem(it) {
       return {
@@ -548,9 +600,17 @@
 
     function persist() {
       if (restoring) return;
+      var snap = items.slice(0, DOCK_MAX).map(snapshotItem);
+      /* D9：文档字段是权威落点（随 doc 同步）；store 没有 setFinishDock 时降级回 UI 状态 */
+      if (store && typeof store.setFinishDock === 'function') {
+        try {
+          store.setFinishDock(snap);
+          return;
+        } catch (e) { /* 落库失败继续尝试 UI 状态，双保险 */ }
+      }
       if (!store || typeof store.saveUIState !== 'function') return;
       try {
-        store.saveUIState({ finishDock: items.slice(0, DOCK_MAX).map(snapshotItem) });
+        store.saveUIState({ finishDock: snap });
       } catch (e) { /* 非关键状态，失败可忽略 */ }
     }
 
@@ -765,6 +825,24 @@
             it.lastTs = isNum(raw.lastTs) ? raw.lastTs : 0;
             /* 已开始却没有任何时间基准（异常快照）：从此刻起算，避免凭空多算 */
             if (it.running && !it.lastTs) it.lastTs = Date.now();
+            /* D14：恢复瞬间就把「快照时刻 → 现在」的空档补进读数。
+               不补的话，重建出的节点先显示快照里的旧 elapsedMs/remainingMs
+               （可能还停在刚开始计时的值），要等下一个 tick 才跳到真实读数——
+               刷新页面 / 远端文档应用时看起来就是「闪一下初始计时」。
+               补算后 lastTs 归位到当前时刻，首个 tick 从零起算不重复叠加。 */
+            if (it.running && it.lastTs) {
+              var nowR = Date.now();
+              var deltaR = nowR - it.lastTs;
+              if (deltaR > 0) {
+                if (it.mode === 'stopwatch') {
+                  it.elapsedMs += deltaR;
+                } else if (it.mode === 'countdown' || it.mode === 'pomodoro') {
+                  it.remainingMs -= deltaR;
+                  if (it.remainingMs < 0) it.remainingMs = 0; /* 归零铃由 tick 的 reachZero 负责 */
+                }
+                it.lastTs = nowR;
+              }
+            }
             paintStage(it);
             syncWheels(it);
             syncClock(it);
@@ -778,6 +856,40 @@
           renderCount();
           if (onDockChange) onDockChange();
         }
+        return n;
+      },
+
+      /**
+       * D9：用一份快照**整体重建**台内条目（远端应用后的入口）。
+       * 与 restore 的差异：先静默清台（不清不在新快照里的旧条目会「幽灵复驻」），
+       * 且内容与当前一致时跳过（拉取回放不重建，运行中的计时不被打断）。
+       * 静默清台与 restore 全程不走 persist——新快照要么已在 doc 里（远端来），
+       * 要么由 restore 落盘，避免同步回环。
+       * @param {Array} list snapshot()/doc.finishDock 形状
+       * @returns {number} 实际恢复的条数（空快照返回 0，台子被清空）
+       */
+      replace: function (list) {
+        var incoming = Array.isArray(list) ? list : [];
+        try {
+          /* D14：语义比较取代 JSON 全等——运行中条目的 lastTs/读数每秒都在变，
+             全等比较会把每次拉取回放都判成「有变化」而整台重建（界面闪烁）。 */
+          if (dockSemanticallySame(incoming)) return items.length;
+        } catch (e) { /* 比较失败就走重建，重建本身幂等 */ }
+        restoring = true;
+        try {
+          items.forEach(function (it) {
+            dropWheels(it);
+            if (it.node && it.node.parentNode) it.node.parentNode.removeChild(it.node);
+          });
+          items = [];
+          if (rootEl && doc) rootEl.innerHTML = '';
+          renderCount();
+          stopTimerIfIdle();
+        } finally {
+          restoring = false;
+        }
+        var n = api.restore(incoming);
+        if (!n && onDockChange) onDockChange(); /* 空台也要让视图重绘（原位置恢复显示） */
         return n;
       },
 

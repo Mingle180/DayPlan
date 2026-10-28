@@ -1,7 +1,7 @@
 /**
  * DayPlan · 演示数据识别与基准生成（纯函数，无 DOM / 存储 / 网络依赖）
  *
- * 契约：docs/spec/13-sync-contract-v0.5.md §3.1–§3.5。
+ * 契约：docs/spec/13-sync-contract.md §3.1–§3.5。
  *   · 基准只回答“演示条目是否被改过”，不参与云端等值判断；
  *   · sha256 基准用 itemHashes，canonical 降级用 itemBaselines，两者不混用；
  *   · 任何不确定情况（MIXED / UNKNOWN）都不得自动上传——本模块只分类，不触发上传。

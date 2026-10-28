@@ -1283,7 +1283,12 @@
     }
 
     function defaultCategoryIdOf(doc) {
-      return (doc && doc.settings && doc.settings.defaultCategoryId) || 'cat_short_task';
+      var cats = (doc && doc.categories) || [];
+      var preferred = doc && doc.settings && doc.settings.defaultCategoryId;
+      for (var i = 0; i < cats.length; i += 1) {
+        if (cats[i] && cats[i].id === preferred) return preferred;
+      }
+      return cats[0] ? cats[0].id : null;
     }
 
     function createPlan(ym) {

@@ -1,7 +1,7 @@
 /**
  * DayPlan · 作用域存储与活动指针（Phase 1B 第一切片）
  *
- * 契约：docs/spec/13-sync-contract-v0.5.md §2.1（键清单）、§2.2（活动数据源）、
+ * 契约：docs/spec/13-sync-contract.md §2.1（键清单）、§2.2（活动数据源）、
  *       §2.3（状态转换中的本地键变化）、§1.9（reset 记录）。
  *
  * 本模块只接受调用方注入的存储对象（localStorage 兼容），不自行访问

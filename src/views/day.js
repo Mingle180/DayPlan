@@ -1336,7 +1336,7 @@
         item: item,
         occurrence: isSeriesOccurrence ? occ : null,
         categories: doc.categories,
-        defaultCategoryId: doc.settings.defaultCategoryId || 'cat_short_task',
+        defaultCategoryId: doc.settings.defaultCategoryId || (doc.categories[0] && doc.categories[0].id),
         allowScope: isSeriesOccurrence
       });
 
@@ -1546,11 +1546,29 @@
         sound: ui.finishSound !== false
       });
 
-      /* 刷新恢复（用户裁定 2026-10-19）：完成台条目与计时状态都从 UI 状态还原。
+      /* 刷新恢复（用户裁定 2026-10-19；D9 扩 2026-10-27）：完成台条目与计时状态
+       * 从**文档字段** doc.finishDock 还原（随同步走）。来源优先级：
+       *   ① doc.finishDock 有条目（v5 权威，包括其他设备同步来的）；
+       *   ② 旧 UI 状态键（v4 时代只存 UI 状态）——恢复成功后**一次性搬进 doc**，
+       *     此后 doc 里已有内容，① 恒优先，旧键自动作废。
        * 必须在首次渲染之前完成 —— visible() 依赖 dock.has(key) 判断「已空出」，
        * 否则刚恢复的条目会同时出现在台里和原位置。 */
-      if (dock && typeof dock.restore === 'function' && Array.isArray(ui.finishDock)) {
-        try { dock.restore(ui.finishDock); } catch (e) { /* 快照损坏：降级为空台 */ }
+      var dockSnap = null;
+      try { dockSnap = (typeof store.getFinishDock === 'function') ? store.getFinishDock() : null; } catch (e2) { dockSnap = null; }
+      var legacySnap = Array.isArray(ui.finishDock) ? ui.finishDock : null;
+      var fromDoc = !!(dockSnap && dockSnap.length);
+      var snap = fromDoc ? dockSnap : (legacySnap || []);
+      if (dock && typeof dock.restore === 'function' && snap.length) {
+        var restored = 0;
+        try { restored = dock.restore(snap) || 0; } catch (e) { /* 快照损坏：降级为空台 */ }
+        /* 一次性迁移：旧 UI 状态的条目第一次写进 doc（doc 从此是唯一权威），
+           迁移成功后清掉旧键——否则用户清空台子后，旧键会把幽灵条目带回来。 */
+        if (restored > 0 && !fromDoc && typeof store.setFinishDock === 'function') {
+          try {
+            store.setFinishDock(dock.snapshot());
+            if (typeof store.saveUIState === 'function') store.saveUIState({ finishDock: [] });
+          } catch (e3) { /* 迁移失败下次再试 */ }
+        }
       }
 
     }

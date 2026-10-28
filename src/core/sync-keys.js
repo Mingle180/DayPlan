@@ -1,7 +1,7 @@
 /**
  * DayPlan · 同步键与数据作用域（纯函数，无 DOM / 存储 / 网络依赖）
  *
- * 契约：docs/spec/13-sync-contract-v0.5.md §2.1（键清单）、§2.2（活动数据源）。
+ * 契约：docs/spec/13-sync-contract.md §2.1（键清单）、§2.2（活动数据源）。
  * 本模块只生成键名与解析作用域，不读取也不写入任何存储。
  *
  * uid 约束：Supabase uid（UUID）只含字母、数字、连字符与下划线。

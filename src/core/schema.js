@@ -24,7 +24,12 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function (dt) {
   'use strict';
 
-  var SCHEMA_VERSION = 3;
+  /* 2026-10-27（D9）：4 → 5。v5 与 v4 的唯一形状差异是 `finishDock` 从「不存在」变成
+     「必备顶层字段（可空数组）」——事项完成台的条目与计时快照（迭代 10 批次 5）此前
+     只存 UI 状态（dayplan.ui.v1），从未参与同步；用户 2026-10-27 要求多设备同步完成台。
+     吸取 D8 的教训（字段加入却不升版本 = 「缺失」与「清空」歧义），这次直接升版本：
+     旧 v4 云端文档在新端会被判「版本较低」，由面板用「以本机为准」完成一次升级推送。 */
+  var SCHEMA_VERSION = 5;
   var APP_NAME = 'DayPlan';
   var TITLE_MAX = 60;
   var NOTE_MAX = 500;
@@ -45,6 +50,15 @@
        用户设的是「那天几点」，不能因为换时区/夏令时把时刻挪走。 */
   var COUNTDOWN_AT_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;
   var COUNTDOWN_MAX = 200;         /* 条目上限（防御异常数据撑爆栏） */
+
+  /* 2026-10-27（D9）：事项完成台快照（迭代 10 批次 5）。
+     · 数组顺序 = 台内显示顺序；条目是 finishdock.snapshotItem() 的形状。
+     · occ 是发生（occurrence）的**嵌入副本**（recurrence.js buildOccurrence /
+       singleToOccurrence 的产物）：key = "<seriesId>@<date>"，跨设备凭 seriesId
+       回查当前文档；事项若已被删除，完成后静默不动（非关键状态的降级口径）。
+     · 计时读数不存盘，只存状态快照（running + lastTs），读数由时间差推出。 */
+  var FINISH_DOCK_MAX = 20;
+  var DOCK_MODES = ['choose', 'stopwatch', 'countdown', 'pomodoro'];
 
   /** 迭代 4（DM-18）：紧急特殊类别 id（冻结接口） */
   var URGENT_CATEGORY_ID = 'urgent';
@@ -76,6 +90,10 @@
 
   /** 迭代 4 迁移告警码（DM-20.2a/b） */
   var E_MIGRATE_URGENT = 'E_MIGRATE_URGENT';
+  /** v3→v4 迁移告警码（D8 / Q-17）：countdowns 形状非法被重置为空数组 */
+  var E_MIGRATE_COUNTDOWNS = 'E_MIGRATE_COUNTDOWNS';
+  /** v4→v5 迁移告警码（D9）：finishDock 形状非法被重置为空数组 */
+  var E_MIGRATE_FINISHDOCK = 'E_MIGRATE_FINISHDOCK';
 
   /** DM-10：默认设置（迭代 3） */
   var DEFAULT_SETTINGS = {
@@ -106,7 +124,7 @@
   var BOOLEAN_SETTINGS = ['idleCompressEnabled', 'showLunarInCalendar', 'showNoteMarker', 'showHolidayMarker'];
 
   /** 迁移链（DM-12 / DM-20）：按 schemaVersion 依次执行 */
-  var MIGRATIONS = { 1: migrateV1toV2, 2: migrateV2toV3 };
+  var MIGRATIONS = { 1: migrateV1toV2, 2: migrateV2toV3, 3: migrateV3toV4, 4: migrateV4toV5 };
 
   function isPlainObject(v) {
     return !!v && typeof v === 'object' && !Array.isArray(v);
@@ -545,6 +563,9 @@
     // 五十一轮：倒计时（存在时校验；旧数据没有该字段同样合法）
     validateCountdowns(doc.countdowns, '$.countdowns', catIds).forEach(function (e) { errors.push(e); });
 
+    // D9（2026-10-27）：完成台快照（存在时校验；v4 旧数据没有该字段同样合法）
+    validateFinishDock(doc.finishDock, '$.finishDock').forEach(function (e) { errors.push(e); });
+
     return { ok: errors.length === 0, errors: errors };
   }
 
@@ -628,7 +649,7 @@
     if (out.title === null) return null; // 无标题不可修复
     var known = ctx.categoryIds || {};
     if (!isNonEmptyString(out.categoryId) || !known[out.categoryId]) {
-      out.categoryId = ctx.fallbackCategoryId || 'cat_short_task';
+      out.categoryId = ctx.fallbackCategoryId || URGENT_CATEGORY_ID;
     }
     out.time = sanitizeTime(out.time);
     if (typeof out.note !== 'string') out.note = out.note === undefined || out.note === null ? '' : String(out.note);
@@ -788,6 +809,7 @@
       categoryIds: categoryIds,
       fallbackCategoryId: fallbackCategoryId
     }, warnings);
+    out.finishDock = sanitizeFinishDock(doc.finishDock, warnings);
     out.settings = sanitizeSettings(doc.settings);
     /* 四十八轮：默认类别可能已被用户删除 —— 归一到一个仍然存在的类别（优先紧急）。 */
     if (!categoryIds[out.settings.defaultCategoryId]) {
@@ -1052,6 +1074,117 @@
     return out;
   }
 
+  /**
+   * D9（2026-10-27）：完成台条目校验。远端严格口径（数组不可缺失）+ 条目级形状检查。
+   * occ 只验「回查所需的最小集」（key/seriesId/date/kind/categoryId），
+   * 显示字段（title/time/note…）不做严格校验 —— 嵌入副本允许随版本演化。
+   * 计时读数必须是有限非负数；mode/phase 必须在枚举内。
+   */
+  function validateFinishDock(list, path) {
+    var errors = [];
+    if (!Array.isArray(list)) {
+      errors.push(err(path || '$.finishDock', '必须是数组'));
+      return errors;
+    }
+    if (list.length > FINISH_DOCK_MAX) {
+      errors.push(err(path || '$.finishDock', '超过上限 ' + FINISH_DOCK_MAX + ' 条'));
+    }
+    var seen = {};
+    list.forEach(function (it, i) {
+      var p = (path || '$.finishDock') + '[' + i + ']';
+      if (!isPlainObject(it)) {
+        errors.push(err(p, '必须是对象'));
+        return;
+      }
+      var occ = it.occ;
+      if (!isPlainObject(occ)) {
+        errors.push(err(p + '.occ', '必须是对象'));
+      } else {
+        if (!isNonEmptyString(occ.key)) errors.push(err(p + '.occ.key', '必须是非空字符串'));
+        else if (seen[occ.key]) errors.push(err(p + '.occ.key', 'key 重复：' + occ.key));
+        if (!isNonEmptyString(occ.seriesId)) errors.push(err(p + '.occ.seriesId', '必须是非空字符串'));
+        if (occ.date !== undefined && !dt.isValidDate(occ.date)) {
+          errors.push(err(p + '.occ.date', '必须是合法日期'));
+        }
+        if (occ.kind !== undefined && occ.kind !== 'single' && occ.kind !== 'series') {
+          errors.push(err(p + '.occ.kind', '必须是 single 或 series'));
+        }
+      }
+      if (it.mode !== undefined && it.mode !== null && DOCK_MODES.indexOf(it.mode) < 0) {
+        errors.push(err(p + '.mode', '非法计时方式：' + String(it.mode)));
+      }
+      if (it.phase !== undefined && it.phase !== 'focus' && it.phase !== 'break') {
+        errors.push(err(p + '.phase', '必须是 focus 或 break'));
+      }
+      ['elapsedMs', 'remainingMs', 'countdownSec', 'cdH', 'cdM', 'cdS', 'focusMin', 'breakMin', 'lastTs']
+        .forEach(function (k) {
+          if (it[k] !== undefined && (!isFiniteNumber(it[k]) || it[k] < 0)) {
+            errors.push(err(p + '.' + k, '必须是有限非负数'));
+          }
+        });
+      if (seen[occ && occ.key]) return; // 重复 key 已报，不重复报
+      if (isPlainObject(occ) && isNonEmptyString(occ.key)) seen[occ.key] = true;
+    });
+    return errors;
+  }
+
+  /**
+   * D9：完成台条目归一。丢弃：非对象 / occ 无效 / key 为空或重复 / 超上限（均告警）。
+   * 数值夹取为有限非负数；布尔归一；数组顺序保持原样（= 台内显示顺序）。
+   * 与 sanitizeCountdowns 的差异：不查类别表（occ.categoryId 是嵌入副本，
+   * 悬空引用在界面上只是不显示类别胶囊，不值得为它改写用户数据）。
+   */
+  function sanitizeFinishDock(src, warnings) {
+    var out = [];
+    if (src === undefined || src === null) return out;
+    if (!Array.isArray(src)) {
+      if (warnings) warnings.push(err('$.finishDock', '必须是数组，已重置为空'));
+      return out;
+    }
+    var seen = {};
+    for (var i = 0; i < src.length; i += 1) {
+      var path = '$.finishDock[' + i + ']';
+      if (out.length >= FINISH_DOCK_MAX) {
+        if (warnings) warnings.push(err('$.finishDock', '超过上限 ' + FINISH_DOCK_MAX + ' 条，其余已丢弃'));
+        break;
+      }
+      var it = src[i];
+      if (!isPlainObject(it)) {
+        if (warnings) warnings.push(err(path, '必须是对象，已丢弃'));
+        continue;
+      }
+      var occ = isPlainObject(it.occ) ? it.occ : null;
+      if (!occ || !isNonEmptyString(occ.key)) {
+        if (warnings) warnings.push(err(path + '.occ.key', '发生键缺失，已丢弃'));
+        continue;
+      }
+      if (seen[occ.key]) {
+        if (warnings) warnings.push(err(path + '.occ.key', 'key 重复，已丢弃：' + occ.key));
+        continue;
+      }
+      var entry = {};
+      Object.keys(it).forEach(function (k) { entry[k] = it[k]; }); // 未知字段保留
+      entry.occ = {};
+      Object.keys(occ).forEach(function (k) { entry.occ[k] = occ[k]; });
+      entry.occ.key = occ.key;
+      if (!isNonEmptyString(entry.occ.seriesId)) entry.occ.seriesId = String(occ.key).split('@')[0] || occ.key;
+      if (entry.occ.title !== undefined && entry.occ.title !== null) {
+        entry.occ.title = String(entry.occ.title);
+      }
+      if (entry.mode !== undefined && entry.mode !== null && DOCK_MODES.indexOf(entry.mode) < 0) entry.mode = null;
+      if (entry.phase !== 'break') entry.phase = 'focus';
+      ['running', 'setting', 'finished'].forEach(function (k) { entry[k] = toBool(entry[k]); });
+      ['elapsedMs', 'remainingMs', 'countdownSec', 'cdH', 'cdM', 'cdS', 'focusMin', 'breakMin', 'lastTs']
+        .forEach(function (k) {
+          var n = Number(entry[k]);
+          entry[k] = (isFiniteNumber(n) && n >= 0) ? n : 0;
+        });
+      seen[occ.key] = true;
+      out.push(entry);
+    }
+    return out;
+  }
+
   /** DM-10：设置校验；缺失键合法（由 sanitizeSettings 补默认），存在则必须合法 */
   function validateSettings(settings, path) {
     path = path || 'settings';
@@ -1095,6 +1228,7 @@
       weekNotes: {},
       monthPlans: {},
       countdowns: [],
+      finishDock: [],
       settings: sanitizeSettings(null)
     };
   }
@@ -1211,6 +1345,66 @@
 
     // d) schemaVersion
     out.schemaVersion = 3;
+    return out;
+  }
+
+  /**
+   * v3 → v4（D8，2026-10-26）：**只补形状，不做条目级清洗**。
+   *
+   * 五十一轮把 `countdowns` 加进了 v3 却没升版本号，于是「v3」同时指「没有倒计时的旧文档」
+   * 和「有的新文档」。本步把「countdowns 是必备顶层字段（可空数组）」写进数据：
+   *
+   *   · 缺失 / null → `[]`（旧 v3 文档，静默补齐，不告警——这是预期内的常态）
+   *   · 非数组      → `[]` + 一条 `E_MIGRATE_COUNTDOWNS`（Q-18：只告警，不拒绝整份文档）
+   *   · 数组        → **原样保留**（条目级清洗留给随后的 sanitizeDocument，迁移不得丢条目）
+   *
+   * 幂等：已是 v4 时 `migrateDocument` 直接返回深拷贝，不会进入本步。
+   */
+  function migrateV3toV4(doc, warningsOut) {
+    var out = cloneJSON(doc);
+    var raw = out.countdowns;
+
+    if (raw === undefined || raw === null) {
+      out.countdowns = [];
+    } else if (!Array.isArray(raw)) {
+      out.countdowns = [];
+      pushWarning(warningsOut, '$.countdowns', E_MIGRATE_COUNTDOWNS,
+        '倒计时字段形状非法，已重置为空数组');
+    } else {
+      out.countdowns = raw;
+    }
+
+    out.schemaVersion = 4;
+    return out;
+  }
+
+  /**
+   * v4 → v5（D9，2026-10-27）：**只补形状，不做条目级清洗**。
+   *
+   * 完成台快照（finishDock）此前只存 UI 状态、不参与同步；升 v5 后成为必备顶层字段。
+   *
+   *   · 缺失 / null → `[]`（v4 文档的常态：完成台要么没开过、要么条目还在 UI 状态里
+   *     由完成台初始化时一次性搬进 doc，静默补齐不告警）
+   *   · 非数组      → `[]` + 一条 `E_MIGRATE_FINISHDOCK`（只告警，不拒绝整份文档）
+   *   · 数组        → **原样保留**（条目级清洗留给随后的 sanitizeDocument，迁移不得丢条目）
+   *
+   * 幂等：已是 v5 时 `migrateDocument` 直接返回深拷贝，不会进入本步。
+   */
+  function migrateV4toV5(doc, warningsOut) {
+    var out = cloneJSON(doc);
+    var raw = out.finishDock;
+
+    if (raw === undefined || raw === null) {
+      out.finishDock = [];
+    } else if (!Array.isArray(raw)) {
+      out.finishDock = [];
+      pushWarning(warningsOut, '$.finishDock', E_MIGRATE_FINISHDOCK,
+        '完成台快照形状非法，已重置为空数组');
+    } else {
+      out.finishDock = raw;
+    }
+
+    out.schemaVersion = 5;
     return out;
   }
 
@@ -1393,12 +1587,32 @@
       if (newer(e, countdowns[idx])) countdowns[idx] = e;
     });
 
+    /* D9（2026-10-27）：完成台按 occ.key 合并 —— 同 key 取 lastTs 较新者（最近动过的
+       快照赢）；导入方新条目追加到末尾。完成台条目没有 updatedAt（非关键状态），
+       lastTs 是它唯一可信的「最近触碰」信号。 */
+    var dock = (out.finishDock || []).slice();
+    var dockIndex = {};
+    dock.forEach(function (e, i) { if (e && e.occ) dockIndex[e.occ.key] = i; });
+    (incomingClean.finishDock || []).forEach(function (e) {
+      if (!e || !e.occ || !isNonEmptyString(e.occ.key)) return;
+      var idx = dockIndex[e.occ.key];
+      if (idx === undefined) {
+        dockIndex[e.occ.key] = dock.length;
+        dock.push(e);
+        return;
+      }
+      var a = Number(e.lastTs) || 0;
+      var b = Number(dock[idx].lastTs) || 0;
+      if (a > b) dock[idx] = e;
+    });
+
     out.categories = categories;
     out.items = items;
     out.notes = notes;
     out.weekNotes = weekNotes;
     out.monthPlans = monthPlans;
     out.countdowns = countdowns;
+    out.finishDock = dock;
     out.meta.updatedAt = new Date().toISOString();
     var v = validateDocument(out);
     return { doc: out, ok: v.ok, errors: v.errors, warnings: warnings };
@@ -1441,11 +1655,14 @@
     MONTH_PLAN_TEXT_MAX: MONTH_PLAN_TEXT_MAX,
     MONTH_PLAN_MAX: MONTH_PLAN_MAX,
     COUNTDOWN_MAX: COUNTDOWN_MAX,
+    FINISH_DOCK_MAX: FINISH_DOCK_MAX,
     NAMED_MONTHS: NAMED_MONTHS,
     COLOR_RE: COLOR_RE,
     URGENT_CATEGORY_ID: URGENT_CATEGORY_ID,
     URGENT_CATEGORY: URGENT_CATEGORY,
     E_MIGRATE_URGENT: E_MIGRATE_URGENT,
+    E_MIGRATE_COUNTDOWNS: E_MIGRATE_COUNTDOWNS,
+    E_MIGRATE_FINISHDOCK: E_MIGRATE_FINISHDOCK,
     BUILTIN_CATEGORIES: BUILTIN_CATEGORIES,
     DEFAULT_SETTINGS: DEFAULT_SETTINGS,
     SETTINGS_RANGES: SETTINGS_RANGES,
@@ -1477,6 +1694,8 @@
     validateCountdown: validateCountdown,
     validateCountdowns: validateCountdowns,
     sanitizeCountdowns: sanitizeCountdowns,
+    validateFinishDock: validateFinishDock,
+    sanitizeFinishDock: sanitizeFinishDock,
     sanitizeSettings: sanitizeSettings,
     mergeSettings: mergeSettings,
     migrateDocument: migrateDocument,

@@ -1,9 +1,9 @@
 /**
  * DayPlan · 同步投影、规范化 JSON 与哈希（纯函数，无 DOM / 存储 / 网络依赖）
  *
- * 契约：docs/spec/13-sync-contract-v0.5.md §1.1、§1.2、§1.9、§3.2。
- *   · payloadProjection  = §1.1 八字段
- *   · contentProjection  = 八字段去掉 updatedAt
+ * 契约：docs/spec/13-sync-contract.md §1.1、§1.2、§1.9、§3.2。
+ *   · payloadProjection  = §1.1 十字段（D7 起含 countdowns，D9 起含 finishDock）
+ *   · contentProjection  = 九字段去掉 updatedAt（内容八字段）
  *   · contentHash        = SHA-256(UTF-8(canonicalJson(contentProjection(doc))))
  *   · canonicalJson      = 对象键按 UTF-16 码元递归升序、数组保序、无空白、undefined 省略
  *   · itemFingerprint    = 演示条目的固定投影键集合（不含 id / createdAt / updatedAt）
@@ -25,11 +25,11 @@
 
   var PAYLOAD_FIELDS = [
     'schemaVersion', 'app', 'categories', 'items',
-    'notes', 'weekNotes', 'monthPlans', 'updatedAt'
+    'notes', 'weekNotes', 'monthPlans', 'countdowns', 'finishDock', 'updatedAt'
   ];
   var CONTENT_FIELDS = [
     'schemaVersion', 'app', 'categories', 'items',
-    'notes', 'weekNotes', 'monthPlans'
+    'notes', 'weekNotes', 'monthPlans', 'countdowns', 'finishDock'
   ];
   var FINGERPRINT_KEYS = [
     'kind', 'title', 'date', 'time', 'note', 'categoryId',
@@ -80,10 +80,21 @@
     return undefined;
   }
 
-  /** §1.1：只取八字段；updatedAt 来自 meta.updatedAt（仅诊断）。 */
+  /** §1.1：只取九字段；updatedAt 来自 meta.updatedAt（仅诊断）。 */
   function payloadProjection(doc) {
     if (!isPlainObject(doc)) return null;
     var meta = isPlainObject(doc.meta) ? doc.meta : {};
+    // D7：投影恒输出 countdowns 键——缺失 / null 一律视为空数组，
+    // 否则「旧数据没带」与「用户清空」在合并侧无法区分。
+    // 非数组（损坏形状）刻意原样透传，交给推送前的 validateDocument 拒绝，
+    // 不在此洗成 []，避免把数据损坏伪装成「用户清空」。
+    var cds = doc.countdowns;
+    if (cds === undefined || cds === null) cds = [];
+    else cds = JSON.parse(JSON.stringify(cds));
+    // D9（2026-10-27）：finishDock 同口径——缺失 / null 视为空数组，损坏形状原样透传。
+    var dock = doc.finishDock;
+    if (dock === undefined || dock === null) dock = [];
+    else dock = JSON.parse(JSON.stringify(dock));
     return {
       schemaVersion: doc.schemaVersion,
       app: doc.app,
@@ -92,11 +103,13 @@
       notes: doc.notes,
       weekNotes: doc.weekNotes,
       monthPlans: doc.monthPlans,
+      countdowns: cds,
+      finishDock: dock,
       updatedAt: typeof meta.updatedAt === 'string' ? meta.updatedAt : null
     };
   }
 
-  /** §1.2：内容投影 = 八字段去掉 updatedAt。 */
+  /** §1.2：内容投影 = 九字段去掉 updatedAt。 */
   function contentProjection(doc) {
     var payload = payloadProjection(doc);
     if (!payload) return null;

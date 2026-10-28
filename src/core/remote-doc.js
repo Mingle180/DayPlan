@@ -1,13 +1,15 @@
 /**
  * DayPlan · 远端 payload 严格校验（纯函数，无 DOM / 存储 / 网络依赖）
  *
- * 契约：docs/spec/13-sync-contract-v0.5.md §1.1（字段白名单）、§1.3（字段级校验）、
+ * 契约：docs/spec/13-sync-contract.md §1.1（字段白名单）、§1.3（字段级校验）、
  *       §1.5 G2–G5、§1.6（版本策略）。
  *
  * 与 schema.validateDocument 的区别（刻意不复用其宽松口径）：
  *   · app 必须严格等于 "DayPlan"；
  *   · schemaVersion 必须存在且严格等于本机 SCHEMA_VERSION，不做迁移；
  *   · notes / weekNotes / monthPlans 三个字段必须存在；
+ *   · countdowns 必须是数组且不可缺失（D7 起为远端必填，可为空数组）；
+ *   · finishDock 必须是数组且不可缺失（D9 起为远端必填，可为空数组）；
  *   · 顶层未知字段一律拒绝（§1.6：拉取时不属于合法文档）。
  *
  * 本模块只校验，不归一、不合并、不写入。调用方传入的应是 schedule_data 的 payload，
@@ -30,7 +32,7 @@
 
   var REQUIRED_FIELDS = [
     'schemaVersion', 'app', 'categories', 'items',
-    'notes', 'weekNotes', 'monthPlans'
+    'notes', 'weekNotes', 'monthPlans', 'countdowns', 'finishDock'
   ];
   var ALLOWED_FIELDS = REQUIRED_FIELDS.concat(['updatedAt']);
   var ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/;
@@ -142,7 +144,8 @@
         }
       });
       schema.BUILTIN_CATEGORIES.forEach(function (b) {
-        if (!catIds[b.id]) errors.push(err('$.categories', '缺少内置类别 ' + b.id));
+        if (b.special !== 'urgent') return;
+        if (!catIds[b.id]) errors.push(err('$.categories', '缺少紧急类别 ' + b.id));
       });
     }
 
@@ -169,6 +172,24 @@
     }
     if (schema.isPlainObject(raw.monthPlans)) {
       schema.validateMonthPlans(raw.monthPlans, '$.monthPlans').forEach(function (e) { errors.push(e); });
+    }
+
+    // D7：countdowns 为远端必填字段（可为空数组）。schema.validateCountdowns 对
+    // undefined / null 返回空错误（本地宽松口径），故存在性必须在远端单独判定，
+    // 否则「缺失」会被当成合法，plan 与投影两侧的歧义就回来了。
+    if (!Array.isArray(raw.countdowns)) {
+      errors.push(err('$.countdowns', '必须是数组且不可缺失'));
+    } else {
+      schema.validateCountdowns(raw.countdowns, '$.countdowns', catIds)
+        .forEach(function (e) { errors.push(e); });
+    }
+
+    // D9（2026-10-27）：finishDock 同口径 —— 远端必填（可为空数组），条目级校验。
+    if (!Array.isArray(raw.finishDock)) {
+      errors.push(err('$.finishDock', '必须是数组且不可缺失'));
+    } else {
+      schema.validateFinishDock(raw.finishDock, '$.finishDock')
+        .forEach(function (e) { errors.push(e); });
     }
 
     // §1.3：updatedAt 缺失可用当前时间，但出现时必须是 ISO 字符串。

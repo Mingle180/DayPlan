@@ -1,7 +1,7 @@
 /**
  * DayPlan · 远端应用前的纯函数（合并 / defaultCategoryId 兜底 / 归一审计）
  *
- * 契约：docs/spec/13-sync-contract-v0.5.md §1.2（投影与合并）、§1.4（兜底链）、
+ * 契约：docs/spec/13-sync-contract.md §1.2（投影与合并）、§1.4（兜底链）、
  *       §1.7（无损 / 有损判定）、§1.5 G6–G10。
  *
  * 本模块只操作内存对象：不写存储、不联网、不修改入参。
@@ -21,7 +21,7 @@
 
   var CONTENT_FIELDS = [
     'schemaVersion', 'app', 'categories', 'items',
-    'notes', 'weekNotes', 'monthPlans'
+    'notes', 'weekNotes', 'monthPlans', 'countdowns', 'finishDock'
   ];
   var SHORT_TASK_ID = 'cat_short_task';
 
@@ -40,6 +40,14 @@
   function cloneJson(v) {
     if (v === undefined) return undefined;
     return JSON.parse(JSON.stringify(v));
+  }
+
+  function categoryIdMap(categories) {
+    var map = {};
+    (Array.isArray(categories) ? categories : []).forEach(function (c) {
+      if (isPlainObject(c) && isNonEmptyString(c.id)) map[c.id] = true;
+    });
+    return map;
   }
 
   function textLen(v) {
@@ -89,7 +97,7 @@
    * ------------------------------------------------------------------ */
 
   /**
-   * 七个内容字段取远端，settings 整块取本机，meta 重建，最后执行 §1.4 兜底。
+   * 八个内容字段取远端，settings 整块取本机，meta 重建，最后执行 §1.4 兜底。
    * @param {object} remoteDoc 已通过 G2–G7 的远端文档
    * @param {object} localDoc 本机活动文档（只读取 settings / meta.createdAt）
    * @param {{now?:string}} [opts]
@@ -132,6 +140,18 @@
       return { ok: false, doc: null, errors: [err('$.settings.defaultCategoryId', '无法为入云类别选择默认类别（' + resolved.reason + '）')] };
     }
     doc.settings.defaultCategoryId = resolved.id;
+
+    // D7：倒计时随远端整块替换（过渡期的「整块保留本机」分支已删除）。
+    // 仍按合并后的类别表归一，防止留下悬空类别引用；数组顺序不变（= 显示顺序）。
+    doc.countdowns = schema.sanitizeCountdowns(remoteDoc.countdowns, {
+      categoryIds: categoryIdMap(doc.categories),
+      fallbackCategoryId: resolved.id
+    });
+
+    // D9（2026-10-27）：完成台快照同样随远端整块替换（条目没有 updatedAt，
+    // 没有可逐条合并的可靠依据；整体 LWW 由文档级 revision 冲突机制兜底）。
+    // 不查类别表：occ.categoryId 是嵌入副本，悬空引用只是不显示胶囊。
+    doc.finishDock = schema.sanitizeFinishDock(remoteDoc.finishDock);
 
     return { ok: true, doc: doc, errors: [] };
   }
@@ -199,6 +219,7 @@
       categoryIds: categoryIds,
       noteCount: isPlainObject(src.notes) ? Object.keys(src.notes).length : 0,
       weekNoteCount: isPlainObject(src.weekNotes) ? Object.keys(src.weekNotes).length : 0,
+      dockCount: Array.isArray(src.finishDock) ? src.finishDock.length : 0,
       monthPlanCounts: monthPlanCounts,
       monthPlanTexts: monthPlanTexts
     };
@@ -267,6 +288,11 @@
     }
     if (after.weekNoteCount < before.weekNoteCount) {
       push('WEEK_NOTE_DROPPED', { before: before.weekNoteCount, after: after.weekNoteCount });
+    }
+
+    // D9：完成台条目在归一中被丢弃（形状非法 / 超上限）同样算有损信号。
+    if (after.dockCount < before.dockCount) {
+      push('FINISH_DOCK_DROPPED', { before: before.dockCount, after: after.dockCount });
     }
 
     Object.keys(before.monthPlanCounts).forEach(function (month) {

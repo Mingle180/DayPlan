@@ -123,11 +123,24 @@
    * ------------------------------------------------------------------ */
 
   /**
+   * 探测可用的 localStorage。模块级函数：装配层要在**创建 Store 之前**先读到
+   * 持久凭据（用它解析活动指针），必须和 Store 拿到同一个存储对象。
+   */
+  function detectLocalStorage() {
+    try {
+      if (typeof localStorage !== 'undefined' && localStorage) return localStorage;
+    } catch (e) { /* 隐私模式访问即抛 */ }
+    return null;
+  }
+
+  /**
    * @param {object} options
    *   - storage: localStorage 兼容对象（缺省自动探测）
    *   - seedFactory: () => Document，演示数据工厂（缺省 null，不注入）
    *   - now: () => string ISO 时间戳（可注入便于测试）
    *   - autoSave: boolean，默认 true
+   *   - sessionUid: string，启动时的会话 uid（决定活动指针能否解析成账号作用域）
+   *   - scope: 显式作用域，给出时跳过指针解析
    */
   function createStore(options) {
     options = options || {};
@@ -143,6 +156,10 @@
     var lastWarnings = [];
     var seeded = false;
     var storageDegraded = false;
+    // 本地旧快照保护（契约 §5.2）：本页最后一次成功写入当前数据键的字符串。
+    // null 表示本页尚未建立基线（首次使用），此时不做写前比较。
+    var lastWrittenRaw = null;
+    var staleLocal = false;
 
     var sessionUid = typeof options.sessionUid === 'string' ? options.sessionUid : null;
     var scope;
@@ -166,13 +183,6 @@
       }
       if (!K.isValidScope(raw)) throw StoreError('E_INVALID_SCOPE', '数据作用域必须是 guest 或 user:<合法 uid>');
       return raw.kind === 'guest' ? K.guestScope() : K.userScope(raw.uid);
-    }
-
-    function detectLocalStorage() {
-      try {
-        if (typeof localStorage !== 'undefined' && localStorage) return localStorage;
-      } catch (e) { /* 隐私模式访问即抛 */ }
-      return null;
     }
 
     // ---------------- 读取 / 保存 ----------------
@@ -252,6 +262,31 @@
       return { ok: true, doc: sanitized.doc, recovered: warnings.length > 0, warnings: warnings };
     }
 
+    // ---------------- 本地旧快照保护（契约 §5.2） ----------------
+
+    function readDbRaw() {
+      try {
+        return storage.getItem(dbKey);
+      } catch (e) {
+        return null;
+      }
+    }
+
+    /**
+     * 重置比较基线。只在四种情况下调用：启动 load、切换作用域、清空当前作用域、
+     * 直接写账号副本键。**绝不在普通保存路径里调用**——那等于把保护关掉。
+     */
+    function setBaseline(raw) {
+      lastWrittenRaw = (raw === null || raw === undefined || raw === '') ? null : raw;
+      staleLocal = false;
+    }
+
+    function markStale(message) {
+      staleLocal = true;
+      lastError = StoreError('E_STALE', message);
+      return { ok: false, code: 'E_STALE', error: message, stale: true };
+    }
+
     function load() {
       lastWarnings = [];
       var raw = null;
@@ -260,6 +295,10 @@
       } catch (e) {
         raw = null;
       }
+
+      // 契约 §5.2「初始化」：保留读到的原始字符串作为比较基线；键不存在时为 null。
+      // load 内部即便归一修复了内容也不立即回写（既有行为），所以基线就是读到的原文。
+      setBaseline(raw);
 
       if (raw === null || raw === undefined || raw === '') {
         // 首次运行：按 BR-15 决定是否注入演示数据。
@@ -334,9 +373,25 @@
         clearTimeout(saveTimer);
         saveTimer = null;
       }
+      // 检测点 1（契约 §5.2）：写前确认基线仍是磁盘现状，否则拒绝写入。
+      // 宁可这次不存，也不能把别人（或另一标签页）刚写入的内容盖掉。
+      // 基线 null 的语义是「本页启动时该键不存在」，因此与 null 比较同样成立：
+      // 若此时键已被别的页面写出来，current !== null → 同样判旧快照。
+      var current = readDbRaw();
+      if (staleLocal || current !== lastWrittenRaw) {
+        return markStale('本地数据已被其他页面改动，本次未写入（避免覆盖）');
+      }
+      var raw = null;
       try {
-        storage.setItem(dbKey, serialize());
+        raw = serialize();
+        storage.setItem(dbKey, raw);
         storageDegraded = storage.degraded;
+        // 更新规则：只在 setItem 成功之后更新基线，失败不更新
+        lastWrittenRaw = raw;
+        // 检测点 3：写后立即回读，被别的页面在同一瞬间改掉时停止后续写入
+        if (readDbRaw() !== raw) {
+          return markStale('写入后回读不一致，本地数据已被其他页面改动');
+        }
         lastError = null;
         return { ok: true };
       } catch (e) {
@@ -1522,6 +1577,30 @@
       return true;
     }
 
+    // ---------------- 完成台快照（D9 / 2026-10-27：参与同步） ----------------
+
+    /**
+     * 读取完成台快照（doc.finishDock；v4 旧文档缺失时返回 []）。
+     * 返回浅拷贝数组，条目本身原样（finishdock 内部不外改条目字段）。
+     */
+    function getFinishDock() {
+      var list = Array.isArray(state.finishDock) ? state.finishDock : [];
+      return list.slice();
+    }
+
+    /**
+     * 写入完成台快照（finishdock.persist() 的落点）。
+     * 走 sanitizeFinishDock 轻归一（上限 20 / 逐条形状兜底 / 去重），空数组同样合法——
+     * 「台子空了」是真实状态，必须照写，否则清空动作永远同步不出去。
+     */
+    function setFinishDock(list) {
+      var clean = schema.sanitizeFinishDock(Array.isArray(list) ? list : [], null);
+      mutate(function (draft) {
+        draft.finishDock = clean;
+      });
+      return true;
+    }
+
     /** 拖动排序：orderedIds 为期望顺序；未列出的条目按原顺序追加在末尾。 */
     function reorderCountdowns(orderedIds) {
       mutate(function (draft) {
@@ -1623,6 +1702,23 @@
     }
 
     /**
+     * 更新「当前会话 uid」。登录、退出、启动恢复后由装配层告知。
+     *
+     * 为什么必须有它：创建 Store 时的 sessionUid 是**启动那一刻**的快照，
+     * 而会话在运行中会变（登录 A → 退出 → 登录 B）。闸门只认快照，
+     * 会把「切到刚登录的账号」判成越权（E_SCOPE_SESSION_MISMATCH）；
+     * 干脆不设闸门，又会让未登录的页面读别人的账号副本。
+     * 所以闸门跟着会话走：本函数只更新闸门，**不改作用域、不写任何键**。
+     *
+     * @param {string|null} uid 非法值（空串 / 非字符串）一律按未登录处理
+     * @returns {string|null} 生效后的 uid
+     */
+    function setSessionUid(uid) {
+      sessionUid = (typeof uid === 'string' && uid !== '') ? uid : null;
+      return sessionUid;
+    }
+
+    /**
      * 切换活动数据源（指针最后写；失败不改变内存状态与指针）。
      * 账号作用域必须已存在本地副本，且会话 uid 必须匹配——本函数绝不复制游客数据。
      *
@@ -1686,6 +1782,8 @@
       lastWarnings = (staged.warnings || []).slice();
       seeded = false;
       lastError = null;
+      // 切源后 dbKey 已变，基线必须跟着换到新键，否则新作用域的首次保存会被判旧快照
+      setBaseline(readDbRaw());
       scopeInfo = { scope: scope, id: K.scopeId(scope), repaired: false, reason: 'switched', pointerWrite: { ok: true } };
       notify();
       return { ok: true, changed: true, scope: getScope(), id: K.scopeId(scope) };
@@ -1737,6 +1835,10 @@
         lastError = scopeError(written.code, '账号副本写入失败：' + (written.message || ''), written);
         return { ok: false, code: written.code, message: lastError.message, rolledBack: rolledBack };
       }
+      if (K.scopeEquals(target, scope)) {
+        // 直接写了当前作用域的数据键，基线必须跟上，否则下一次保存被判旧快照
+        setBaseline(readDbRaw());
+      }
       return { ok: true, doc: sanitized.doc, warnings: sanitized.warnings, key: K.dbKeyForScope(target) };
     }
 
@@ -1783,6 +1885,8 @@
       lastWarnings = [];
       seeded = false;
       lastError = null;
+      // 清空改写了磁盘，基线必须跟着重置，否则下一次保存会被误判为旧快照
+      setBaseline(readDbRaw());
       commit(false);
       return true;
     }
@@ -1793,6 +1897,104 @@
 
     function getLastError() {
       return lastError;
+    }
+
+    function isStale() {
+      return staleLocal;
+    }
+
+    /** 当前比较基线（仅供诊断与测试；不参与业务判断）。 */
+    function getBaseline() {
+      return lastWrittenRaw;
+    }
+
+    /**
+     * 外部页面改动了数据键（由 app.js 的 storage 事件转发）。
+     * 契约 §5.2 检测点 2：立即标记 stale，并取消待执行的节流写入。
+     * @param {string} [key] 事件里的键名；省略则视为当前数据键
+     * @returns {boolean} 是否真的进入了 stale
+     */
+    function noteExternalChange(key) {
+      if (key !== undefined && key !== null && key !== dbKey) return false;
+      // 基线 null 表示「本页启动时该键不存在」，另一页面把它写出来同样是外部改动。
+      if (readDbRaw() === lastWrittenRaw) return false; // 事件内容与基线一致，无需处理
+      if (saveTimer) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+      }
+      markStale('其他页面改动了本地数据，本页已暂停写入');
+      notify();
+      return true;
+    }
+
+    /**
+     * 本地冲突（staleLocal）的处置（契约 §5.2「冲突处理」三个选项）。
+     *
+     *   'reload'    丢弃本页修改，重新 load 磁盘内容（**界面必须先导出**，这里不管导出）
+     *   'overwrite' 先把磁盘上那份备份到 `dayplan.db.recover.<ISO>`，再用本页内容覆盖
+     *   'keep'      什么都不做，继续保持 stale（允许内存编辑，不落盘、不推送）
+     *
+     * 为什么覆盖必须先备份：这一下会把另一个标签页刚写的内容变成不可恢复的删除。
+     * 备份失败**就取消覆盖**（fail closed）——宁可这次不同步，也不能在用户不知情时删数据。
+     *
+     * 只有真的 stale 时才允许调用：否则它会变成绕开写前检测的「强制覆盖」后门，
+     * §5.2 的整层保护就形同虚设。
+     *
+     * @param {('reload'|'overwrite'|'keep')} mode
+     * @returns {{ok:boolean, action?:string, backupKey?:string|null, code?:string, error?:string}}
+     */
+    function resolveStale(mode) {
+      if (!staleLocal) {
+        return { ok: false, code: 'E_NOT_STALE', error: '当前没有本地冲突需要处理' };
+      }
+      if (mode === 'keep') {
+        /* 明确表示「先不处理」：不改基线、不写盘。调用方负责持续提示。 */
+        return { ok: true, action: 'keep', stale: true };
+      }
+      if (mode === 'reload') {
+        var loaded = load();
+        return { ok: true, action: 'reload', backupKey: null, load: loaded };
+      }
+      if (mode !== 'overwrite') {
+        return { ok: false, code: 'E_BAD_MODE', error: '未知的处置方式：' + String(mode) };
+      }
+
+      var current = readDbRaw();
+      var backupKey = null;
+      if (current !== null && current !== undefined && current !== '') {
+        backupKey = 'dayplan.db.recover.' + new Date().toISOString();
+        try {
+          storage.setItem(backupKey, current);
+        } catch (e) {
+          return { ok: false, code: 'E_BACKUP_FAILED', error: '备份对方内容失败，已取消覆盖', backupKey: backupKey };
+        }
+        if (storage.getItem(backupKey) !== current) {
+          return { ok: false, code: 'E_BACKUP_FAILED', error: '备份回读不一致，已取消覆盖', backupKey: backupKey };
+        }
+      }
+
+      if (saveTimer) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+      }
+      var raw;
+      try {
+        raw = serialize();
+        storage.setItem(dbKey, raw);
+      } catch (e) {
+        return {
+          ok: false, code: 'E_STORAGE',
+          error: '写入失败：' + (e && e.message ? e.message : '未知错误'), backupKey: backupKey
+        };
+      }
+      if (readDbRaw() !== raw) {
+        return { ok: false, code: 'E_STALE', error: '覆盖后回读不一致', backupKey: backupKey };
+      }
+      /* 覆盖成功后基线跟随本次写入，否则下一次保存又会立刻判 stale。 */
+      setBaseline(raw);
+      lastError = null;
+      notify();
+      return { ok: true, action: 'overwrite', backupKey: backupKey };
     }
 
     function isStorageDegraded() {
@@ -1901,6 +2103,10 @@
       hasPendingSave: hasPendingSave,
       subscribe: subscribe,
       getState: getState,
+      /* 同步装配层（src/app.js buildSyncWiring）的 setLocalDoc / onDocApplied 依赖它做
+         整文档替换：引擎已把远端内容合并进一份完整文档，这里只负责校验 + 提交 +
+         落盘 + 通知订阅者。导出的是与内部所有写操作同一个入口，校验默认开启。 */
+      mutate: mutate,
       reset: function () { state = schema.createEmptyDocument(); commit(true); },
       // 查询
       getItem: getItem,
@@ -1908,12 +2114,21 @@
       getNote: getNote,
       getWarnings: getWarnings,
       getLastError: getLastError,
+      isStale: isStale,
+      resolveStale: resolveStale,
+      getBaseline: getBaseline,
+      noteExternalChange: noteExternalChange,
       isStorageDegraded: isStorageDegraded,
+      /* 同步装配层需要与非数据键（dayplan.auth.v1 / 同步记录）共用一个 storage 实例，
+         否则会出现「数据已降级到内存、同步元数据仍写 localStorage」的错位。
+         只允许读写同步元数据键，**不得**用它写数据键——那会绕过 lastWrittenRaw 保护。 */
+      getStorage: function () { return storage; },
       isSeeded: isSeeded,
       // 数据作用域（Phase 1B）
       getScope: getScope,
       getScopeId: getScopeId,
       getScopeInfo: getScopeInfo,
+      setSessionUid: setSessionUid,
       switchScope: switchScope,
       persistAccountCopy: persistAccountCopy,
       readAccountCopy: readAccountCopy,
@@ -1955,6 +2170,9 @@
       updateCountdown: updateCountdown,
       removeCountdown: removeCountdown,
       reorderCountdowns: reorderCountdowns,
+      // 完成台快照（D9：参与同步）
+      getFinishDock: getFinishDock,
+      setFinishDock: setFinishDock,
       // 设置
       updateSettings: updateSettings,
       // 数据
@@ -1980,6 +2198,7 @@
     createStore: createStore,
     createStorage: createStorage,
     createMemoryStorage: createMemoryStorage,
+    detectLocalStorage: detectLocalStorage,
     KEYS: {
       DB: DB_KEY, BACKUP: BACKUP_KEY, UI: UI_KEY, SEED: SEED_KEY,
       ACTIVE: K.KEYS.active, CORRUPT_PREFIX: CORRUPT_PREFIX
