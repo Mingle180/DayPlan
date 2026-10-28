@@ -1584,6 +1584,24 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
     }
 
     /**
+     * D19 兜底出口：**用本机数据覆盖云端**（云端数据连归一都救不了时）。
+     */
+    async function overwriteRemoteWithLocal() {
+      if (!uid) return fail('E_NOT_SIGNED_IN', '未登录');
+      if (state === STATES.checking) return fail('E_BAD_STATE', '正在检查，请稍后再试');
+      var parsed = R.parseSyncRecord(readKv(kv, K.syncRecordKey(uid)));
+      if (!parsed.ok || parsed.state !== 'active') {
+        return fail('E_RECORD_MISSING', '同步记录缺失或状态非 active，不能覆盖云端');
+      }
+      var chk = await check();
+      if (chk && chk.action === 'recovery') return chk;
+      if (state !== STATES.awaitingChoice) {
+        return { ok: true, skipped: true, reason: 'nothing-to-overwrite', state: state };
+      }
+      return confirm('local');
+    }
+
+    /**
      * Q-32 的第二个出口：用户在有损回写确认里选「暂不写回」。
      *
      * 为什么不是「把对话框关掉就算了」：那样标记永远留着，用户从此推不上去，
@@ -2000,6 +2018,7 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
       reopen: reopen,
       confirmReopenUpload: confirmReopenUpload,
       deleteRemote: deleteRemote,
+      overwriteRemoteWithLocal: overwriteRemoteWithLocal,
       noteLocalCleared: noteLocalCleared,
       push: push,
       pull: pull

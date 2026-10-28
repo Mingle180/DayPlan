@@ -433,6 +433,43 @@
               onclick: function () { runCheck(w, render); }
             }));
           }
+          /* D19 兜底出口：云端数据连归一都救不了（不是 DayPlan 的数据 / 版本更高 /
+             结构损坏）。继续点「开始检查」只会再失败一次，是个绕不出去的圈。
+             这时唯一能走通的路是「以本机覆盖云端」——必须由人点，因为云端那份
+             会被替换掉（本机覆盖前已自动写快照）。 */
+          if (d.engineState === 'paused-error' && d.error && d.error.code === 'E_REMOTE_INVALID') {
+            buttons.push(el('button', {
+              class: 'btn btn-sm btn-primary', type: 'button', text: '用本机数据覆盖云端',
+              title: '云端这份数据无法读取（不是本应用的数据、版本更高或已损坏）。用本机这份替换它',
+              onclick: function () {
+                M.confirm({
+                  title: '用本机数据覆盖云端？',
+                  message: '云端这份数据读不出来（可能来自更新版本，或已经损坏）。'
+                    + '覆盖后云端将变成这台设备当前的内容，云端原来那份不再保留；'
+                    + '本机内容不会改变。',
+                  confirmLabel: '覆盖云端',
+                  danger: true
+                }).then(function (ok) {
+                  if (!ok) return;
+                  Promise.resolve(w.getEngine().overwriteRemoteWithLocal()).then(function (res) {
+                    if (!res || !res.ok) {
+                      M.toast('覆盖失败：' + ((res && (res.message || res.code)) || '未知错误'));
+                      render();
+                      return;
+                    }
+                    M.toast('已用本机数据覆盖云端，同步恢复');
+                    if (typeof opts.onDataChanged === 'function') opts.onDataChanged();
+                    render();
+                    var steady = typeof opts.getSteady === 'function' ? opts.getSteady() : null;
+                    if (steady && typeof steady.schedule === 'function') steady.schedule();
+                  }, function (err) {
+                    M.toast('覆盖失败：' + (err && err.message ? err.message : '未知错误'));
+                    render();
+                  });
+                });
+              }
+            }));
+          }
         }
         /* 检查完把确认框关掉（点「暂不处理」或点遮罩）会停在 awaiting-choice。
            这是流程中停住的第三种状态，必须留一条回到选择的回路——
