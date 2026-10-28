@@ -555,14 +555,22 @@
 
     function openChoiceFor(w, chk, exportBackup, onDone) {
       var kind = chk && chk.kind;
+      /* D19（2026-10-28）：自动定向分支一律**只写本地快照、不下载文件**。
+         以前这些分支各自调用了一次 exportBackup()，等于每次「首次同步 / 重开同步 /
+         两端内容一致」都往浏览器灌一个 JSON 文件——用户看到的就是「一直在下载
+         各种备份」。要文件的人可以在设置里手动导出，自动路径不该碰下载。 */
+      function snap(reason) {
+        try {
+          if (typeof opts.snapshotBackup === 'function') opts.snapshotBackup(reason);
+        } catch (e) { /* 快照失败不影响同步 */ }
+      }
       /* D16（2026-10-28 用户裁定「记录丢失时默认以云端为准」）：有损修复不再弹框
          等确认——静默导出备份（尽力而为）后直接应用修复并写回。手机浏览器上
          程序化下载经常被拦，「先下载两份 JSON 才解锁」的门槛会把用户卡死在
          点不动的「继续应用」上；自动路径由静默备份兜底，不再依赖下载成功。 */
       if (kind === 'lossy') {
         autoLossyApply(w, {
-          exportBackup: opts.exportBackup,
-          downloadJson: opts.downloadJson,
+          snapshotBackup: opts.snapshotBackup,
           onSessionChanged: opts.onSessionChanged,
           onDataChanged: opts.onDataChanged
         }, onDone);
@@ -572,14 +580,18 @@
          remote-missing（云端被另一台设备删掉）不自动：那会违背删除意图，仍走人工。 */
       if (kind === 'recovery' && chk.options && chk.options.remote) {
         autoRecoveryRemote(w, {
-          exportBackup: opts.exportBackup,
+          snapshotBackup: opts.snapshotBackup,
           onSessionChanged: opts.onSessionChanged,
           onDataChanged: opts.onDataChanged
         }, onDone);
         return;
       }
       if (kind === 'lossy-applied') {
-        return openLossyPush({ wiring: w, onDone: onDone });
+        /* D19：修复已落到本机，只差写回云端——自动完成，不再问第二次。 */
+        autoLossyPush(w, {
+          onDataChanged: opts.onDataChanged
+        }, onDone);
+        return;
       }
       if (kind === 'reopen-upload') {
         return openUploadConfirm({ wiring: w, check: chk, onDone: onDone });
@@ -613,7 +625,7 @@
          用本机当前版本接管（升级推送）。只在**全部**校验错误都是「版本较低」时自动，
          云端真损坏（其他字段错误）仍走人工确认。覆盖前照例先导出本机备份。 */
       if (chk.case === 'C' && chk.remote && !chk.remoteValid && onlyVersionLower(chk)) {
-        try { if (typeof exportBackup === 'function') exportBackup(); } catch (eBak) { /* D10：自动定向不被备份失败卡住 */ }
+        snap('auto');
         var engineUp = w.getEngine();
         engineUp.confirm('local').then(function (res) {
           if (!res || !res.ok) {
@@ -631,7 +643,7 @@
          都要先被「两边都有内容」吓一次。直接以云端为准（照例先静默导出备份），
          演示内容被账号数据整块替换，全程不需要任何额外操作。 */
       if (chk.case === 'C' && chk.remoteValid && chk.localIsDemo) {
-        try { if (typeof exportBackup === 'function') exportBackup(); } catch (eBak) { /* D10：自动定向不被备份失败卡住 */ }
+        snap('auto');
         var engineDemo = w.getEngine();
         engineDemo.confirm('remote').then(function (res) {
           if (!res || !res.ok) {
@@ -648,7 +660,7 @@
          照例先静默导出账号候选备份（契约 §4.7），然后按「以本机为准」提交
          （提交只 establishes 锚点 + 原样上传，本机数据一个字节都不变）。 */
       if (chk.case === 'C' && chk.remoteValid && chk.sameContent) {
-        try { if (typeof exportBackup === 'function') exportBackup(); } catch (eBak) { /* D10：自动定向不被备份失败卡住 */ }
+        snap('auto');
         var engineSame = w.getEngine();
         engineSame.confirm('local').then(function (res) {
           if (!res || !res.ok) {
@@ -666,7 +678,7 @@
          云端被覆盖的那一份可从备份找回）。至此 C 不再有人工分支：
          「两边都有内容」的选择框退出首次同步流程。 */
       if (chk.case === 'C' && chk.remoteValid) {
-        try { if (typeof exportBackup === 'function') exportBackup(); } catch (eBak) { /* D10：自动定向不被备份失败卡住 */ }
+        snap('auto');
         var engineLWW = w.getEngine();
         engineLWW.confirm('local').then(function (res) {
           if (!res || !res.ok) {
@@ -1629,16 +1641,19 @@
   }
 
   /**
-   * D16 自动恢复：本机同步记录丢失时以云端为准（静默备份尽力而为，不阻塞）。
-   * D17：提到模块级并显式收 helpers（exportBackup / onSessionChanged / onDataChanged）
-   * ——除了面板内的自动路径，app.js 的启动/登录恢复路径（resume 后判 recovery）
-   * 也复用同一段逻辑，不再弹红色横幅把用户拦下来。
+   * D16 自动恢复：本机同步记录丢失时以云端为准。
+   *
+   * D19（2026-10-28）修正：**自动路径不再向浏览器下载任何文件**。
+   * 以前这里会「静默备份」＝真的触发一次文件下载，而这段逻辑可能在每次刷新、
+   * 每次自动检查时重跑，用户看到的就是「一直在下载各种备份，就是同步不上」。
+   * 现在备份只写进本机 localStorage（环形保留最近 3 份），要文件的人可以在
+   * 设置里手动导出；不给用户的，就一个字节也不下载。
    */
   function autoRecoveryRemote(w, helpers, onDone) {
     if (typeof helpers === 'function') { onDone = helpers; helpers = {}; }
     helpers = helpers || {};
     var engine = w.getEngine();
-    try { if (typeof helpers.exportBackup === 'function') helpers.exportBackup(); } catch (eBak) { /* 自动路径不被备份失败卡住 */ }
+    try { if (typeof helpers.snapshotBackup === 'function') helpers.snapshotBackup('recovery'); } catch (eBak) { /* 自动路径不被备份失败卡住 */ }
     Promise.resolve(engine.resolveRecovery('remote')).then(function (res) {
       if (!res || !res.ok) {
         M.toast('未能自动恢复：' + ((res && (res.message || res.code)) || '未知错误') + '，可点「继续选择」手动处理');
@@ -1664,12 +1679,14 @@
     if (typeof helpers === 'function') { onDone = helpers; helpers = {}; }
     helpers = helpers || {};
     var engine = w.getEngine();
-    try { if (typeof helpers.exportBackup === 'function') helpers.exportBackup(); } catch (eBak) { /* 同上 */ }
+    /* D19：自动修复同样**不下载**任何文件（见 autoRecoveryRemote 的注释）。
+       云端原始 payload 与本机副本都只写进 localStorage 快照，留给需要时查看。 */
     try {
-      if (typeof helpers.downloadJson === 'function' && typeof engine.getLossyPayload === 'function') {
-        helpers.downloadJson('remote-raw.json', engine.getLossyPayload());
+      if (typeof helpers.snapshotBackup === 'function') {
+        helpers.snapshotBackup('lossy', typeof engine.getLossyPayload === 'function'
+          ? engine.getLossyPayload() : null);
       }
-    } catch (eRaw) { /* 下载失败不阻塞自动修复 */ }
+    } catch (eBak) { /* 快照失败不阻塞自动修复 */ }
     Promise.resolve(engine.applyLossy({ confirmed: true, downloads: [], auto: true })).then(function (res) {
       if (!res || !res.ok) {
         M.toast('云端数据未能自动修复：' + ((res && (res.message || res.code)) || '未知错误') + '，两端数据都还在');
@@ -1691,6 +1708,32 @@
       if (onDone) onDone();
     }, function (err) {
       M.toast('云端数据未能自动修复：' + (err && err.message ? err.message : '未知错误'));
+      if (onDone) onDone();
+    });
+  }
+
+  /**
+   * D19（2026-10-28）：修复结果**自动写回云端**，不再弹第二次确认。
+   *
+   * 为什么改：用户口径是「登录后不要有任何需要额外操作的地方」。有损修复是
+   * 系统自己判定的（云端数据需要归一），却要人再点一次「写回」，这正是他
+   * 最反感的那种多余步骤。写回失败（网络）时保持记录里的 pending 标记，
+   * 由自愈循环自动重试——不是让同步永久停在那里。
+   */
+  function autoLossyPush(w, helpers, onDone) {
+    if (typeof helpers === 'function') { onDone = helpers; helpers = {}; }
+    helpers = helpers || {};
+    var engine = w.getEngine();
+    Promise.resolve(engine.confirmLossyPush()).then(function (res) {
+      if (res && res.ok) {
+        M.toast('已自动修复云端数据');
+      } else {
+        M.toast('修复结果待写回，稍后自动重试');
+      }
+      if (typeof helpers.onDataChanged === 'function') helpers.onDataChanged();
+      if (onDone) onDone();
+    }, function () {
+      M.toast('修复结果待写回，稍后自动重试');
       if (onDone) onDone();
     });
   }
@@ -1833,6 +1876,7 @@
     openSignIn: openSignIn,
     openFirstSync: openFirstSync,
     openRecovery: openRecovery,
+    autoLossyPush: autoLossyPush,
     openLossy: openLossy,
     openLossyPush: openLossyPush,
     openUploadConfirm: openUploadConfirm,

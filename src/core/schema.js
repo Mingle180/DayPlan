@@ -31,8 +31,8 @@
      旧 v4 云端文档在新端会被判「版本较低」，由面板用「以本机为准」完成一次升级推送。 */
   var SCHEMA_VERSION = 5;
   var APP_NAME = 'DayPlan';
-  var TITLE_MAX = 60;
-  var NOTE_MAX = 500;
+  var TITLE_MAX = 200;
+  var NOTE_MAX = 4000;
   var CATEGORY_NAME_MAX = 10;
   var NAMED_MONTHS = ['正月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '冬月', '腊月'];
   var COLOR_RE = /^#[0-9a-fA-F]{6}$/;
@@ -41,15 +41,15 @@
      · 只按月存一段文字清单，**不产生 items** —— 所以天然「不同步到每天」；
      · 键为 "YYYY-MM"；每条 {id, text, createdAt, updatedAt}，次序即数组顺序。 */
   var MONTH_KEY_RE = /^(\d{4})-(0[1-9]|1[0-2])$/;
-  var MONTH_PLAN_TEXT_MAX = 80;
-  var MONTH_PLAN_MAX = 50;         /* 单月条目上限（防御异常数据撑爆面板） */
+  var MONTH_PLAN_TEXT_MAX = 300;
+  var MONTH_PLAN_MAX = 300;         /* 单月条目上限（防御异常数据撑爆面板） */
 
   /* 五十一轮：倒计时（全局截止时刻清单）
      · 与 items / notes 并列，**不产生事项**；数组顺序即显示顺序（拖动排序 = 数组重排）。
      · targetAt 用本地墙钟 "YYYY-MM-DDTHH:mm"（分钟精度）：
        用户设的是「那天几点」，不能因为换时区/夏令时把时刻挪走。 */
   var COUNTDOWN_AT_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;
-  var COUNTDOWN_MAX = 200;         /* 条目上限（防御异常数据撑爆栏） */
+  var COUNTDOWN_MAX = 1000;         /* 条目上限（防御异常数据撑爆栏） */
 
   /* 2026-10-27（D9）：事项完成台快照（迭代 10 批次 5）。
      · 数组顺序 = 台内显示顺序；条目是 finishdock.snapshotItem() 的形状。
@@ -57,7 +57,7 @@
        singleToOccurrence 的产物）：key = "<seriesId>@<date>"，跨设备凭 seriesId
        回查当前文档；事项若已被删除，完成后静默不动（非关键状态的降级口径）。
      · 计时读数不存盘，只存状态快照（running + lastTs），读数由时间差推出。 */
-  var FINISH_DOCK_MAX = 20;
+  var FINISH_DOCK_MAX = 200;
   var DOCK_MODES = ['choose', 'stopwatch', 'countdown', 'pomodoro'];
 
   /** 迭代 4（DM-18）：紧急特殊类别 id（冻结接口） */

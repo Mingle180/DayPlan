@@ -697,6 +697,24 @@
            文件名是引擎核对凭据的一部分（lossy-gate.REQUIRED_DOWNLOADS），
            所以这里必须交出「按名字下载」的能力，不能只给一个「导出备份」。 */
         downloadJson: downloadJson,
+        /* D19（2026-10-28）：自动路径的「备份」只落本机，**不触发任何文件下载**。
+           以前每个自动定向分支都调一次下载，用户看到的是「一直在下载各种备份」。
+           环形保留最近 3 份；要文件的人可以在「数据」分组手动导出。
+           配额不足 / 隐私模式下静默失败——备份永远不该阻塞同步。 */
+        snapshotBackup: function (reason, payload) {
+          try {
+            if (!root.localStorage) return;
+            var key = 'dayplan.sync-snapshot.v1';
+            var arr = [];
+            try { arr = JSON.parse(root.localStorage.getItem(key) || '[]'); } catch (e0) { arr = []; }
+            if (!Array.isArray(arr)) arr = [];
+            var doc = null;
+            try { doc = payload || store.exportDocument(); } catch (e1) { doc = null; }
+            arr.unshift({ at: new Date().toISOString(), reason: reason || 'auto', payload: doc });
+            while (arr.length > 3) arr.pop();
+            root.localStorage.setItem(key, JSON.stringify(arr));
+          } catch (e) { /* 配额不足：静默 */ }
+        },
         exportDocument: function () { return store.exportDocument(); },
         /* 清空本机之后必须让同步停下来（T-R03）：否则下一次编辑会把空文档推上云。 */
         onDataCleared: opts.onDataCleared,

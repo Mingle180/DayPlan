@@ -362,6 +362,80 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
       return LZ.inspect(payload);
     }
 
+    /**
+     * D19（2026-10-28）：**推送载荷必须先归一**。
+     *
+     * 以前这里直接 `payloadProjection(getLocalDoc())`，等于默认「本机数据一定合法」。
+     * 实际上本机文档允许存在云端校验会拒绝的内容：旧版本产生的超长标题/备注、
+     * 完成台或单月计划累积过多、月份键来自早期版本……这些内容一旦被推上云，
+     * **任何设备**再拉取时 `validateRemoteDocument` 都会失败，同步永久卡在
+     * paused-error，界面上没有任何按钮能恢复（用户看到的只是「一直在下载备份、
+     * 就是同步不上」）。
+     *
+     * 归一在这里是「保证云端永远是一份所有设备都吃得下的文档」，不是丢数据的理由：
+     * 超过上限的条目会按上限截断/丢弃，但这件事会以有损审计的形式如实上报，
+     * 不会静默发生（归一的 audit 由调用方决定要不要提示）。
+     */
+    function buildPushPayload(doc) {
+      try {
+        var norm = remoteApply.normalizeAndAudit(doc);
+        if (norm && norm.doc) return H.payloadProjection(norm.doc);
+      } catch (e) { /* 归一失败就退回原样，交给后端/校验去拒 */ }
+      return H.payloadProjection(doc);
+    }
+
+    /**
+     * 读云端后的审计入口：**严格校验失败不等于无解**。
+     *
+     * 先按严格校验判；不过就尝试归一——历史上限更宽松时产生的数据（或旧客户端
+     * 推上来的数据）归一后往往是合法的。归一后合法就当作「有损数据」交给有损
+     * 闸门（界面会自动修复并写回，D16/D17 已有这条路径），只有归一也救不了
+     * 才判 E_REMOTE_INVALID。
+     */
+    /** 这些路径上的错误属于「身份 / 版本 / 结构」，不是内容超限——归一不能救。 */
+    var HARD_PATHS = ['$', '$.app', '$.schemaVersion', '$.items', '$.categories',
+      '$.notes', '$.weekNotes', '$.monthPlans', '$.countdowns', '$.finishDock'];
+
+    function auditIncoming(payload) {
+      var v = remoteDoc.validateRemoteDocument(payload);
+      if (v.ok) {
+        return { ok: true, strict: true, recovered: false, insp: LZ.inspect(payload) };
+      }
+      /* ① 硬伤先拦：不是 DayPlan 的数据、版本比本机高、顶层结构性错误——
+         这些不是「内容超限」，硬修等于把别人的数据当成自己的应用。
+         归一前后 app / schemaVersion 被改写，同样算硬伤。 */
+      var hard = !!v.versionStatus && v.versionStatus === 'higher';
+      if (!hard) {
+        hard = (v.errors || []).some(function (e) {
+          return HARD_PATHS.indexOf(String((e && e.path) || '')) !== -1;
+        });
+      }
+      if (hard) {
+        return {
+          ok: false, code: 'E_REMOTE_INVALID',
+          message: '远端文档未通过严格校验，拒绝应用', errors: v.errors
+        };
+      }
+      /* ② 内容层面的超限（标题/备注过长、完成台或月计划过多、非法月份键）：
+         归一后合法就当作有损数据处理，交给有损闸门自动修复。 */
+      var insp = LZ.inspect(payload);
+      var clean = insp && insp.doc ? H.payloadProjection(insp.doc) : null;
+      if (clean && (clean.app !== payload.app || clean.schemaVersion !== payload.schemaVersion)) {
+        return {
+          ok: false, code: 'E_REMOTE_INVALID',
+          message: '远端文档的身份/版本被归一改写，拒绝应用', errors: v.errors
+        };
+      }
+      var v2 = clean ? remoteDoc.validateRemoteDocument(clean) : { ok: false };
+      if (!v2.ok) {
+        return {
+          ok: false, code: 'E_REMOTE_INVALID',
+          message: '远端文档未通过严格校验，拒绝应用', errors: v.errors
+        };
+      }
+      return { ok: true, strict: false, recovered: true, insp: insp, errors: v.errors };
+    }
+
     /** 被有损闸门拦下时进入「等确认」，内存里留一份原始 payload（§1.8.1）。 */
     function enterLossy(insp, source, row) {
       state = STATES.awaitingChoice;
@@ -516,9 +590,9 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
       var remoteValid = true;
       var errors = [];
       if (remote) {
-        var v = remoteDoc.validateRemoteDocument(remote.payload);
-        remoteValid = v.ok;
-        errors = v.errors;
+        var inc = auditIncoming(remote.payload);
+        remoteValid = inc.ok;      // D19：归一后可救不再算「不可用」
+        errors = inc.errors || [];
       }
 
       var localDoc = getLocalDoc();
@@ -642,7 +716,8 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
         return fail(h.code, h.message, h.detail);
       }
       if (choice === 'local') {
-        var payload = H.payloadProjection(targetDoc);
+        /* D19：推送前归一，云端永远是一份所有设备都吃得下的文档。 */
+      var payload = buildPushPayload(targetDoc);
         var pushed = await backend.write(uid, payload, expectedRevision);
         /* D10：检查与提交之间云端又被人改了 → 不再判失败回滚，
            按「本机胜出」读到当前行无条件覆盖写（本机选择已经发生）。 */
@@ -784,7 +859,7 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
         };
       }
 
-      var payload = H.payloadProjection(doc);
+      var payload = buildPushPayload(doc);
       var pushed = await backend.write(uid, payload, record.lastKnownRevision);
       /* D10（2026-10-27 用户裁定「任何设备均以本地覆盖云端」）：revision 分歧
          不再是冲突——读到云端当前行后无条件覆盖写。稳态同步的语义从此是
@@ -863,13 +938,11 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
         return { ok: true, skipped: true, reason: 'up-to-date', revision: res.row.revision };
       }
 
-      var v = remoteDoc.validateRemoteDocument(res.row.payload);
-      if (!v.ok) {
-        return fail('E_REMOTE_INVALID', '远端文档未通过严格校验，拒绝应用', v.errors);
-      }
+      var inc = auditIncoming(res.row.payload);
+      if (!inc.ok) return fail(inc.code, inc.message, inc.errors);
       /* 稳态拉取同样过有损闸门：这条路径以前是最容易被忽略的一条，
          因为它「平时都好好的」，直到某天云端出现一份超限文档。 */
-      var insp = auditRemote(res.row.payload);
+      var insp = inc.insp;
       if (insp.lossy) return enterLossy(insp, 'pull', res.row);
       var merged = remoteApply.mergeRemote(insp.doc, getLocalDoc(), { now: now() });
       if (!merged.ok) {
@@ -1106,9 +1179,9 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
       var remoteValid = true;
       var errors = [];
       if (row) {
-        var v = remoteDoc.validateRemoteDocument(row.payload);
-        remoteValid = v.ok;
-        errors = v.errors;
+        var inc2 = auditIncoming(row.payload);
+        remoteValid = inc2.ok;    // D19：归一后可救即视为可用
+        errors = inc2.errors || [];
       }
 
       var dbKey = K.dbKeyForScope(K.userScope(uid));
@@ -1218,7 +1291,7 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
 
       /* 用**刚读到的** revision 做条件更新（§5.5）。云端无行时传 null 走插入——
          那是用户明确选择的「重新上传」，不是自动重建。 */
-      var pushed = await backend.write(uid, H.payloadProjection(cand.doc), rev);
+      var pushed = await backend.write(uid, buildPushPayload(cand.doc), rev);
       if (!pushed.ok) {
         return isTransient(pushed.code)
           ? transientFail(pushed.code, pushed.message || '推送失败')
@@ -1475,7 +1548,7 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
         };
       }
 
-      var pushed = await backend.write(uid, H.payloadProjection(cand.doc), record.lastKnownRevision);
+      var pushed = await backend.write(uid, buildPushPayload(cand.doc), record.lastKnownRevision);
       if (!pushed.ok) {
         return isTransient(pushed.code)
           ? transientFail(pushed.code, pushed.message || '推送失败')
@@ -1568,10 +1641,10 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
 
     /** 只远端变：校验 → 有损审计 → 合并 → 写账号副本 → 回读 → 更新记录 → 切指针。 */
     async function pullInto(record, row) {
-      var v = remoteDoc.validateRemoteDocument(row.payload);
-      if (!v.ok) return fail('E_REMOTE_INVALID', '远端文档未通过严格校验，拒绝应用', v.errors);
+      var inc = auditIncoming(row.payload);
+      if (!inc.ok) return fail(inc.code, inc.message, inc.errors);
 
-      var insp = auditRemote(row.payload);
+      var insp = inc.insp;
       if (insp.lossy) return enterLossy(insp, 'pull-into', row);
 
       var cand = readDocKey(kv, K.dbKeyForScope(K.userScope(uid)));
@@ -1627,7 +1700,7 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
           action: 'leased', retryable: true, holder: gate.holder
         };
       }
-      var payload = H.payloadProjection(candDoc);
+      var payload = buildPushPayload(candDoc);
       var pushed = await backend.write(uid, payload, record.lastKnownRevision);
       /* D10：force 时 revision 分歧按「本机胜出」无条件覆盖（见 forceOverwrite）。 */
       if (!pushed.ok && pushed.code === 'E_CONFLICT' && opts2 && opts2.force) {

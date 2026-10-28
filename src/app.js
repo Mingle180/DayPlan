@@ -975,14 +975,23 @@
       var dl = SettingsView && typeof SettingsView.downloadJson === 'function'
         ? SettingsView.downloadJson : null;
       return {
-        /* 静默备份：尽力而为，失败不阻塞自动恢复（D16 口径）。 */
-        exportBackup: function () {
+        /* D19（2026-10-28）：自动路径的备份**只写本机 localStorage，不下载**。
+           以前这里每跑一次就下载一个「同步前备份」文件，而这段逻辑会在刷新、
+           自动检查、自愈循环里反复跑——用户看到的就是「一直在下载备份」。
+           环形保留最近 3 份；要文件的人在设置里手动导出。 */
+        snapshotBackup: function (reason, payload) {
           try {
-            var payload = store.exportDocument();
-            var name = 'dayplan-同步前备份-' + D.todayISO().replace(/-/g, '') + '-'
-              + new Date().toTimeString().slice(0, 5).replace(':', '') + '.json';
-            if (dl) dl(name, payload);
-          } catch (e) { /* 备份失败不阻塞 */ }
+            if (!root.localStorage) return;
+            var key = 'dayplan.sync-snapshot.v1';
+            var arr = [];
+            try { arr = JSON.parse(root.localStorage.getItem(key) || '[]'); } catch (e0) { arr = []; }
+            if (!Array.isArray(arr)) arr = [];
+            var doc = null;
+            try { doc = payload || store.exportDocument(); } catch (e1) { doc = null; }
+            arr.unshift({ at: new Date().toISOString(), reason: reason || 'auto', payload: doc });
+            while (arr.length > 3) arr.pop();
+            root.localStorage.setItem(key, JSON.stringify(arr));
+          } catch (e) { /* 配额不足 / 隐私模式：静默 */ }
         },
         downloadJson: dl,
         /* 会话没变（登录态不变），数据刷新由引擎 onDocApplied 钩子负责。 */
@@ -1013,6 +1022,13 @@
       var Panel = root.DayPlan && root.DayPlan.syncPanel;
       if (!Panel || typeof Panel.autoLossyApply !== 'function' || !syncWiring) return;
       Panel.autoLossyApply(syncWiring, autoResumeHelpers(), afterAutoResume);
+    }
+
+    /** D19：修复结果已落本机、只差写回云端时自动完成（不弹第二次确认）。 */
+    function autoResumeLossyPush() {
+      var Panel = root.DayPlan && root.DayPlan.syncPanel;
+      if (!Panel || typeof Panel.autoLossyPush !== 'function' || !syncWiring) return;
+      Panel.autoLossyPush(syncWiring, {}, afterAutoResume);
     }
 
     /**
@@ -1082,9 +1098,12 @@
           autoResumeLossy();
           return;
         }
-        /* 修复结果还没写回云端：不稳态同步 = 不上传，这是对的。提示一次即可。 */
+        /* 修复结果还没写回云端。D19：以前这里直接 return——于是只要写回失败一次
+           （手机上很常见），同步就永久停在这个状态，只能靠用户手动去面板点。
+           现在自动重试写回；成功即回到 syncing，失败由自愈循环继续。 */
         if (r.action === 'lossy-push-pending') {
           teardownSteady();
+          autoResumeLossyPush();
           return;
         }
         /* 关闭同步期间攒下的改动，重新开启时要先问（§4.5.3）。面板会摆出确认框，
