@@ -253,12 +253,20 @@
         p = Promise.reject(err);
       }
       return p.then(function (res) {
+        /* D22：E_LOSSY 在 D21 之后不是死路——引擎已进 awaiting-choice，
+           自愈循环 15 秒内会自动修复并写回。把引擎那句「需要先导出两份 JSON」
+           的人工时代文案换掉，否则用户看到的是一句马上就会过时的恐吓。 */
+        var pullMsg = (res && res.ok)
+          ? ((res && res.skipped) ? '云端无更新' : '已拉取')
+          : (res && res.code === 'E_LOSSY')
+            ? '云端数据需要修复，正在自动处理…'
+            : ((res && res.message) || '拉取失败');
         report({
           kind: 'pull',
           ok: !!(res && res.ok),
           skipped: !!(res && res.skipped),
           code: (res && res.ok) ? ((res && res.skipped) ? 'E_NO_CHANGE' : 'OK') : ((res && res.code) || 'E_UNKNOWN'),
-          message: (res && res.ok) ? ((res && res.skipped) ? '云端无更新' : '已拉取') : ((res && res.message) || '拉取失败'),
+          message: pullMsg,
           retryable: !!(res && res.retryable),
           at: now()
         });
