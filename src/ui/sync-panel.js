@@ -53,7 +53,7 @@
     E_NEEDS_RECOVERY: '本机的同步记录丢失或损坏了，正在自动恢复同步。',
     E_BOOT_BLOCKED: '本机的同步记录形状无法判定，已停止同步以避免覆盖。建议先导出本机数据，再退出登录重新开始。',
     E_REMOTE_MISSING: '云端已经没有这个账号的数据了（可能是在别的设备上删掉了）。正在用本机这一份自动重建。',
-    E_CANDIDATE_MISSING: '这台设备上没有该账号的数据副本，无法以本机为准。',
+    E_CANDIDATE_MISSING: '这台设备上没有该账号的历史副本，正在用当前内容重新开始同步。',
     /* 租约（§5.4）：这不是失败，是「排队」。 */
     E_LEASE_BUSY: '另一个标签页正在同步，这次的改动还在本机，稍后会自动重试。',
     E_LEASE_LOST: '另一个标签页抢先开始了同步，这次的改动还在本机，稍后会自动重试。',
@@ -1540,19 +1540,31 @@
     helpers = helpers || {};
     var engine = w.getEngine();
     try { if (typeof helpers.snapshotBackup === 'function') helpers.snapshotBackup('recovery'); } catch (eBak) { /* 自动路径不被备份失败卡住 */ }
-    Promise.resolve(engine.resolveRecovery('remote')).then(function (res) {
-      if (!res || !res.ok) {
-        M.toast('未能自动恢复：' + ((res && (res.message || res.code)) || '未知错误') + '，可点「继续选择」手动处理');
-      } else {
-        M.toast('已以云端为准恢复同步');
-      }
-      if (typeof helpers.onSessionChanged === 'function') helpers.onSessionChanged(true);
-      if (typeof helpers.onDataChanged === 'function') helpers.onDataChanged();
-      if (onDone) onDone();
-    }, function (err) {
-      M.toast('未能自动恢复：' + (err && err.message ? err.message : '未知错误'));
-      if (onDone) onDone();
-    });
+
+    /* D24b：resolveRecovery 的统一收尾。远端不可用（E_NO_REMOTE）时回落本机——
+       引擎侧会把「两端都没有该账号数据」处理成用当前内容重新开始（不再死状态）。 */
+    function finishWith(choice) {
+      return Promise.resolve(engine.resolveRecovery(choice)).then(function (res) {
+        if (!res || !res.ok) {
+          if (choice === 'remote' && res && res.code === 'E_NO_REMOTE') {
+            /* 检查到提交之间云端变得不可取了：按裁定回落本机，不停下 */
+            return finishWith('local');
+          }
+          M.toast('未能自动恢复：' + ((res && (res.message || res.code)) || '未知错误'));
+        } else {
+          M.toast(choice === 'remote' ? '已以云端为准恢复同步' : '已以本机为准恢复同步');
+        }
+        if (typeof helpers.onSessionChanged === 'function') helpers.onSessionChanged(true);
+        if (typeof helpers.onDataChanged === 'function') helpers.onDataChanged();
+        if (onDone) onDone();
+        return res;
+      }, function (err) {
+        M.toast('未能自动恢复：' + (err && err.message ? err.message : '未知错误'));
+        if (onDone) onDone();
+        return { ok: false, code: (err && err.code) || 'E_RECOVERY_FAILED' };
+      });
+    }
+    return finishWith('remote');
   }
 
   /**

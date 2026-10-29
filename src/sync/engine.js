@@ -1360,10 +1360,26 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
       }
 
       /* 以本机为准 */
-      if (!ck.local || !ck.local.available) {
-        return fail('E_CANDIDATE_MISSING', '账号副本不存在或不可读，不能以本机为准');
-      }
       var cand = readDocKey(kv, dbKey);
+      if ((!ck.local || !ck.local.available) && !cand.ok) {
+        /* D24b（2026-10-29 用户实测「上次失败：这台设备上没有该账号的数据副本，
+           无法以本机为准」）：账号副本不存在 = 这台设备从未完成过首次同步——
+           而能走到「以本机为准」，说明云端也没有可取的合法内容（否则早已走
+           remote 分支）。两端都没有该账号的数据 = 全新开始：直接用当前活动
+           文档上传。旧行为 fail(E_CANDIDATE_MISSING) 进 paused-error 死状态，
+           恰好卡在「同步从未实现过」的设备上，永远出不去。
+           云端无行时 rev=null 走插入，不覆盖任何东西；云端有非法行时
+           inspectRecovery 已先写过快照环。 */
+        var actDoc = typeof getLocalDoc === 'function' ? getLocalDoc() : null;
+        if (!actDoc) {
+          return fail('E_CANDIDATE_MISSING', '账号副本不存在，且没有可用的本机文档');
+        }
+        snapshotRing('recovery-local-fresh');
+        /* 账号副本也一并落盘：否则下次恢复还会再撞同一个缺口 */
+        var wAct = writeDocKey(kv, dbKey, actDoc);
+        if (!wAct.ok) return fail(wAct.code, wAct.message, wAct.detail);
+        cand = { ok: true, doc: actDoc };
+      }
       if (!cand.ok) return fail(cand.code, cand.message, cand.detail);
       var lh = await safeHash(cand.doc);
       if (!lh.ok) return fail(lh.code, lh.message, lh.detail);
