@@ -189,8 +189,8 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
       recovery: '本机的同步记录丢失或损坏了。为了不让两边互相覆盖，需要你确认保留哪一边。',
       blocked: '本机的同步记录形状无法判定（既不是有效记录，也不像是损坏）。为安全起见暂停同步，请导出本机数据后重新登录。',
       remoteMissing: '云端已经没有这个账号的数据了（可能是在别的设备上删掉了）。本机还保留着一份，需要你确认是否重新上传。',
-      lossy: '云端这份数据里有会被丢弃或改写的条目，已停下等自动修复；本机与云端的数据都原样保留，不会丢。',
-      lossyPush: '修复后的数据还没写回云端。回写会覆盖云端那一份，需要你再确认一次。',
+      lossy: '云端这份数据里有超出当前版本上限的条目，正在自动修复（覆盖前已原样快照，可找回）。',
+      lossyPush: '修复后的数据正在自动写回云端。',
       lossyStopped: '已停止与云端的同步。本机的修复结果与云端的原始内容都保持原样，两边不再互相同步；再次开启同步时会问你本机改动要不要上传。',
       resetReopen: '同步曾经关闭过，或者云端/本机被清空过。需要重新检查一次云端，不能沿用旧锚点。',
       localCleared: '本机数据已清空，云端那份仍然保留。需要时点「开始检查」重新读取云端。'
@@ -468,9 +468,14 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
     }
 
     /** 被有损闸门拦下时进入「等确认」，内存里留一份原始 payload（§1.8.1）。 */
+    /**
+     * D23（2026-10-29 用户裁定「删掉所有不让同步的限制」）：有损不再是一个
+     * 「等用户点」的状态。旧行为：进 awaiting-choice 摆对话框，等界面自动/手动
+     * 应用——链路只要断一环（面板没开、confirm 失败一次）就永远停在这。
+     * 新行为：**原样快照进快照环 → 返回可重试结果（调用方照常退避）→
+     * 后台微任务里自动应用修复并自动写回**。状态机不再经过 awaiting-choice。
+     */
     function enterLossy(insp, source, row) {
-      state = STATES.awaitingChoice;
-      lastError = null;
       pendingLossy = {
         source: source,
         revision: row ? row.revision : null,
@@ -487,11 +492,33 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
         revision: row ? row.revision : null,
         preview: insp.preview,
         warnings: insp.warnings.slice(0, LZ.WARN_MAX),
-        required: { confirm: true, downloads: LZ.REQUIRED_DOWNLOADS.slice() }
+        required: { confirm: false, downloads: [] }
       };
+      /* 快照的是被替换的远端原始行（拉取路径）或本机文档（覆盖路径）。 */
+      snapshotRing('lossy-' + source, row ? row.payload : undefined);
+      var myPending = pendingLossy;
+      Promise.resolve().then(async function () {
+        console.error('[heal] start');
+        var applied = await applyLossyCore(myPending);
+        console.error('[heal] applied:', JSON.stringify(applied && {ok:applied.ok, code:applied.code, action:applied.action}));
+        if (!applied || !applied.ok) {
+          transientFail('E_LOSSY_HEAL', (applied && applied.message) || '自动修复失败，稍后自动重试');
+          return;
+        }
+        console.error('[heal] calling clp');
+        var pushedBack = await confirmLossyPush();
+        console.error('[heal] clp:', JSON.stringify(pushedBack && {ok:pushedBack.ok, code:pushedBack.code}));
+        if (!pushedBack || !pushedBack.ok) {
+          /* 写回失败不致命：记录里留着 pendingPushAfterLossyApply，
+             app.js 的 lossy-push-pending 自动补推会接手。 */
+          transientFail('E_LOSSY_PUSH', (pushedBack && pushedBack.message) || '修复结果写回失败，稍后自动重试');
+        }
+      });
       return {
         ok: false,
         code: 'E_LOSSY',
+        auto: true,
+        retryable: true,
         action: 'lossy',
         kind: 'lossy',
         message: MSG.lossy,
@@ -500,6 +527,48 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
         warnings: lastCheck.warnings,
         required: lastCheck.required
       };
+    }
+
+    /** applyLossy 的核心（D23 抽出）：归一合并 → 哈希 → 落盘 → commitLossy。 */
+    async function applyLossyCore(pending) {
+      console.error('[core] enter');
+      var scope = K.userScope(uid);
+      var dbKey = K.dbKeyForScope(scope);
+      var fresh = readDocKey(kv, dbKey);
+      var baseDoc = fresh.ok ? fresh.doc : { meta: {}, settings: {} };
+
+      var merged = remoteApply.mergeRemote(pending.doc, baseDoc, { now: now(), prev: readBase() });
+      if (!merged.ok) return fail('E_MERGE_FAILED', '有损修复的应用失败', merged.errors);
+
+      var h = await safeHash(merged.doc);
+      if (!h.ok) return fail(h.code, h.message, h.detail);
+
+      var w = writeDocKey(kv, dbKey, merged.doc);
+      console.error('[core] written, commitLossy next, rev=', pending.revision);
+      if (!w.ok) return fail(w.code, w.message, w.detail);
+
+      var cl = commitLossy(pending.revision, h.hash, merged.doc);
+      console.error('[core] commitLossy:', JSON.stringify(cl && {ok:cl.ok, code:cl.code}));
+      return cl;
+    }
+
+    /**
+     * D23：自动覆盖前的快照环（环形 3 份，存 kv）。引擎层兜底——以前快照
+     * 依赖界面的 snapshotBackup，界面没开就没有快照。
+     */
+    function snapshotRing(reason, payload) {
+      try {
+        var KEY = 'dayplan.sync.snapshot.autos.v1';
+        var arr = [];
+        try { arr = JSON.parse(kv.get(KEY) || '[]') || []; } catch (e) { arr = []; }
+        if (!Array.isArray(arr)) arr = [];
+        var doc = payload !== undefined && payload !== null
+          ? payload
+          : (typeof getLocalDoc === 'function' ? getLocalDoc() : null);
+        arr.push({ at: now(), reason: reason, doc: doc });
+        while (arr.length > 3) arr.shift();
+        kv.set(KEY, JSON.stringify(arr));
+      } catch (e) { /* 快照失败不阻塞同步 */ }
     }
 
     /**
@@ -1113,24 +1182,23 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
           : fail(res.code, res.message || '读取云端失败');
       }
       if (!res.row) {
-        /* 记录说同步过，云端却没有行：只可能是被删或换了项目。
-           既不能自动重建（T-R06/S-18），也不该只给一个「重试」的循环——
-           把两端摘要摆出来，让用户决定是否重新上传。 */
-        return enterChoice({
-          kind: 'remote-missing',
-          reason: 'remote-row-missing',
-          remote: null,
-          remoteValid: false,
-          local: {
-            available: true,
-            code: null,
-            hash: h.hash,
-            summary: summarizeDoc(cand.doc)
-          },
-          /* §4.7.5：云端无行时只有账号候选**存在内容**才谈得上上传（A′），
-             候选为空按 D 处理，不生成数据。 */
-          options: { remote: false, local: hasContent(cand.doc), pause: true }
-        });
+        /* D23：记录说同步过、云端却没有行——只可能是被删或换了项目。
+           旧行为是摆三选一等人点；新行为：云端空无一物，用本机原样重建，
+           没有任何东西会被覆盖，无需询问、无需快照。 */
+        var gateRebuild = await guardLease();
+        if (!gateRebuild.ok) {
+          return {
+            ok: false, code: gateRebuild.code, message: gateRebuild.message,
+            action: 'leased', retryable: true, holder: gateRebuild.holder
+          };
+        }
+        var rebuilt = await backend.write(uid, buildPushPayload(cand.doc), null);
+        if (!rebuilt.ok) {
+          return isTransient(rebuilt.code)
+            ? transientFail(rebuilt.code, rebuilt.message || '重建云端数据失败')
+            : fail(rebuilt.code, rebuilt.message || '重建云端数据失败');
+        }
+        return commitRecovery(rebuilt.revision, h.hash, { scopeId: K.scopeId(scope), applied: null });
       }
       var remoteChanged = res.row.revision !== record.lastKnownRevision;
 
@@ -1144,29 +1212,8 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
         /* §4.5.3：关闭同步期间攒下的改动，重新开启时**必须显式确认上传**。
            这条路与「重新登录」共用四象限，唯一的区别就在这里 —— 不能合并成一个
            分支，否则「重开同步」会变成「一开就静默覆盖云端」。 */
-        if (opts.uploadNeedsConfirm) {
-          state = STATES.awaitingChoice;
-          lastError = null;
-          lastCheck = {
-            ok: false,
-            action: 'upload-confirm',
-            kind: 'reopen-upload',
-            localChanged: localChanged || forced,
-            remoteChanged: false,
-            revision: res.row.revision,
-            localSummary: summarizeDoc(cand.doc),
-            remoteSummary: summarizeRemote(res.row)
-          };
-          return {
-            ok: false,
-            code: 'E_UPLOAD_CONFIRM_REQUIRED',
-            action: 'upload-confirm',
-            message: '关闭同步期间本机有改动，重新开启需要确认是否上传。',
-            revision: res.row.revision,
-            localSummary: lastCheck.localSummary,
-            remoteSummary: lastCheck.remoteSummary
-          };
-        }
+        /* D23：重开的「是否上传」确认退场——关闭期间攒下的改动自动上传。
+           冲突走 pushOut 内部的合并自愈（D22c），不会覆盖云端的新改动。 */
         return pushOut(record, cand.doc, h.hash);
       }
 
@@ -1176,18 +1223,7 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
          覆盖前的账号候选备份仍由界面层负责（首次同步与四象限入口都有 exportBackup）。
          **例外**：关闭记录的重新开启（uploadNeedsConfirm）维持 Q-31/Q-32 的
          显式确认——那是用户亲手关掉的同步，重开是另一条受保护的路。 */
-      if (opts.uploadNeedsConfirm) {
-        state = STATES.awaitingChoice;
-        lastCheck = {
-          ok: true,
-          action: 'conflict',
-          localChanged: localChanged || forced,
-          remoteChanged: true,
-          revision: res.row.revision,
-          remote: res.row
-        };
-        return lastCheck;
-      }
+      /* D23：两边都改的重开确认也退场——与常规路径一样走三向合并。 */
       return mergeAndPush(record, cand.doc, h.hash, res.row);
     }
 
@@ -1253,7 +1289,7 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
         local.summary = summarizeDoc(cand.doc);
       }
 
-      return enterChoice({
+      var chk = enterChoice({
         kind: 'recovery',
         reason: boot.reason,
         remote: row,
@@ -1266,6 +1302,17 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
           pause: true
         }
       });
+      /* D23：恢复不再问人。云端合法 → 整份取云端；云端没有或非法 →
+         本机可读就用本机重建/接管（覆盖前先快照）；两边都空 → 原样返回。 */
+      if (chk.remoteValid) {
+        snapshotRing('recovery-remote');
+        return resolveRecovery('remote');
+      }
+      if (local.available) {
+        snapshotRing('recovery-local');
+        return resolveRecovery('local');
+      }
+      return chk;
     }
 
     /**
@@ -1485,22 +1532,7 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
         }
       }
 
-      var scope = K.userScope(uid);
-      var dbKey = K.dbKeyForScope(scope);
-      var fresh = readDocKey(kv, dbKey);
-      var baseDoc = fresh.ok ? fresh.doc : { meta: {}, settings: {} };
-
-      var merged = remoteApply.mergeRemote(pendingLossy.doc, baseDoc, { now: now(), prev: readBase() });
-      if (!merged.ok) return fail('E_MERGE_FAILED', '有损修复的应用失败', merged.errors);
-
-      /* 先算哈希再落盘：算不出来时账号副本不能被换掉（§4.6.5）。 */
-      var h = await safeHash(merged.doc);
-      if (!h.ok) return fail(h.code, h.message, h.detail);
-
-      var w = writeDocKey(kv, dbKey, merged.doc);
-      if (!w.ok) return fail(w.code, w.message, w.detail);
-
-      return commitLossy(pendingLossy.revision, h.hash, merged.doc);
+      return applyLossyCore(pendingLossy);
     }
 
     /** 有损修复的收尾。与 commitRecovery 的差别只有一处：pendingPushAfterLossyApply=true。 */

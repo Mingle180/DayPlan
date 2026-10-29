@@ -213,10 +213,28 @@
           }
         }
 
-        if (status === 401) return fail('E_UNAUTHORIZED', status, '未授权（401）');
-        if (status === 403) return fail('E_FORBIDDEN', status, '权限不足（403）');
+        /* D23：把 PostgREST 的原话（code + message）透出到错误消息里。
+           以前 401/403 只给「未授权/权限不足」，云端权限配错（如 42501
+           permission denied）被吞掉，用户和开发者都只能看到一句空话。 */
+        function pgSuffix() {
+          if (!parsed || typeof parsed !== 'object') return '';
+          var m = parsed.message || parsed.error_description || parsed.error || '';
+          return (parsed.code ? '[' + parsed.code + '] ' : '') + m;
+        }
+
+        if (status === 401) {
+          var d401 = pgSuffix();
+          return fail('E_UNAUTHORIZED', status, '未授权（401）' + (d401 ? '：' + d401 : ''));
+        }
+        if (status === 403) {
+          var d403 = pgSuffix();
+          return fail('E_FORBIDDEN', status, '权限不足（403）' + (d403 ? '：' + d403 : ''));
+        }
         if (status === 409) return fail('E_CONFLICT', status, '行已存在或唯一约束冲突（409）');
-        if (status >= 500) return fail('E_SERVER', status, '服务端错误（' + status + '）');
+        if (status >= 500) {
+          var d5xx = pgSuffix();
+          return fail('E_SERVER', status, '服务端错误（' + status + '）' + (d5xx ? '：' + d5xx : ''));
+        }
         if (status >= 400) {
           var msg = (parsed && (parsed.message || parsed.error_description || parsed.error)) || '';
           return fail('E_CLIENT', status, msg || ('客户端错误（' + status + '）'));
