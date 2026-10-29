@@ -629,22 +629,14 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
     }
 
     /**
-     * 本机数据被其他标签页改动（契约 §5.2「冲突处理」第 3 条：未解决前同步保持
-     * `paused-error`）。由界面在 storage 事件 / 写后回读失败时调用。
-     *
-     * 只在**本来在同步**时才有意义：`local` / `signed-in` 下没有云端写入可暂停，
-     * 硬把它改成 paused-error 只会平白多出一个错误横幅。
+     * 本机数据被其他标签页改动。D23b（2026-10-29 用户裁定「删掉所有不让同步
+     * 的限制」）：这**不是错误**——界面层会自动快照并采纳磁盘上的最新内容，
+     * 采纳后的下一次推送自然带上正确的数据，引擎没有任何需要暂停的理由。
+     * 旧实现 fail('E_STALE_LOCAL') 进 paused-error，配上「请按提示选择如何
+     * 处理」的横幅——正是用户实测截图里那条。保留函数仅为兼容旧调用点。
      */
     function noteLocalStale(message) {
-      var msg = message || '其他页面改动了本地数据，同步已暂停';
-      if (state === STATES.syncing || state === STATES.checking) {
-        /* 停了云端写就不该继续占着协调权：租约是「我要写云端」的声明，
-           抱着它不放会让别的标签页一直以为有人在同步，直到本页关闭。 */
-        var l = getLease();
-        if (l) l.release();
-        return fail('E_STALE_LOCAL', msg);
-      }
-      return { ok: false, code: 'E_STALE_LOCAL', message: msg, state: state, ignored: true };
+      return { ok: true, ignored: true, state: state, code: null, message: message || null };
     }
 
     /**
@@ -1639,6 +1631,42 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
       }
 
       var pushed = await backend.write(uid, buildPushPayload(cand.doc), record.lastKnownRevision);
+      /* D23b（2026-10-29）：写回撞上并发冲突不再死——这正是用户实测的
+         「条件未命中（0 行）…（E_LOSSY_PUSH）」：修复期间另一台设备推了一次，
+         条件推送落空。读当前行 → 三向合并（两边都留住）→ 基于最新行强推。
+         注意不能走 mergeAndPush：pushOut 的 pending 闸门会把它挡回来，
+         所以在这里内联合并。 */
+      if (!pushed.ok && pushed.code === 'E_CONFLICT') {
+        var clashLossy = await backend.read(uid);
+        if (!clashLossy.ok) {
+          return isTransient(clashLossy.code)
+            ? transientFail(clashLossy.code, clashLossy.message || '读取云端失败')
+            : fail(clashLossy.code, clashLossy.message || '读取云端失败');
+        }
+        if (!clashLossy.row) {
+          return fail('E_REMOTE_MISSING', '云端行已不存在，写回中止');
+        }
+        var incLossy = auditIncoming(clashLossy.row.payload);
+        if (incLossy.ok && !(incLossy.insp && incLossy.insp.lossy)) {
+          var remerged = remoteApply.mergeRemote(incLossy.insp.doc, cand.doc, {
+            now: now(), prev: readBase()
+          });
+          if (remerged.ok) {
+            var h2 = await safeHash(remerged.doc);
+            if (h2.ok) {
+              var w2 = writeDocKey(kv, K.dbKeyForScope(K.userScope(uid)), remerged.doc);
+              if (w2.ok) {
+                var fo = await forceOverwrite(buildPushPayload(remerged.doc));
+                if (fo.ok) {
+                  pushed = fo;
+                  h = h2;
+                  cand = { ok: true, doc: remerged.doc };
+                }
+              }
+            }
+          }
+        }
+      }
       if (!pushed.ok) {
         return isTransient(pushed.code)
           ? transientFail(pushed.code, pushed.message || '推送失败')

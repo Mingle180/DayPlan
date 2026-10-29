@@ -1754,12 +1754,8 @@
       SettingsView.downloadJson(name, payload);
     }
 
-    function pauseSyncForStale() {
-      if (!syncWiring || typeof syncWiring.noteLocalStale !== 'function') return;
-      try {
-        syncWiring.noteLocalStale('其他页面改动了本地数据，同步已暂停');
-      } catch (e) { /* 同步层不可用时无所谓：本来就没在同步 */ }
-    }
+    /* D23b：pauseSyncForStale 已删——本机被其他标签页更新由自动采纳处理，
+       引擎不再因本地陈旧而暂停（见 engine.noteLocalStale 的 D23b 注释）。 */
 
     function showStaleBanner() {
       if (staleBanner) return;   // 一次只摆一条，避免连续编辑把横幅堆成墙
@@ -1827,7 +1823,8 @@
       var hadPending = false;
       try { hadPending = typeof store.hasPendingSave === 'function' && store.hasPendingSave(); } catch (e) { hadPending = true; }
       if (!store.noteExternalChange(key)) return;
-      pauseSyncForStale();
+      /* D23b：不再调用 pauseSyncForStale——本机被别的标签页更新不是错误。
+         先快照再自动采纳磁盘内容，采纳后的下一次推送自然带上正确数据。 */
       /* D21（2026-10-29）：本页有未落盘改动也不再停下来问。先把这个瞬时状态
          快照到本机（dayplan.sync-snapshot.v1 环形 3 份），然后自动采纳磁盘上
          的最新内容。真正丢掉的最多是另一页写入前 0.8s 内本页的编辑，而且
@@ -1846,11 +1843,15 @@
     });
 
     /* 检测点 3（写后回读不一致）不会触发 storage 事件——它是本页自己写坏的。
-       在每次渲染/冲刷之后补一次检查，让两条路径落到同一个处置上。 */
+       在每次渲染/冲刷之后补一次检查，处置与 storage 路径一致：自动采纳磁盘
+       内容（D23b：不再暂停、不再摆三选一横幅）。 */
     store.subscribe(function () {
       if (store.isStale() && !staleBanner) {
-        pauseSyncForStale();
-        showStaleBanner();
+        staleBanner = true;
+        setTimeout(function () {
+          staleBanner = null;
+          autoAdoptExternal();
+        }, 0);
       }
     });
 

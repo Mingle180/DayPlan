@@ -5,17 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>DayPlan</title>
 <link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACX0lEQVR42tXXTYiNYRQH8F/dMWYG4yP5WBBJSSwMGzaWipSFLGRB+QgR+Vr4aiIjFlLKRxkfiYRkRcqasmClKKUUMWHGDEYUm/PW09u9M3cu905z6nbfnp7O/5z/Oef/npchanXJc2EwwUf/q7NChff/YD9a8By/as3CbvTiLXZiXC1As+z34Gv87uExzmFiLcB3oAM/cQEjsQwXa8HC9gD/HoBNuWasrwbosPjfgo8BfhnDqz2ChWTcNgX4D1zDiCLg0zH3fwWVgm9IaL8RNU+1IGNoP65EIMWCKAwEPHO6LsB/4GYRcEkpluAD2jEh57NhIOBZpGsCvBe3MKZIJtlzPU7G/d/B1Kyc78ZypDXLfFUITC/u9ANeh1P4hi84jkfYmtydEwFOLVWO+iSIBdFwn3E7me26EhNyGt3RI61x3oLxyb0WPMGJ3OgWtdm4HwEs7AO8EJl3owtHSrwls2yX4xX2ltMT83E3aJuUnI9KAE4kcny0CGC+VPPwEm+wq5yGXIrrmJzQ3Yb1OBg174qzUuCZjY1ydgRjK8sJYARm5rJvwwu8w3scy41usQCaI5Fv6MTaSsWqEHrfGt3+INGFUs6acTXAPwV7AxalYp1/GM+wqI/xbMIl9ERDb0wmrqLVK3XeiM2YkjsvJOVrT7Rhax/TVJYqlsNMGtyFpObbcyJX1WWlAWej0ztjVfvv4BnYNCxOXkaNOB8174y1rSr7QpbNajzFCszAmZDjbuyrNu3DYgFti4X0YYhSDw5V0nCV2qiQ1dfxGm4djC+lJmzDgcH6TOt32ailFQxF+wvWane5yMV1GAAAAABJRU5ErkJggg==">
-<link rel="icon" type="image/png" sizes="192x192" href="assets/icons/icon-192.png?v=20261029043416Z">
-<link rel="icon" type="image/png" sizes="512x512" href="assets/icons/icon-512.png?v=20261029043416Z">
-<link rel="manifest" href="manifest.webmanifest?v=20261029043416Z">
-<link rel="apple-touch-icon" sizes="180x180" href="assets/icons/icon-180.png?v=20261029043416Z">
+<link rel="icon" type="image/png" sizes="192x192" href="assets/icons/icon-192.png?v=20261029044449Z">
+<link rel="icon" type="image/png" sizes="512x512" href="assets/icons/icon-512.png?v=20261029044449Z">
+<link rel="manifest" href="manifest.webmanifest?v=20261029044449Z">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/icons/icon-180.png?v=20261029044449Z">
 <meta name="apple-mobile-web-app-title" content="DayPlan">
 <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
-<link rel="stylesheet" href="styles/app.css?v=20261029043416Z">
-<link rel="stylesheet" href="styles/views.css?v=20261029043416Z">
-<link rel="stylesheet" href="styles/week.css?v=20261029043416Z">
-<link rel="stylesheet" href="styles/month.css?v=20261029043416Z">
+<link rel="stylesheet" href="styles/app.css?v=20261029044449Z">
+<link rel="stylesheet" href="styles/views.css?v=20261029044449Z">
+<link rel="stylesheet" href="styles/week.css?v=20261029044449Z">
+<link rel="stylesheet" href="styles/month.css?v=20261029044449Z">
 </head>
 <body>
 <div id="app">
@@ -142,46 +142,46 @@
 
 <!-- 实现（经典 script 顺序加载，file:// 直接打开即可运行）
      顺序即依赖顺序：core → data → views(纯几何) → store → ui → views(DOM) → app -->
-<script src="src/core/datetime.js?v=20261029043416Z"></script>
-<script src="src/core/id.js?v=20261029043416Z"></script>
-<script src="src/core/schema.js?v=20261029043416Z"></script>
-<script src="src/core/lunar.js?v=20261029043416Z"></script>
-<script src="src/data/holidays.js?v=20261029043416Z"></script>
-<script src="src/core/order.js?v=20261029043416Z"></script>
-<script src="src/core/recurrence.js?v=20261029043416Z"></script>
-<script src="src/core/layout.js?v=20261029043416Z"></script>
-<script src="src/core/calendar-grid.js?v=20261029043416Z"></script>
-<script src="src/core/picker.js?v=20261029043416Z"></script>
-<script src="src/core/seed.js?v=20261029043416Z"></script>
-<script src="src/views/timeline.js?v=20261029043416Z"></script>
-<script src="src/views/week-layout.js?v=20261029043416Z"></script>
-<script src="src/core/sync-keys.js?v=20261029043416Z"></script>
-<script src="src/core/sync-record.js?v=20261029043416Z"></script>
-<script src="src/core/sync-boot.js?v=20261029043416Z"></script>
-<script src="src/core/scope-storage.js?v=20261029043416Z"></script>
-<script src="src/core/remote-doc.js?v=20261029043416Z"></script>
-<script src="src/core/remote-apply.js?v=20261029043416Z"></script>
-<script src="src/core/lossy-gate.js?v=20261029043416Z"></script>
-<script src="src/core/sync-hash.js?v=20261029043416Z"></script>
-<script src="src/store.js?v=20261029043416Z"></script>
-<script src="src/net/supabase.js?v=20261029043416Z"></script>
-<script src="src/net/session.js?v=20261029043416Z"></script>
-<script src="src/dev/mock-backend.js?v=20261029043416Z"></script>
-<script src="src/sync/lease.js?v=20261029043416Z"></script>
-<script src="src/sync/engine.js?v=20261029043416Z"></script>
-<script src="src/sync/wiring.js?v=20261029043416Z"></script>
-<script src="src/sync/steady.js?v=20261029043416Z"></script>
-<script src="src/ui/modal.js?v=20261029043416Z"></script>
-<script src="src/ui/overlay.js?v=20261029043416Z"></script>
-<script src="src/ui/itemcard.js?v=20261029043416Z"></script>
-<script src="src/ui/finishdock.js?v=20261029043416Z"></script>
-<script src="src/ui/form.js?v=20261029043416Z"></script>
-<script src="src/ui/countdown.js?v=20261029043416Z"></script>
-<script src="src/ui/sync-panel.js?v=20261029043416Z"></script>
-<script src="src/views/month.js?v=20261029043416Z"></script>
-<script src="src/views/week.js?v=20261029043416Z"></script>
-<script src="src/views/day.js?v=20261029043416Z"></script>
-<script src="src/views/settings.js?v=20261029043416Z"></script>
-<script src="src/app.js?v=20261029043416Z"></script>
+<script src="src/core/datetime.js?v=20261029044449Z"></script>
+<script src="src/core/id.js?v=20261029044449Z"></script>
+<script src="src/core/schema.js?v=20261029044449Z"></script>
+<script src="src/core/lunar.js?v=20261029044449Z"></script>
+<script src="src/data/holidays.js?v=20261029044449Z"></script>
+<script src="src/core/order.js?v=20261029044449Z"></script>
+<script src="src/core/recurrence.js?v=20261029044449Z"></script>
+<script src="src/core/layout.js?v=20261029044449Z"></script>
+<script src="src/core/calendar-grid.js?v=20261029044449Z"></script>
+<script src="src/core/picker.js?v=20261029044449Z"></script>
+<script src="src/core/seed.js?v=20261029044449Z"></script>
+<script src="src/views/timeline.js?v=20261029044449Z"></script>
+<script src="src/views/week-layout.js?v=20261029044449Z"></script>
+<script src="src/core/sync-keys.js?v=20261029044449Z"></script>
+<script src="src/core/sync-record.js?v=20261029044449Z"></script>
+<script src="src/core/sync-boot.js?v=20261029044449Z"></script>
+<script src="src/core/scope-storage.js?v=20261029044449Z"></script>
+<script src="src/core/remote-doc.js?v=20261029044449Z"></script>
+<script src="src/core/remote-apply.js?v=20261029044449Z"></script>
+<script src="src/core/lossy-gate.js?v=20261029044449Z"></script>
+<script src="src/core/sync-hash.js?v=20261029044449Z"></script>
+<script src="src/store.js?v=20261029044449Z"></script>
+<script src="src/net/supabase.js?v=20261029044449Z"></script>
+<script src="src/net/session.js?v=20261029044449Z"></script>
+<script src="src/dev/mock-backend.js?v=20261029044449Z"></script>
+<script src="src/sync/lease.js?v=20261029044449Z"></script>
+<script src="src/sync/engine.js?v=20261029044449Z"></script>
+<script src="src/sync/wiring.js?v=20261029044449Z"></script>
+<script src="src/sync/steady.js?v=20261029044449Z"></script>
+<script src="src/ui/modal.js?v=20261029044449Z"></script>
+<script src="src/ui/overlay.js?v=20261029044449Z"></script>
+<script src="src/ui/itemcard.js?v=20261029044449Z"></script>
+<script src="src/ui/finishdock.js?v=20261029044449Z"></script>
+<script src="src/ui/form.js?v=20261029044449Z"></script>
+<script src="src/ui/countdown.js?v=20261029044449Z"></script>
+<script src="src/ui/sync-panel.js?v=20261029044449Z"></script>
+<script src="src/views/month.js?v=20261029044449Z"></script>
+<script src="src/views/week.js?v=20261029044449Z"></script>
+<script src="src/views/day.js?v=20261029044449Z"></script>
+<script src="src/views/settings.js?v=20261029044449Z"></script>
+<script src="src/app.js?v=20261029044449Z"></script>
 </body>
 </html>
