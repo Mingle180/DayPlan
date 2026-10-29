@@ -1036,8 +1036,12 @@
       var es = engineStateNow();
       if (!es.eng) return;
       if (es.st !== 'signed-in' && es.st !== 'awaiting-choice') return;
+      /* D22d（2026-10-29）：只在**同步决策对话框**开着时让路——用户正在看
+         有损预览/首次同步确认时别背后抢跑。以前这里拦的是一切弹窗，结果
+         设置面板本身就是弹窗：用户开着面板看「同步已暂停」时，修复恰恰
+         被面板冻住（toast 说稍后重试，重试循环却一步都不跑）。 */
       if (root.document && typeof root.document.querySelector === 'function'
-        && root.document.querySelector('.modal-backdrop')) return;
+        && root.document.querySelector('[data-sync-choice]')) return;
       var Panel = root.DayPlan && root.DayPlan.syncPanel;
       if (!Panel || typeof Panel.autoResolveChoice !== 'function') return;
       ensureCheckBusy = true;

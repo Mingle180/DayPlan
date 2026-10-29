@@ -70,6 +70,10 @@
     var previouslyFocused = document.activeElement;
     var backdrop = el('div', { class: 'modal-backdrop' + (opts.center ? ' is-centered' : '') });
     var modal = el('div', { class: 'modal' + (opts.wide ? ' modal-wide' : ''), role: 'dialog', 'aria-modal': 'true' });
+    /* D22d：同步决策对话框的标记。自愈循环用它区分「用户正在决策的框」
+       （让路，别背后抢跑）和普通弹窗（设置面板/登录框——它们不该挡住
+       后台的自动修复，否则用户开着面板看状态时修复恰恰被面板冻住）。 */
+    if (opts.choice) modal.setAttribute('data-sync-choice', '1');
     var titleId = 'modal-title-' + Math.random().toString(36).slice(2, 8);
     modal.setAttribute('aria-labelledby', titleId);
 

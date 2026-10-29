@@ -1268,6 +1268,7 @@
 
     var ctx = M.open({
       title: '首次同步',
+      choice: true, /* D22d：决策框标记（自愈循环让路） */
       body: body,
       showSubmit: false,
       showCancel: false,
@@ -1396,6 +1397,7 @@
 
     var ctx = M.open({
       title: '恢复同步',
+      choice: true, /* D22d：决策框标记（自愈循环让路） */
       body: body,
       showSubmit: false,
       showCancel: false,
@@ -1535,6 +1537,7 @@
 
     var ctx = M.open({
       title: '有损修复预览',
+      choice: true, /* D22d：决策框标记（自愈循环让路） */
       body: body,
       showSubmit: false,
       showCancel: false,
@@ -1822,6 +1825,7 @@
 
     var ctx = M.open({
       title: '是否写回云端',
+      choice: true, /* D22d：决策框标记（自愈循环让路） */
       body: body,
       showSubmit: false,
       showCancel: false,
@@ -1882,6 +1886,7 @@
 
     var ctx = M.open({
       title: '重新开启同步',
+      choice: true, /* D22d：决策框标记（自愈循环让路） */
       body: body,
       showSubmit: false,
       showCancel: false,
