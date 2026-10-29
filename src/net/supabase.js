@@ -1,10 +1,10 @@
 /**
  * DayPlan · Supabase HTTP 封装（可注入 fetch，无外部库、无真实网络）
  *
- * 契约：docs/spec/13-sync-contract.md
- *   §6  认证库引入方式（Q-22：自写最小 fetch 封装，不引入 supabase-js、不走 CDN）
- *   §7  S-03（超时）、S-08（0 行更新 / 2xx 但不可验证 → 不得报成功）
- *   §9  云端结构与权限（public.schedules；revision 条件更新）
+ * 契约：docs/spec/18-manual-cloud-save.md
+ *   自写最小 fetch 封装，不引入 supabase-js、不走 CDN；
+ *   §3.2 条件写（0 行更新 / 2xx 但不可验证 → 不得报成功）；
+ *   §8   云端结构与权限（public.schedules；revision 条件更新）
  *
  * 边界（刻意保守）：
  *   1. 本模块**不发任何请求**——fetchImpl 必须由调用方注入，缺则立即抛错。
@@ -322,12 +322,18 @@
       );
     }
 
-    /** 读当前用户的整行。0 行 = 合法（从未同步过）。 */
+    /**
+     * 读当前用户的整行。0 行 = 合法（云端还没有这份数据）。
+     *
+     * 用 `*` 而不是固定列：`versions` / `saved_by` 需要用户先在 SQL Editor
+     * 执行 §8 的 alter table。固定列会在迁移之前让**读**也报 400，
+     * 于是「还没建列」从一条明确的写失败变成整个云端不可用。
+     */
     function select(uid, accessToken, extra) {
       return request({
         method: 'GET',
         query: [
-          ['select', 'schedule_data,revision,updated_at'],
+          ['select', '*'],
           ['user_id', 'eq.' + uid]
         ],
         accessToken: accessToken,
@@ -336,11 +342,18 @@
       });
     }
 
-    /** 首次写入。唯一约束冲突 → E_CONFLICT（说明别的设备先建了行）。 */
-    function insert(uid, payload, accessToken) {
+    /**
+     * 首次写入。唯一约束冲突 → E_CONFLICT（说明别的设备先建了行）。
+     * @param {object} [extra] 附加列（versions / saved_by / revision）。
+     */
+    function insert(uid, payload, accessToken, extra) {
+      var body = { user_id: uid, schedule_data: payload };
+      if (extra && typeof extra === 'object') {
+        Object.keys(extra).forEach(function (k) { body[k] = extra[k]; });
+      }
       return request({
         method: 'POST',
-        body: { user_id: uid, schedule_data: payload },
+        body: body,
         accessToken: accessToken,
         prefer: 'return=representation',
         expect: 'one',

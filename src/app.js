@@ -22,22 +22,32 @@
   var VIEW_MODES = ['month', 'week', 'day'];
 
   /**
+   * session / auth 需要 { get, set, remove } 形状的 KV；Store 的 storage 是
+   * getItem / setItem / removeItem。这一层只做形状转换，不做任何业务判断。
+   */
+  function storageKv(storage) {
+    if (!storage) return null;
+    return {
+      get: function (k) { try { return storage.getItem(k); } catch (e) { return null; } },
+      set: function (k, v) { try { storage.setItem(k, v); } catch (e) { /* 写不进去等同于未登录 */ } },
+      remove: function (k) { try { storage.removeItem(k); } catch (e) { /* 删不掉最多下次再登 */ } }
+    };
+  }
+
+  /**
    * 启动时窥探持久凭据里的会话 uid（只读：不刷新令牌、不写盘）。
    *
    * Store 创建时要用它解析活动指针。拿不到 uid，`resolveBootScope` 只能按
    * 契约 §2.2 把 `user:<uid>` 回落成 guest 并写回——用户看到的现象是
-   * 「刷新一下同步就断了、还让你重新选择」（Q-28 实测）。
-   * 真正的会话恢复仍然只有 wiring.restore() 一条路；它失败时由装配层回落 guest。
+   * 「刷新一下账号数据就没了」。真正的会话恢复仍然只有 session.restore() 一条路；
+   * 它失败时由装配层回落 guest。
    */
   function peekBootSessionUid() {
     var S = root.DayPlan.session;
-    var W = root.DayPlan.syncWiring;
     if (!S || typeof S.peekPersistedUserId !== 'function') return null;
     var storage = null;
     try { storage = typeof Store.detectLocalStorage === 'function' ? Store.detectLocalStorage() : null; } catch (e) { storage = null; }
-    if (!storage) return null;
-    var kv = null;
-    try { kv = (W && typeof W.adaptKv === 'function') ? W.adaptKv(storage) : null; } catch (e) { kv = null; }
+    var kv = storageKv(storage);
     if (!kv) return null;
     try { return S.peekPersistedUserId(kv); } catch (e) { return null; }
   }
@@ -51,6 +61,7 @@
       banners: document.getElementById('banners'),
       todayChip: document.getElementById('today-chip'),
       settingsBtn: document.getElementById('btn-settings'),
+      saveBtn: document.getElementById('btn-cloud-save'),
       viewSwitch: document.getElementById('view-switch'),
       monthRoot: document.getElementById('view-month-root'),
       weekRoot: document.getElementById('view-week-root'),
@@ -744,63 +755,198 @@
       setViewMode(key, { animate: true });
     }
 
-    /* ---------------- 同步装配（Phase 2 骨架，默认 off，绝不自动联网） ----------------
-       mode 由外部配置决定：window.DAYPLAN_SYNC = { mode:'mock'|'real', config:{url,anonKey} }。
-       默认 off —— 不登录、不建 engine、不产生任何请求。
-       mock 只用于界面自测（数据进内存）；real 缺 config 会由 wiring 抛 E_NOT_CONFIGURED，
-       这里接住并如实告知，**不降级**。 */
-    var syncWiring = null;
+    /* ---------------- 云端（手动保存） ----------------
+       契约：docs/spec/18-manual-cloud-save.md。
+       本机 300 ms 自动保存照旧；「保存」只负责把当前内容上传成云端最新版本。
+       没登录、没点保存就不发写请求；打开页面时最多静默读一次。 */
 
-    /* 真实连接配置：只存 url 与 publishable key（两者都是浏览器可见的公开值），
-       绝不存密码 —— 密码只在登录时用一次，不落盘。 */
-    var CONN_KEY = 'dayplan.sync.conn.v1';
+    var CloudDoc = root.DayPlan.cloudDoc;
+    var CloudRecord = root.DayPlan.cloudRecord;
+    var CloudVersions = root.DayPlan.cloudVersions;
+    var CloudClient = root.DayPlan.cloudClient;
+    var CloudAuth = root.DayPlan.cloudAuth;
+    var Session = root.DayPlan.session;
+    var Supabase = root.DayPlan.supabase;
+    var StorageKeys = root.DayPlan.storageKeys;
+    var AccountDialogs = root.DayPlan.accountDialogs;
 
-    /* 默认项目（2026-10-27 所有者口径）：用户不该被要求理解「Project URL /
-       publishable key」这两个概念——这是部署者的知识，不是使用者的。
-       没连过自己项目时，登录直接用这份默认配置；publishable key 本来就是
-       设计为放进浏览器的公开值（真正的权限边界在数据库 RLS）。想换成自己的
-       项目仍走「连接 Supabase…」，连过的优先用连过的。 */
-    var DEFAULT_SYNC_CONN = {
+    var CONN_KEY = (StorageKeys && StorageKeys.KEYS && StorageKeys.KEYS.cloudConn) || 'dayplan.cloud.conn.v1';
+    var LEGACY_CONN_KEY = (StorageKeys && StorageKeys.KEYS && StorageKeys.KEYS.legacyConn) || 'dayplan.sync.conn.v1';
+
+    /* 默认项目：用户不该被要求理解「Project URL / publishable key」这两个概念。
+       publishable key 本就是设计给浏览器的公开值；真正的权限边界在数据库 RLS。 */
+    var DEFAULT_CLOUD_CONN = {
       url: 'https://ceqcgiekjrgrtzsxvwpk.supabase.co',
       anonKey: 'sb_publishable_FUQ6sA9gZjcrqdXMuDzifg_T0MfxNjl'
     };
 
-    function connStorage() {
-      var s = null;
-      try { s = store.getStorage(); } catch (e) { s = null; }
-      return s;
+    /* 用户选了「保留本机」、但本机从来没有过云端标记时的占位指纹：
+       它保证下次判定仍是 pending（不会被误判 clean 后静默覆盖），同时能记住 declinedRevision。 */
+    var DECLINED_HASH = 'declined';
+
+    var cloudSectionInst = null;
+    var cloudBusy = false;
+    var autoLoadBusy = false;
+    var askedRevisions = {};
+    var loadRefused = false;
+    var lastOpenPassAt = 0;
+
+    function cloudStorage() {
+      try { return store.getStorage(); } catch (e) { return null; }
     }
 
     function readConn() {
-      var s = connStorage();
+      var s = cloudStorage();
       if (!s) return null;
+      function probe(key) {
+        try {
+          var raw = s.getItem(key);
+          if (!raw) return null;
+          var o = JSON.parse(raw);
+          if (!o || typeof o.url !== 'string' || typeof o.anonKey !== 'string') return null;
+          if (o.url === '' || o.anonKey === '') return null;
+          return { url: o.url, anonKey: o.anonKey };
+        } catch (e) { return null; }
+      }
+      var conn = probe(CONN_KEY);
+      if (conn) return conn;
+      /* 旧键（实时同步时代）只读一次：读到就迁到新键并删掉，避免两处配置长期并存。 */
+      var legacy = probe(LEGACY_CONN_KEY);
+      if (legacy) {
+        try {
+          s.setItem(CONN_KEY, JSON.stringify(legacy));
+          s.removeItem(LEGACY_CONN_KEY);
+        } catch (e) { /* 迁移失败也照旧用这一份 */ }
+        return legacy;
+      }
+      return null;
+    }
+
+    function buildCloudModules() {
+      var kv = storageKv(cloudStorage());
+      var fetchImpl = typeof root.fetch === 'function'
+        ? function (url, init) { return root.fetch(url, init); }
+        : null;
+      if (!kv || !fetchImpl) return null;
+      var config = null;
       try {
-        var raw = s.getItem(CONN_KEY);
-        if (!raw) return null;
-        var o = JSON.parse(raw);
-        if (!o || typeof o.url !== 'string' || typeof o.anonKey !== 'string') return null;
-        if (o.url === '' || o.anonKey === '') return null;
-        return { url: o.url, anonKey: o.anonKey };
+        config = Supabase.createConfig(readConn() || DEFAULT_CLOUD_CONN);
       } catch (e) {
+        warn('danger', '云端配置不可用：' + (e && e.message ? e.message : '未知错误'),
+          [{ label: '我知道了', onClick: function () { /* 仅关闭 */ } }]);
+        return null;
+      }
+      try {
+        var session = Session.createSession({
+          kv: kv,
+          refresh: function (refreshToken) {
+            return Supabase.refreshSession({ config: config, fetchImpl: fetchImpl, refreshToken: refreshToken });
+          }
+        });
+        return {
+          session: session,
+          http: Supabase.createHttp({ config: config, fetchImpl: fetchImpl }),
+          auth: CloudAuth.createAuth({
+            session: session,
+            config: config,
+            fetchImpl: fetchImpl,
+            kv: cloudStorage()
+          })
+        };
+      } catch (e2) {
+        warn('danger', '云端模块初始化失败：' + (e2 && e2.message ? e2.message : '未知错误'),
+          [{ label: '我知道了', onClick: function () { /* 仅关闭 */ } }]);
         return null;
       }
     }
 
-    function writeConn(conn) {
-      var s = connStorage();
-      if (!s) throw new Error('本机存储不可用，无法保存连接配置');
-      s.setItem(CONN_KEY, JSON.stringify({ url: String(conn.url || ''), anonKey: String(conn.anonKey || '') }));
+    var cloudModules = (CloudDoc && CloudRecord && CloudClient && CloudAuth && Session && Supabase)
+      ? buildCloudModules() : null;
+    var session = cloudModules ? cloudModules.session : null;
+    var http = cloudModules ? cloudModules.http : null;
+    var cloudAuth = cloudModules ? cloudModules.auth : null;
+    var deviceLabel = CloudRecord && typeof CloudRecord.deviceLabel === 'function'
+      ? CloudRecord.deviceLabel(root.navigator ? root.navigator.userAgent : '')
+      : '';
+
+    var cloudClient = null;
+    var cloudClientUid = null;
+
+    function sessionUserId() {
+      if (!session) return null;
+      try { return session.getState() === 'signed-in' ? session.getUserId() : null; } catch (e) { return null; }
     }
 
-    function clearConn() {
-      var s = connStorage();
-      if (!s) return;
-      try { s.removeItem(CONN_KEY); } catch (e) { /* 删不掉也不影响内存态 */ }
+    function accountScopeId(uid) { return 'user:' + uid; }
+
+    function onAccountScope(uid) { return !!uid && store.getScopeId() === accountScopeId(uid); }
+
+    function markerKey(uid) {
+      return (StorageKeys && typeof StorageKeys.cloudRecordKey === 'function')
+        ? StorageKeys.cloudRecordKey(uid) : 'dayplan.cloud.v1.' + uid;
+    }
+
+    function readMarker(uid) {
+      var s = cloudStorage();
+      if (!s || !uid) return null;
+      try { return CloudRecord.parseRecord(s.getItem(markerKey(uid))); } catch (e) { return null; }
+    }
+
+    function writeMarker(uid, record) {
+      var s = cloudStorage();
+      if (!s || !uid) return;
+      var json = CloudRecord.serializeRecord(record);
+      if (!json) return;
+      try { s.setItem(markerKey(uid), JSON.stringify(json)); } catch (e) { /* 下次多问一次而已 */ }
+    }
+
+    function clearMarker(uid) {
+      var s = cloudStorage();
+      if (!s || !uid) return;
+      try { s.removeItem(markerKey(uid)); } catch (e) { /* 删不掉最多多问一次 */ }
+    }
+
+    function hashOfDoc(doc) {
+      var H = root.DayPlan.docHash;
+      if (!H || typeof H.contentHash !== 'function') return '';
+      try { return H.contentHash(doc); } catch (e) { return ''; }
+    }
+
+    function localHash() { return hashOfDoc(store.getState()); }
+
+    function ensureClient(uid) {
+      if (!uid || !http || !session) return null;
+      if (cloudClient && cloudClientUid === uid) return cloudClient;
+      cloudClientUid = uid;
+      cloudClient = CloudClient.createClient({
+        http: http,
+        uid: uid,
+        withToken: function (fn) { return session.withToken(fn); },
+        device: deviceLabel
+      });
+      return cloudClient;
+    }
+
+    /** 「保存」二字的颜色就是未保存提示：还没传到云端时变主色蓝，传上去回黑。 */
+    function refreshSaveState() {
+      if (!els.saveBtn) return;
+      var uid = sessionUserId();
+      var unsaved = false;
+      if (uid) {
+        unsaved = CloudRecord.classify(readMarker(uid), localHash()) !== CloudRecord.KIND.CLEAN;
+      }
+      els.saveBtn.classList.toggle('is-unsaved', unsaved);
+    }
+
+    function sameContent(before, after) {
+      var S = root.DayPlan && root.DayPlan.schema;
+      if (!S || typeof S.sameDocumentContent !== 'function') return false;
+      try { return S.sameDocumentContent(before, after); } catch (e) { return false; }
     }
 
     /**
      * 把 Store 的活动数据源切到某个作用域并重绘（契约 §2.2：activityDoc 由指针决定）。
-     * 切换失败不抛：调用方（引擎/会话流程）要能继续走完并如实告知用户。
+     * 切换失败不抛：调用方要能继续走完并如实告知用户。
      * @returns {{ok:boolean, code?:string, id?:string}}
      */
     function switchStoreScope(scopeId, uid) {
@@ -808,41 +954,15 @@
       var r = store.switchScope(scopeId, uid ? { sessionUid: uid } : undefined);
       if (r && r.ok) {
         onDataChanged();
-        if (syncSectionInst && typeof syncSectionInst.render === 'function') {
-          try { syncSectionInst.render(); } catch (e) { /* 面板已关闭 */ }
+        refreshSaveState();
+        if (cloudSectionInst && typeof cloudSectionInst.render === 'function') {
+          try { cloudSectionInst.render(); } catch (e) { /* 面板已关闭 */ }
         }
       }
       return r || { ok: false, code: 'E_SCOPE_SWITCH' };
     }
 
-    /**
-     * 确认成功后的切源（Q-29）。引擎只负责写指针；不在这里切 Store 的话，
-     * 界面会继续写游客键：账号副本零更新，下一次推送还会把游客内容推到云端 uid 行。
-     * 这是「数据看着在、其实落错地方」那类最难查的缺陷，所以切源失败必须显式告警，
-     * 不能让用户以为一切正常继续编辑。
-     */
-    function onScopeChangedFromSync(scopeId) {
-      var uid = null;
-      try {
-        var s = syncWiring && typeof syncWiring.getSession === 'function' ? syncWiring.getSession() : null;
-        uid = s && typeof s.getUserId === 'function' ? s.getUserId() : null;
-      } catch (e) { uid = null; }
-      var r = switchStoreScope(scopeId, uid);
-      if (r.ok) {
-        /* D11（2026-10-27）：登录切源后同样按新作用域文档重建完成台，
-           否则上一作用域（guest）的台内条目会残留在界面上。 */
-        syncDockFromDoc(store.getState());
-      }
-      if (!r.ok) {
-        warn('danger',
-          '同步已完成，但界面没能切换到账号数据（' + (r.code || '未知原因') + '）。'
-          + '先不要继续编辑——接下来的改动可能落到游客数据里。请刷新页面后重试。',
-          [{ label: '重新加载', onClick: function () { if (root.location) root.location.reload(); } }]);
-      }
-      return r;
-    }
-
-    /** D9：文档被同步路径替换后，完成台按 doc.finishDock 整体重建（幂等，一致时跳过）。 */
+    /** 完成台条目属于文档数据：整份文档被替换后按 doc.finishDock 重建。 */
     function syncDockFromDoc(doc) {
       try {
         var dv = instances.day;
@@ -853,553 +973,414 @@
       } catch (e) { /* 非关键状态：重建失败不影响文档应用 */ }
     }
 
-    function buildSyncWiring() {
-      var cfg = root.DAYPLAN_SYNC && typeof root.DAYPLAN_SYNC === 'object' ? root.DAYPLAN_SYNC : {};
-      var mode = cfg.mode === 'mock' || cfg.mode === 'real' ? cfg.mode : 'off';
-      var config = cfg.config;
-      if (mode === 'real' && !config) {
-        /* 兜底：调用方只给了 mode 没带 config 时，从连接记录补齐。
-           「点过连接」本身就是 opt-in 记录（见下方 off 分支同款逻辑）。 */
-        var savedConn = readConn();
-        if (savedConn) config = savedConn;
+    /** 云端内容写回内存后必须自己重绘视图（store.mutate 不驱动界面）。 */
+    function applyDocFromCloud(doc) {
+      var before = store.getState();
+      store.mutate(function () { return doc; });
+      syncDockFromDoc(doc);
+      if (!sameContent(before, store.getState())) onDataChanged();
+      refreshSaveState();
+    }
+
+    function saveErrorText(r) {
+      var code = r && r.code ? r.code : '';
+      if (code === 'E_CLOUD_SCHEMA') return r.message;
+      if (code === 'E_EXPIRED') return '登录已过期，请重新登录';
+      if (code === 'E_NETWORK' || code === 'E_TIMEOUT') return '连不上服务器，保存失败';
+      if (code === 'E_CONFLICT') return '云端刚被其它设备保存过，请再点一次保存';
+      if (code === 'E_BAD_ROW') return '云端数据无法识别，已停止覆盖';
+      return '保存失败：' + ((r && r.message) || '未知错误');
+    }
+
+    function setSaveBusy(on) {
+      if (!els.saveBtn) return;
+      els.saveBtn.disabled = !!on;
+      if (on) els.saveBtn.classList.add('is-busy');
+      else els.saveBtn.classList.remove('is-busy');
+    }
+
+    /** §3：保存只做一件事——把本机当前内容上传成云端最新版本。 */
+    function saveToCloud() {
+      if (cloudBusy) return;
+      var uid = sessionUserId();
+      if (!uid) { M.toast('登录后才能保存到云端'); return; }
+      if (!onAccountScope(uid)) { M.toast('账号数据还没载入，请稍后再试'); return; }
+      var client = ensureClient(uid);
+      if (!client) { M.toast('当前环境不支持云端保存'); return; }
+
+      /* §7：本页被标记陈旧（另一个标签页刚写过）。点「保存」就是本页的保存动作——
+         先用本页内容覆盖本机（对方那份存进 recover 备份），再照常上传。 */
+      if (store.isStale()) {
+        var resolved = store.resolveStale('overwrite');
+        if (!resolved || !resolved.ok) { M.toast('保存失败：本机写入被占用，请刷新页面'); return; }
       }
-      if (mode === 'off') {
-        // 没有显式指定模式时，看是否连接过真实项目。连接过就进 real ——
-        // 「点过连接」本身就是 opt-in 记录，不需要再让用户每次手动开。
-        var conn = readConn();
-        if (conn) {
-          mode = 'real';
-          config = conn;
+
+      var converted = CloudDoc.toCloud(store.getState());
+      if (!converted.ok) {
+        M.toast('内容无法上传：' + ((converted.errors[0] && converted.errors[0].message) || '数据格式异常'));
+        return;
+      }
+      var payload = converted.payload;
+      var truncated = !!(converted.warnings && converted.warnings.length);
+      var hash = hashOfDoc(payload);
+
+      cloudBusy = true;
+      setSaveBusy(true);
+      client.save(payload).then(function (r) {
+        cloudBusy = false;
+        setSaveBusy(false);
+        if (!r || !r.ok) { M.toast(saveErrorText(r)); return; }
+        writeMarker(uid, {
+          revision: r.row ? r.row.revision : null,
+          savedAt: (r.row && r.row.updated_at) || new Date().toISOString(),
+          device: deviceLabel,
+          hash: hash
+        });
+        refreshSaveState();
+        if (cloudSectionInst && typeof cloudSectionInst.render === 'function') {
+          try { cloudSectionInst.render(); } catch (e) { /* 面板已关闭 */ }
         }
-      }
-      if (mode === 'off') { teardownSteady(); syncWiring = null; return null; }
-      // 重建 wiring 意味着旧的 engine 作废，挂在它上面的 steady 必须一起拆掉
-      teardownSteady();
-      try {
-        syncWiring = root.DayPlan.syncWiring.createWiring({
-          mode: mode,
-          storage: store.getStorage(),
-          getLocalDoc: function () { return store.getState(); },
-          setLocalDoc: function (doc) { store.mutate(function () { return doc; }); syncDockFromDoc(doc); },
-          config: config,
-          demoUid: cfg.demoUid,
-          fetchImpl: cfg.fetchImpl,
-          /* 只有 real 模式由这里接管切源：mock 的 kv 是内存（persistMock 关闭时），
-             指针与账号副本都在内存里，而 Store 读的是真 storage——接上去会让界面
-             切到一份并不存在的账号副本。mock 走引擎原来的单文档替换路径。 */
-          onScopeChanged: mode === 'real' ? onScopeChangedFromSync : undefined,
-          /* 四象限拉取会把账号副本换掉。只有界面**正停在这个账号**时才换内容；
-             指针还是 guest 时什么都不做——那时必须继续显示游客数据（§4.6.6）。 */
-          onDocApplied: mode === 'real' ? function (scopeId, doc) {
-            if (store.getScopeId() === scopeId) {
-              store.mutate(function () { return doc; });
-              /* D9（2026-10-27）：远端文档可能带来新的完成台快照——整体重建台内条目。 */
-              syncDockFromDoc(doc);
-            }
-          } : undefined
-        });
-      } catch (e) {
-        syncWiring = null;
-        warn('danger',
-          '同步未能启用：' + (e && e.message ? e.message : '未知错误') +
-          (e && e.code ? '（' + e.code + '）' : ''),
-          [{ label: '我知道了', onClick: function () { /* 仅关闭 */ } }]);
-      }
-      return syncWiring;
+        M.toast(truncated ? '已保存到云端（超长内容按上限截断）' : '已保存到云端');
+      }, function (err) {
+        cloudBusy = false;
+        setSaveBusy(false);
+        M.toast(saveErrorText(err));
+      });
     }
 
-    buildSyncWiring();
-
-    /* ---------------- 稳态同步（首次同步之后的持续推送/拉取） ----------------
-       steady 只在引擎进入 syncing 后才真正工作：它订阅 store，数据一变就防抖推一次；
-       切回页面时拉一次。checking / paused-error 下一律不发请求。 */
-    var syncSteady = null;
-    var syncSectionInst = null;   // 设置页「同步」分组的实例，用于状态实时重渲染
-    var lastSyncStatus = null;    // steady 被拆掉后仍要能显示"最后一次同步结果"
-    var conflictNotified = false; // 冲突横幅每条会话只弹一次，避免连续编辑刷屏
-
-    function teardownSteady() {
-      if (syncSteady) {
-        syncSteady.dispose();
-        syncSteady = null;
-      }
+    function cloudUnusableText(code) {
+      if (code === 'E_VERSION') return '云端数据来自更新版本的 DayPlan，请先更新应用再载入云端。';
+      return '云端数据无法识别（' + (code || 'E_UNKNOWN') + '），已保留本机内容。';
     }
 
-    function attachSteady() {
-      teardownSteady();
-      conflictNotified = false;   // 新会话允许再提示一次冲突
-      if (!syncWiring) return null;
-      var mod = root.DayPlan && root.DayPlan.syncSteady;
-      if (!mod || typeof mod.createSteady !== 'function') return null;
-      var engine = null;
-      try { engine = syncWiring.getEngine(); } catch (e) { engine = null; }
-      if (!engine || typeof engine.push !== 'function') return null;
-      try {
-        syncSteady = mod.createSteady({
-          engine: engine,
-          subscribe: function (fn) { return store.subscribe(fn); },
-          onStatus: function (st) {
-            lastSyncStatus = st;
-            // 推送是异步完成的：面板若开着，必须重渲染，否则用户看到的永远是打开那一刻的旧状态
-            if (syncSectionInst && typeof syncSectionInst.render === 'function') {
-              try { syncSectionInst.render(); } catch (e) { /* 面板已关闭 */ }
-            }
-            /* 冲突类失败：D22c 起引擎会自动合并重传，D24 起自愈循环对 E_CONFLICT
-               也真正生效（15 秒内闭环）。不再弹「去同步设置点开始检查」的横幅——
-               那是已废除的人工链路；只提示一句事实，随后自动恢复。 */
-            if (st && st.kind === 'push' && st.ok === false && st.code === 'E_CONFLICT'
-                && !conflictNotified) {
-              conflictNotified = true;
-              M.toast('云端刚被另一台设备改过，正在自动合并两边的改动');
-            }
-          }
-        });
-      } catch (e) {
-        syncSteady = null;
-      }
-      return syncSteady;
+    function refuseCloud(code) {
+      if (loadRefused) return;
+      loadRefused = true;
+      warn('warn', cloudUnusableText(code), [{ label: '我知道了', onClick: function () { /* 仅关闭 */ } }]);
     }
 
-    /* ---------------- D17：启动/登录路径的自动恢复 ----------------
-       resume 判成 recovery（记录丢失）/ lossy 时，走与同步面板完全同款的自动路径
-       （备份尽力而为 → 以云端为准 → 需要时写回）。成功后引擎回到 syncing，
-       这里负责把稳态同步重新挂上。 */
-
-    function autoResumeHelpers() {
-      var dl = SettingsView && typeof SettingsView.downloadJson === 'function'
-        ? SettingsView.downloadJson : null;
-      return {
-        /* D19（2026-10-28）：自动路径的备份**只写本机 localStorage，不下载**。
-           以前这里每跑一次就下载一个「同步前备份」文件，而这段逻辑会在刷新、
-           自动检查、自愈循环里反复跑——用户看到的就是「一直在下载备份」。
-           环形保留最近 3 份；要文件的人在设置里手动导出。 */
-        snapshotBackup: function (reason, payload) {
-          try {
-            if (!root.localStorage) return;
-            var key = 'dayplan.sync-snapshot.v1';
-            var arr = [];
-            try { arr = JSON.parse(root.localStorage.getItem(key) || '[]'); } catch (e0) { arr = []; }
-            if (!Array.isArray(arr)) arr = [];
-            var doc = null;
-            try { doc = payload || store.exportDocument(); } catch (e1) { doc = null; }
-            arr.unshift({ at: new Date().toISOString(), reason: reason || 'auto', payload: doc });
-            while (arr.length > 3) arr.pop();
-            root.localStorage.setItem(key, JSON.stringify(arr));
-          } catch (e) { /* 配额不足 / 隐私模式：静默 */ }
-        },
-        downloadJson: dl,
-        /* 会话没变（登录态不变），数据刷新由引擎 onDocApplied 钩子负责。 */
-        onSessionChanged: function () { /* 无需处理 */ },
-        onDataChanged: function () { /* 无需处理 */ }
-      };
+    /** 云端某一行覆盖本机，并把标记更新成 clean。 */
+    function adoptRow(uid, row) {
+      var converted = CloudDoc.fromCloud(row.schedule_data, store.getState());
+      if (!converted.ok) return converted;
+      applyDocFromCloud(converted.doc);
+      writeMarker(uid, {
+        revision: typeof row.revision === 'number' ? row.revision : null,
+        savedAt: row.updated_at || '',
+        device: deviceLabel,
+        hash: hashOfDoc(row.schedule_data)
+      });
+      return { ok: true };
     }
 
-    function afterAutoResume() {
-      var eng = syncWiring && typeof syncWiring.getEngine === 'function' ? syncWiring.getEngine() : null;
-      var st = eng && typeof eng.getState === 'function' ? eng.getState() : null;
-      if (st === 'syncing') {
-        attachSteady();
-        if (syncSteady) syncSteady.schedule();
-      }
-      if (syncSectionInst && typeof syncSectionInst.render === 'function') {
-        try { syncSectionInst.render(); } catch (e) { /* 面板未打开 */ }
-      }
-    }
-
-    /* ---------------- D21：signed-in / awaiting-choice 的自动闭环 ----------------
-       D16~D20 把 A/B/C/D、lossy、recovery 全部裁定为自动路径，但执行体一直住在
-       设置面板里——面板没打开（用户从不点设置）时没有任何人执行它们。自动
-       confirm 一旦失败（一次网络抖动就够），引擎停在 awaiting-choice；而
-       engine.resume 对无记录的 signed-in 只回 E_NOT_ACTIVE skip，自愈循环只认
-       paused-error+retryable——整条同步链从此死寂，云端从未收到过数据。这就是
-       「跨设备同步从未实现过」的根因。这里补上闭环：
-       · signed-in（登录后没完成首次提交）→ 主动 check + 自动定向提交；
-       · awaiting-choice（上次自动提交失败/被打断）→ 重新定向提交；
-       · paused-error 且可重试 → 原有 resumeSync（见 tryAutoHeal）。
-       确认框开着时不抢：用户可能正在看人工对话框（reopen-upload / 恢复框）。 */
-    function engineStateNow() {
-      var eng = syncWiring && typeof syncWiring.getEngine === 'function' ? syncWiring.getEngine() : null;
-      var st = null;
-      try { st = eng && typeof eng.getState === 'function' ? eng.getState() : null; } catch (e) { st = null; }
-      return { eng: eng, st: st };
-    }
-
-    var ensureCheckBusy = false;
-    function ensureCheckFlow(force) {
-      if (ensureCheckBusy) return;
-      var es = engineStateNow();
-      if (!es.eng) return;
-      /* D24（2026-10-29）：force=true 供 paused-error 死状态的强制自愈使用。
-         旧版这里无条件按状态过滤，导致 tryAutoHeal 对 E_CONFLICT 的自愈调用
-         在第一行就被吞掉——「自愈」从未真正跑过，界面永远停在「开始检查」。 */
-      if (!force && es.st !== 'signed-in' && es.st !== 'awaiting-choice') return;
-      /* D22d（2026-10-29）：只在**同步决策对话框**开着时让路——用户正在看
-         有损预览/首次同步确认时别背后抢跑。以前这里拦的是一切弹窗，结果
-         设置面板本身就是弹窗：用户开着面板看「同步已暂停」时，修复恰恰
-         被面板冻住（toast 说稍后重试，重试循环却一步都不跑）。 */
-      if (root.document && typeof root.document.querySelector === 'function'
-        && root.document.querySelector('[data-sync-choice]')) return;
-      var Panel = root.DayPlan && root.DayPlan.syncPanel;
-      if (!Panel || typeof Panel.autoResolveChoice !== 'function') return;
-      ensureCheckBusy = true;
-      var helpers = autoResumeHelpers();
-      Promise.resolve()
-        .then(function () {
-          if (es.st === 'awaiting-choice') {
-            /* 检查结果还在（engine.getCheck），直接重新定向提交。 */
-            return Panel.autoResolveChoice(syncWiring, helpers);
-          }
-          /* signed-in：先补一次 check（等价面板 runCheck 的引擎部分，但静默），
-             结果落盘后由同一套自动定向提交。 */
-          return Promise.resolve(es.eng.check()).then(function (chk) {
-            if (!chk || !chk.ok) {
-              return { ok: false, code: (chk && chk.code) || 'E_CHECK_FAILED', message: (chk && chk.message) || '检查失败' };
-            }
-            return Panel.autoResolveChoice(syncWiring, helpers);
+    /** 记下「保留本机」：同一云端版本不再问。 */
+    function declineRow(uid, row, record) {
+      var declined = record
+        ? CloudRecord.withDeclined(record, row.revision)
+        : CloudRecord.serializeRecord({
+            revision: null, savedAt: '', device: '', hash: DECLINED_HASH, declinedRevision: row.revision
           });
-        })
-        .then(function (r) {
-          ensureCheckBusy = false;
-          if (r && r.manual) return; /* 人工类等面板，不背后抢跑 */
-          afterAutoResume(r);
-        }, function () {
-          ensureCheckBusy = false;
+      if (declined) writeMarker(uid, declined);
+    }
+
+    function clockText(iso) {
+      var d = new Date(iso);
+      if (isNaN(d.getTime())) return '';
+      return D.pad2(d.getMonth() + 1) + '-' + D.pad2(d.getDate()) + ' ' +
+        D.pad2(d.getHours()) + ':' + D.pad2(d.getMinutes());
+    }
+
+    /** §4.1 第 3 条：本机有未保存改动，云端那份也保存过 → 问一次。 */
+    function askWhichSide(uid, row, record) {
+      var when = clockText(row.updated_at);
+      return M.confirm({
+        title: '云端与这台设备不一致',
+        message: '云端版本保存于 ' + (when || '未知时间') +
+          (row.saved_by ? '（' + row.saved_by + '）' : '') + '，这台设备上的改动还没有传上去。',
+        confirmLabel: '载入云端',
+        cancelLabel: '保留本机'
+      }).then(function (loadCloud) {
+        if (!loadCloud) {
+          declineRow(uid, row, record);
+          return { ok: true, action: 'declined' };
+        }
+        var adopted = adoptRow(uid, row);
+        if (!adopted.ok) { refuseCloud(adopted.code); return { ok: false, code: adopted.code }; }
+        return { ok: true, action: 'loaded' };
+      });
+    }
+
+    /**
+     * §4.1：打开页面（启动 / 切回）时对齐云端。
+     *   clean（本机内容 == 上次保存/载入的那份）→ 云端直接覆盖本机，完全静默；
+     *   pending / unknown → 每个云端版本只问一次；
+     *   读取失败 → 停在本地，不打扰。
+     */
+    function cloudOpenPass() {
+      if (autoLoadBusy || cloudBusy) return Promise.resolve(null);
+      var uid = sessionUserId();
+      if (!uid || !onAccountScope(uid)) return Promise.resolve(null);
+      var client = ensureClient(uid);
+      if (!client) return Promise.resolve(null);
+
+      autoLoadBusy = true;
+      return client.read().then(function (r) {
+        autoLoadBusy = false;
+        if (!r || !r.ok) { refreshSaveState(); return r; }
+        if (!r.row) { refreshSaveState(); return r; }
+
+        var row = r.row;
+        var record = readMarker(uid);
+        if (CloudRecord.classify(record, localHash()) === CloudRecord.KIND.CLEAN) {
+          var adopted = adoptRow(uid, row);
+          if (!adopted.ok) refuseCloud(adopted.code);
+          refreshSaveState();
+          return { ok: true, action: 'replaced' };
+        }
+
+        var revision = typeof row.revision === 'number' ? row.revision : null;
+        if (CloudRecord.isDeclined(record, revision)) return { ok: true, action: 'declined' };
+        /* 先看谁更新：本机改动晚于云端那份 → 云端并不比本机新，不该问「载入云端」
+           （典型：刚改完就刷新，用户看到弹窗会以为自己的改动被云端顶掉了）。 */
+        if (CloudRecord.newerSide(store.getState(), row) === 'local') {
+          refreshSaveState();
+          return { ok: true, action: 'local-newer' };
+        }
+        var askedKey = uid + ':' + String(revision);
+        if (revision !== null && askedRevisions[askedKey]) return { ok: true, action: 'asked' };
+        if (revision !== null) askedRevisions[askedKey] = true;
+
+        return askWhichSide(uid, row, record).then(function (acted) {
+          refreshSaveState();
+          return acted;
         });
-    }
-
-    function autoResumeRecovery() {
-      var Panel = root.DayPlan && root.DayPlan.syncPanel;
-      if (!Panel || typeof Panel.autoRecoveryRemote !== 'function' || !syncWiring) return;
-      Panel.autoRecoveryRemote(syncWiring, autoResumeHelpers(), afterAutoResume);
-    }
-
-    /**
-     * D24：等引擎的 lossy 后台自愈链跑完再挂稳态。轮询引擎状态：
-     * 回到 syncing（成功）或 paused-error（失败，交给自愈循环按退避重试）即算落定。
-     */
-    function waitAutoHealSettled(tries) {
-      var es = engineStateNow();
-      if (!es.eng || es.st === 'syncing' || es.st === 'paused-error' || tries >= 24) {
-        afterAutoResume();
-        return;
-      }
-      root.setTimeout(function () { waitAutoHealSettled(tries + 1); }, 500);
-    }
-
-    /** D19：修复结果已落本机、只差写回云端时自动完成（不弹第二次确认）。 */
-    function autoResumeLossyPush() {
-      var Panel = root.DayPlan && root.DayPlan.syncPanel;
-      if (!Panel || typeof Panel.autoLossyPush !== 'function' || !syncWiring) return;
-      Panel.autoLossyPush(syncWiring, {}, afterAutoResume);
+      }, function () {
+        autoLoadBusy = false;
+        return { ok: false, code: 'E_NETWORK' };
+      });
     }
 
     /**
-     * 登录 / 刷新后的四象限（契约 §1.9、§4.6）。
-     *
-     * 引擎只把状态从 `checking` 推进到某个确定值，**界面怎么表现由这里决定**：
-     *   none / pulled / pushed → 挂上稳态同步（此时才允许推送）
-     *   conflict               → 停下来让用户选，绝不自动合并或覆盖
-     *   paused-error 等        → 不挂稳态，面板显示错误与重试入口
-     *
-     * 为什么不能一口气进 syncing：那样会跳过「本地改没改 × 远端变没变」，
-     * 两端都改过时先推的一方必然撞一次 E_CONFLICT（Q-28）。
+     * §4.2：进入账号作用域。
+     * 云端有内容 → 以云端为准建立/覆盖账号副本；云端为空 → 当前本机内容做起点。
+     * 游客数据不动（始终留在 guest 作用域）。
      */
-    function resumeSync() {
-      if (!syncWiring || typeof syncWiring.resume !== 'function') return Promise.resolve(null);
-      var p = Promise.resolve(syncWiring.resume());
-      p.then(function (r) {
-        if (!r) return;
-        if (r.ok && (r.action === 'none' || r.action === 'pulled' || r.action === 'pushed')) {
-          attachSteady();
-          if (r.action === 'pulled') M.toast('云端有更新，已下载到本机');
-          return;
-        }
-        if (r.action === 'conflict') {
-          /* D24：四象限的「两边都有内容」不再停下等人选——引擎已停在
-             awaiting-choice，check 结果就在，自动定向（快照 → LWW）直接闭环。 */
-          teardownSteady();
-          ensureCheckFlow();
-          return;
-        }
-        /* 记录丢失/损坏，或云端行已经不在了。D17（2026-10-28）：
-           - 本机同步记录丢失（recovery）→ 按 D16 裁定「记录丢失时默认以云端为准」
-             直接自动恢复，不再弹红色横幅等人点（弹窗路径与面板同款）；
-           - remote-missing（云端被另一台设备删掉）→ D24：同样不再弹横幅等人——
-             引擎停在 awaiting-choice，自动定向（本机原样重建）直接闭环。 */
-        if (r.action === 'recovery') {
-          teardownSteady();
-          if (r.kind === 'remote-missing') {
-            ensureCheckFlow();
-            return;
+    function enterAccount(uid) {
+      var client = ensureClient(uid);
+      if (!client) return Promise.resolve({ ok: false, code: 'E_NO_CLOUD', message: '当前环境不支持云端' });
+      return client.read().then(function (r) {
+        if (!r.ok) {
+          /* 断网：有账号副本就先用它（下次打开再对齐）；没有就无法进入账号。 */
+          if (store.hasAccountCopy(uid)) {
+            var sw = switchStoreScope(accountScopeId(uid), uid);
+            return sw.ok ? { ok: true, offline: true } : { ok: false, code: sw.code, message: sw.message };
           }
-          autoResumeRecovery();
-          return;
+          return { ok: false, code: r.code, message: '云端读取失败，请检查网络后重试' };
         }
-        /* 租约被另一个标签页占着（§5.4）：这次没有上传，但同步是开着的，
-           改动仍在本地。挂上稳态并立刻排一次重试——不排的话，这次改动要等到
-           用户下一次编辑才会被推上去。用 toast 而不是横幅：它会自愈，不值得占一条警告。 */
-        if (r.action === 'leased') {
-          attachSteady();
-          if (syncSteady) syncSteady.schedule();
-          M.toast('另一个标签页正在同步，这次改动稍后自动重试');
-          return;
-        }
-        /* 有损修复（§1.8）：D24（2026-10-29）——引擎在 enterLossy 里已经自排了
-           「快照 → 应用修复 → 写回」的后台链（D23），面板侧再调一次 applyLossy
-           只会撞 E_NO_LOSSY、弹出「云端数据未能自动修复」的假失败（用户实测截图
-           正是这条）。这里只等它跑完，跑完把稳态挂回去。 */
-        if (r.action === 'lossy') {
-          teardownSteady();
-          waitAutoHealSettled(0);
-          return;
-        }
-        /* 修复结果还没写回云端。D19：以前这里直接 return——于是只要写回失败一次
-           （手机上很常见），同步就永久停在这个状态，只能靠用户手动去面板点。
-           现在自动重试写回；成功即回到 syncing，失败由自愈循环继续。 */
-        if (r.action === 'lossy-push-pending') {
-          teardownSteady();
-          autoResumeLossyPush();
-          return;
-        }
-        /* 关闭同步期间攒下的改动，重新开启时要先问（§4.5.3）。面板会摆出确认框，
-           这里只负责别把稳态挂上去。 */
-        if (r.action === 'upload-confirm') {
-          teardownSteady();
-          return;
-        }
-        /* D21：resume 对「登录了但没有同步记录」（boot.kind==='none'）回
-           E_NOT_ACTIVE skip——这不是失败，是首次提交还没发生过。以前这里
-           什么都不做，启动后引擎永远停在 signed-in，除非用户碰巧打开设置
-           面板（maybeRestoreAutoCheck 是唯一触发点）。现在自动补 check +
-           定向提交，同步在登录后 15s 内自己跑起来。 */
-        if (r.action === 'skip' || r.code === 'E_NOT_ACTIVE') {
-          ensureCheckFlow();
-          return;
-        }
-        /* paused-error：不挂 steady。错误文案与重试入口由同步面板显示，
-           这里不再弹第二个横幅，避免一个失败刷两条提示。 */
-      }, function () { /* 静默：启动不该被同步拖住 */ });
-      return p;
-    }
 
-    // 切回页面就拉一次：别的设备可能已经改过。失败静默，不弹窗。
-    if (root.document && typeof root.document.addEventListener === 'function') {
-      root.document.addEventListener('visibilitychange', function () {
-        if (!syncSteady || root.document.visibilityState !== 'visible') return;
-        syncSteady.pullNow();
-      });
-    }
-    if (root.addEventListener) {
-      root.addEventListener('focus', function () {
-        if (syncSteady) syncSteady.pullNow();
+        var row = r.row;
+        var docToWrite = null;
+        if (row) {
+          var converted = CloudDoc.fromCloud(row.schedule_data, store.getState());
+          if (!converted.ok) return { ok: false, code: converted.code, message: cloudUnusableText(converted.code) };
+          docToWrite = converted.doc;
+        } else if (!store.hasAccountCopy(uid)) {
+          docToWrite = store.getState();
+        }
+        if (docToWrite) {
+          var written = store.persistAccountCopy(uid, docToWrite, { sessionUid: uid });
+          if (!written.ok) return { ok: false, code: written.code, message: written.message || '账号数据写入失败' };
+        }
+
+        var switched = switchStoreScope(accountScopeId(uid), uid);
+        if (!switched.ok) return { ok: false, code: switched.code, message: switched.message || '切换账号数据失败' };
+
+        if (row) {
+          writeMarker(uid, {
+            revision: typeof row.revision === 'number' ? row.revision : null,
+            savedAt: row.updated_at || '',
+            device: deviceLabel,
+            hash: hashOfDoc(row.schedule_data)
+          });
+        } else {
+          /* 云端为空：没有标记 = 本机这份还没传过（保存按钮亮着小红点）。 */
+          clearMarker(uid);
+        }
+        refreshSaveState();
+        return { ok: true, adopted: !!row };
       });
     }
 
-    /* ---------------- D18：可重试失败的自愈循环 ----------------
-       用户口径（2026-10-28）：「登录后不要有任何需要额外操作的地方」。
-       手机网络抖动、Wi-Fi 切 4G、短暂超时，引擎会停在 paused-error 但把
-       lastError 标成 retryable。这里负责在「页面可见 + 浏览器有网」时
-       自动重跑一次 resume，成功即回到同步——不需要点「开始检查」。
-       真正的数据问题（冲突、记录损坏、云端被删）不带 retryable，仍走人工。 */
-    function retryablePaused() {
-      try {
-        var eng = syncWiring && typeof syncWiring.getEngine === 'function' ? syncWiring.getEngine() : null;
-        if (!eng || typeof eng.getState !== 'function') return false;
-        if (eng.getState() !== 'paused-error') return false;
-        var err = typeof eng.getError === 'function' ? eng.getError() : null;
-        return !!(err && err.retryable);
-      } catch (e) { return false; }
+    /** 登录 / 启动恢复后进入账号；失败时如实说一句，本页不会被切走。 */
+    function enterAccountForSession(uid, quiet) {
+      if (!uid) return Promise.resolve(null);
+      store.setSessionUid(uid);
+      if (onAccountScope(uid)) { refreshSaveState(); return Promise.resolve({ ok: true }); }
+      return enterAccount(uid).then(function (res) {
+        if (!res || !res.ok) {
+          if (!quiet) M.toast((res && res.message) || '云端账号数据未能载入');
+        }
+        refreshSaveState();
+        return res;
+      }, function () {
+        if (!quiet) M.toast('云端账号数据未能载入');
+        refreshSaveState();
+        return { ok: false, code: 'E_NETWORK' };
+      });
     }
 
-    function tryAutoHeal() {
+    function openSignInDialog() {
+      if (!cloudAuth || !AccountDialogs) { M.toast('当前环境不支持登录'); return; }
+      AccountDialogs.openSignIn({
+        auth: cloudAuth,
+        onSignedIn: function (r) { onSignedIn(r); },
+        onDone: function () {
+          if (cloudSectionInst && typeof cloudSectionInst.render === 'function') {
+            try { cloudSectionInst.render(); } catch (e) { /* 面板已关闭 */ }
+          }
+        }
+      });
+    }
+
+    function onSignedIn(r) {
+      var uid = r && r.uid ? String(r.uid) : '';
+      if (!uid) return;
+      enterAccountForSession(uid, false).then(function (res) {
+        if (res && res.ok && cloudSectionInst && typeof cloudSectionInst.render === 'function') {
+          try { cloudSectionInst.render(); } catch (e) { /* 面板已关闭 */ }
+        }
+      });
+    }
+
+    /** §4.3：退出即回游客作用域；账号副本与云端标记都保留。 */
+    function afterSignOut() {
+      store.setSessionUid(null);
+      cloudClient = null;
+      cloudClientUid = null;
+      if (store.getScopeId() !== 'guest') switchStoreScope('guest');
+      syncDockFromDoc(store.getState());
+      refreshSaveState();
+    }
+
+    function listVersions() {
+      var uid = sessionUserId();
+      if (!uid) return Promise.resolve({ ok: false, message: '未登录' });
+      var client = ensureClient(uid);
+      if (!client) return Promise.resolve({ ok: false, message: '云端未启用' });
+      return client.read().then(function (r) {
+        if (!r.ok) return { ok: false, code: r.code, message: r.message };
+        if (!r.row) return { ok: true, current: null, older: [] };
+        var ui = CloudVersions.listForUi(r.row);
+        return { ok: true, current: ui.current, older: ui.older };
+      }, function () {
+        return { ok: false, message: '网络不可用' };
+      });
+    }
+
+    /** §5：回溯 = 该版本先存成新的当前版本，成功后再替换本机内容。 */
+    function restoreVersion(entry) {
+      var uid = sessionUserId();
+      if (!uid) return Promise.resolve({ ok: false, message: '未登录' });
+      if (!onAccountScope(uid)) return Promise.resolve({ ok: false, message: '账号数据还没载入' });
+      var client = ensureClient(uid);
+      if (!client) return Promise.resolve({ ok: false, message: '云端未启用' });
+
+      var converted = CloudDoc.fromCloud(entry && entry.doc, store.getState());
+      if (!converted.ok) {
+        return Promise.resolve({ ok: false, message: (converted.errors[0] && converted.errors[0].message) || '该版本无法载入' });
+      }
+      var convertedUp = CloudDoc.toCloud(converted.doc);
+      if (!convertedUp.ok) return Promise.resolve({ ok: false, message: '该版本无法上传' });
+
+      return client.restore(convertedUp.payload).then(function (r) {
+        if (!r || !r.ok) return { ok: false, message: saveErrorText(r) };
+        applyDocFromCloud(converted.doc);
+        writeMarker(uid, {
+          revision: r.row ? r.row.revision : null,
+          savedAt: (r.row && r.row.updated_at) || new Date().toISOString(),
+          device: deviceLabel,
+          hash: hashOfDoc(convertedUp.payload)
+        });
+        refreshSaveState();
+        return { ok: true };
+      }, function (err) {
+        return { ok: false, message: (err && err.message) || '网络不可用' };
+      });
+    }
+
+    function maybeCloudOpenPass() {
       if (root.document && root.document.visibilityState === 'hidden') return;
-      if (root.navigator && root.navigator.onLine === false) return;
-      /* D21：signed-in / awaiting-choice 的死寂状态优先补闭环——
-         这两类不是错误，是「自动化没跑完」，重跑就对了。 */
-      var es = engineStateNow();
-      if (es.st === 'signed-in' || es.st === 'awaiting-choice') {
-        ensureCheckFlow();
-        return;
-      }
-      /* D22c（2026-10-29）：冲突类 paused-error 也自愈。引擎侧已把条件推送的
-         revision 分歧改为自动合并，但历史会话/极端竞态仍可能落进这个死状态
-         （「点开始检查选择保留哪一边」）。D24：这里必须**强制**进 ensureCheckFlow——
-         旧版传普通调用，被 ensureCheckFlow 的状态过滤整个吞掉，自愈从未跑过。
-         check() → autoResolveChoice 的 case C 自动路径（先快照再 LWW）就是解药，
-         15 秒内闭环。 */
-      if (es.st === 'paused-error' && syncWiring && typeof syncWiring.describe === 'function') {
-        var snap = null;
-        try { snap = syncWiring.describe(); } catch (e) { snap = null; }
-        var errCode = snap && snap.error && snap.error.code;
-        if (errCode === 'E_CONFLICT' || errCode === 'E_MERGE_FAILED') {
-          ensureCheckFlow(true);
-          return;
-        }
-      }
-      if (retryablePaused()) resumeSync();
+      var now = Date.now();
+      if (now - lastOpenPassAt < 30000) return;
+      lastOpenPassAt = now;
+      var uid = sessionUserId();
+      if (!uid) return;
+      if (!onAccountScope(uid)) { enterAccountForSession(uid, true); return; }
+      cloudOpenPass();
     }
 
-    if (root.setInterval) {
-      /* 15s 一次：够快让用户「回来就已经好了」，又不至于对着断网空转。
-         有网/切回页面时另有即时触发，见下方 online / visibilitychange。 */
-      var healTick = root.setInterval(tryAutoHeal, 15000);
-      if (healTick && typeof healTick.unref === 'function') healTick.unref();
-    }
-    if (root.addEventListener) {
-      root.addEventListener('online', function () { tryAutoHeal(); });
-    }
     if (root.document && typeof root.document.addEventListener === 'function') {
       root.document.addEventListener('visibilitychange', function () {
-        if (root.document.visibilityState === 'visible') tryAutoHeal();
+        if (root.document.visibilityState === 'visible') maybeCloudOpenPass();
       });
     }
+    if (root.addEventListener) root.addEventListener('focus', maybeCloudOpenPass);
 
-    /* ---------------- 租约续期与释放（契约 §5.4） ----------------
-       引擎只在「云端写之前」懒续期（在那里续期才有意义）；页面长时间不写就没人续，
-       于是 30s 后自然过期。这一层补上「持有期间每 10s 续一次」，并在页面隐藏时跳过
-       （§5.4：页面隐藏时停止续期）、页面卸载时释放。 */
-    function currentLease() {
-      if (!syncWiring || typeof syncWiring.getLease !== 'function') return null;
-      try { return syncWiring.getLease(); } catch (e) { return null; }
-    }
-
-    if (root.setInterval) {
-      var leaseTick = root.setInterval(function () {
-        if (root.document && root.document.visibilityState === 'hidden') return;
-        var l = currentLease();
-        if (!l || typeof l.renewIfNeeded !== 'function') return;
-        try { l.renewIfNeeded(); } catch (e) { /* 续不上就等过期，正确性不依赖它 */ }
-      }, 10000);
-      if (leaseTick && typeof leaseTick.unref === 'function') leaseTick.unref();
-    }
-
-    root.addEventListener('pagehide', function () {
-      var l = currentLease();
-      if (l && typeof l.release === 'function') {
-        try { l.release(); } catch (e) { /* 卸载路径不抛 */ }
-      }
-    });
-
-    // 恢复上次的登录态。失败（无凭据 / 过期 / 网断）一律静默回到未登录，
-    // 不打扰启动：同步是可选功能，启动不该被它拦住。
-    if (syncWiring && typeof syncWiring.restore === 'function') {
-      Promise.resolve(syncWiring.restore()).then(function (r) {
-        if (r && r.ok) {
-          if (r.uid) store.setSessionUid(r.uid);
-          /* 有有效 active 记录时引擎停在 checking（Q-28）：先按四象限判定，
-             判完再决定挂不挂稳态。直接 attachSteady 会让 steady 在
-             checking 下空转，界面停在「正在检查」再也不动。 */
-          if (r.needsCheck) {
-            resumeSync();
-          } else if (r.bootKind === 'blocked') {
-            /* 记录形状无法判定：面板负责说明与出口，不挂稳态（挂了也只会在
-               第一次推送时得到一个 E_BAD_STATE，徒增一条看不懂的错误）。 */
-          } else {
-            attachSteady();
-          }
+    /* 恢复上次的登录态，再按 §4.1 / §4.2 对齐云端。失败静默回到游客；
+       断网但凭据还在时保持登录（离线刷新 defer），下次切回页面会自动再对齐。 */
+    if (session) {
+      Promise.resolve(session.restore()).then(function (r) {
+        if (!(r && r.ok && r.state === 'signed-in')) {
+          store.setSessionUid(null);
+          if (store.getScopeId() !== 'guest') switchStoreScope('guest');
+          refreshSaveState();
           return;
         }
-        /* 凭据不可用 = 没有会话：契约 §2.2 要求指针回落 guest 并写回。
-           Store 启动时按「窥探到的 uid」进了账号作用域，这里必须纠正——
-           否则未登录的页面会继续往某个账号的副本里写。 */
-        store.setSessionUid(null);
-        if (store.getScopeId() !== 'guest') switchStoreScope('guest');
+        var uid = session.getUserId();
+        lastOpenPassAt = Date.now();
+        enterAccountForSession(uid, true).then(function () {
+          if (onAccountScope(uid)) cloudOpenPass();
+        });
       }, function () {
         store.setSessionUid(null);
         if (store.getScopeId() !== 'guest') switchStoreScope('guest');
+        refreshSaveState();
       });
     }
 
+    if (els.saveBtn) {
+      els.saveBtn.addEventListener('click', function () { saveToCloud(); });
+    }
 
     /* ---------------- 全局设置入口（迭代 4：侧栏月历已删除，见 S26 / ADR-26） ---------------- */
 
     settingsOpts = {
       store: store,
       onDataChanged: onDataChanged,
-      getWiring: function () { return syncWiring; },
-      getConn: function () { return readConn(); },
-      /* 面板的「登录并同步」：没连过自己项目时，用内置默认项目直接登录，
-         不再要求用户理解 URL / key（2026-10-27 所有者口径）。 */
-      getDefaultConn: function () { return DEFAULT_SYNC_CONN; },
-      /* 设置页读状态用。steady 被拆掉（退出登录）后回退到内存里最后一次结果，
-         免得刚退出就看到「还没有同步动作」这种误导性文案。 */
-      getSteady: function () {
-        if (syncSteady) return syncSteady;
-        return {
-          getStatus: function () { return lastSyncStatus; },
-          pushNow: null,
-          pullNow: null
-        };
-      },
-      registerSyncSection: function (inst) { syncSectionInst = inst; },
-      /* D12（2026-10-27）：onSyncStopped 钩子已随「关闭同步」按钮一并移除——
-         面板不再有停用同步的入口，稳态只由 onDataCleared / onSessionChanged 摘除。 */
-      /* 清空本机之后（T-R03）：清空只影响当前作用域，云端那份还在。
-         停同步是必须的——否则下一次编辑会走 push()，把空文档推上云端。 */
-      onDataCleared: function () {
-        teardownSteady();
-        lastSyncStatus = null;
-        if (!syncWiring || typeof syncWiring.noteLocalCleared !== 'function') return;
-        Promise.resolve(syncWiring.noteLocalCleared()).then(function () {}, function () {});
-      },
-      /* 登录/退出成功后由面板通知：登录后要挂上稳态同步，退出后必须摘掉。
-         同时把会话交给 Store——账号作用域的闸门认的是「当前会话」，
-         而 Store 创建时拿到的只是启动那一刻的快照。 */
-      onSessionChanged: function (signedIn) {
-        var uid = null;
-        try {
-          uid = (syncWiring && typeof syncWiring.describe === 'function') ? syncWiring.describe().uid : null;
-        } catch (e) { uid = null; }
-        store.setSessionUid(signedIn ? uid : null);
-        if (signedIn) {
-          /* 登录只建立会话（§4.6）。本机若有该账号的有效 active 记录，
-             必须先走四象限，不能直接开始推送。记录丢失/损坏时同样停在
-             checking，由 resumeSync 转成恢复流程。 */
-          var needsCheck = false;
-          var bootKind = null;
-          try {
-            var eng = syncWiring && typeof syncWiring.getEngine === 'function' ? syncWiring.getEngine() : null;
-            needsCheck = !!eng && eng.getState() === 'checking';
-            var boot = eng && typeof eng.getBoot === 'function' ? eng.getBoot() : null;
-            bootKind = boot ? boot.kind : null;
-          } catch (e) { needsCheck = false; }
-          if (needsCheck) {
-            resumeSync();
-          } else if (bootKind === 'blocked') {
-            /* 与启动恢复同款：面板负责说明，不挂稳态。 */
-          } else {
-            attachSteady();
+      cloud: {
+        getSession: function () { return session; },
+        getAccountName: function (uid) { return cloudAuth ? cloudAuth.accountName(uid) : ''; },
+        openSignIn: openSignInDialog,
+        signOut: function () {
+          if (!session) return Promise.resolve({ ok: true });
+          return Promise.resolve(session.signOut()).then(function (r) {
+            afterSignOut();
+            return r;
+          });
+        },
+        listVersions: listVersions,
+        restoreVersion: restoreVersion,
+        onRestored: function () { refreshSaveState(); },
+        onSignedOut: function () {
+          refreshSaveState();
+          if (cloudSectionInst && typeof cloudSectionInst.render === 'function') {
+            try { cloudSectionInst.render(); } catch (e) { /* 面板已关闭 */ }
           }
-        } else {
-          teardownSteady();
-          /* 退出登录 → 活动数据源回 guest（契约 §2.2）。不切的话，界面继续写
-             账号副本：用户以为在看本机数据，实际改的是一个已登出账号的副本，
-             而且这些改动在下次登录前不会被推送。 */
-          if (store.getScopeId() !== 'guest') switchStoreScope('guest');
-          /* D11（2026-10-27）：完成台条目属于文档数据（finishDock 随作用域走）。
-             退出后不重建的话，账号的台内条目（含运行中的计时）会留在界面上，
-             甚至被 persist 写进 guest 文档——跨账号串数据。以 guest 文档为准重建。 */
-          syncDockFromDoc(store.getState());
         }
       },
-      onConnectReal: function (conn) {
-        writeConn(conn);
-        /* config 必须一起带上：buildSyncWiring 的 real 分支直接用 cfg.config，
-           只给 mode 不给 config，createWiring 会抛 E_NOT_CONFIGURED，
-           wiring 建不出来 → 面板渲染回「本机模式」，用户连接成功却看不到登录入口
-           （2026-10-26 e2e 实测抓到，.probe/debug-connect2.cjs）。 */
-        root.DAYPLAN_SYNC = { mode: 'real', config: conn };
-        buildSyncWiring();
-        return syncWiring;
-      },
-      onEnableDemoSync: function () {
-        root.DAYPLAN_SYNC = { mode: 'mock' };
-        buildSyncWiring();
-      },
-      onDisableDemoSync: function () {
-        root.DAYPLAN_SYNC = { mode: 'off' };
-        buildSyncWiring();
-      },
+      registerCloudSection: function (inst) { cloudSectionInst = inst; },
+      /* 清空只影响当前作用域：云端那份不动，保存按钮的文字会变蓝提醒「还没传」。 */
+      onDataCleared: function () { refreshSaveState(); },
       /* 2026-10-22 二十三轮：响铃开关移入设置后，立即同步到已创建的完成台实例。 */
       onFinishSoundChange: function (on) {
         var dv = instances.day;
@@ -1738,120 +1719,65 @@
       store.saveNow();
     });
 
-    // 契约 §5.2 检测点 2：其他标签页改动了当前数据键 → 立即暂停本页写入，
-    // 避免用本页的旧快照覆盖对方。
-    // 只停本地是不够的：§5.2「冲突处理」第 3 条要求**同步同时保持 paused-error**。
-    // 只停本地、不停同步，会得到最坏的一种组合——本页不再落盘，却把内存里的旧内容
-    // 推上云端，等于用旧快照覆盖了两个标签页的内容。
-    var staleBanner = null;
+    /* 契约 §7：多标签页只做最低限度的保护——不弹窗、不提示、不合并。
+       - 本页没有未落盘的改动 → 磁盘上那份就是最新真相，整份静默重载；
+       - 本页有未落盘的改动 → 只标记陈旧（自动保存暂停），等本页「保存」或刷新。
+       云端保存是显式动作：另一页改了本机，并不代表要碰云端。 */
+    var reconcileTimer = null;
+    var staleSeen = false;
 
-    /** 覆盖 / 重载之前先导出一份（§5.2，导出失败就不做不可逆动作）。 */
-    function exportBeforeResolve(prefix) {
-      var payload = store.exportDocument();
-      var name = prefix + '-' + D.todayISO().replace(/-/g, '') + '-'
-        + new Date().toTimeString().slice(0, 5).replace(':', '') + '.json';
-      SettingsView.downloadJson(name, payload);
+    /* 与上次成功写入的基线比，而不是跟磁盘现状比——storage 事件到达时磁盘已经变了。 */
+    function hasUnsavedLocal() {
+      try {
+        if (typeof store.hasPendingSave === 'function' && store.hasPendingSave()) return true;
+      } catch (e) { return true; }
+      try {
+        var base = typeof store.getBaseline === 'function' ? store.getBaseline() : null;
+        if (base === null || base === undefined) return true;
+        return JSON.stringify(store.getState()) !== base;
+      } catch (e) { return true; }
     }
 
-    /* D23b：pauseSyncForStale 已删——本机被其他标签页更新由自动采纳处理，
-       引擎不再因本地陈旧而暂停（见 engine.noteLocalStale 的 D23b 注释）。 */
-
-    function showStaleBanner() {
-      if (staleBanner) return;   // 一次只摆一条，避免连续编辑把横幅堆成墙
-      staleBanner = warn('danger',
-        '另一个标签页改动了数据，本页已停止保存与同步（避免互相覆盖）。请选择如何处理：',
-        [
-          {
-            label: '导出后重新加载',
-            onClick: function () {
-              staleBanner = null;
-              var backedUp = true;
-              try { exportBeforeResolve('dayplan-冲突前备份'); } catch (e) { backedUp = false; }
-              /* 导出失败也要让用户能走：这一项只丢弃本页未落盘的修改，
-                 磁盘上那份（对方写的）不会被毁掉。 */
-              var r = store.resolveStale('reload');
-              if (!r.ok) { showStaleBanner(); M.toast('重新加载失败：' + (r.error || '未知错误')); return; }
-              resumeSync();
-              M.toast(backedUp ? '已重新载入磁盘上的最新内容' : '已重新载入，但导出失败：本页修改已丢弃');
-            }
-          },
-          {
-            label: '用本页覆盖',
-            onClick: function () {
-              staleBanner = null;
-              /* 覆盖会毁掉对方那一份，所以先导出。导出失败就取消覆盖（fail closed）——
-                 宁可这次不同步，也不在用户不知情时删数据。 */
-              try {
-                exportBeforeResolve('dayplan-覆盖前备份');
-              } catch (e) {
-                showStaleBanner();
-                M.toast('导出失败，已取消覆盖');
-                return;
-              }
-              var r = store.resolveStale('overwrite');
-              if (!r.ok) { showStaleBanner(); M.toast('覆盖失败：' + (r.error || '未知错误')); return; }
-              resumeSync();
-              M.toast('已用本页内容覆盖（对方那份已备份到本机存储）');
-            }
-          },
-          {
-            label: '暂不处理',
-            onClick: function () { staleBanner = null; }   // 允许下一次改动时再提示
-          }
-        ]);
-    }
-
-    /* D18（2026-10-28 用户口径「不要有任何需要额外操作的地方」）：
-       另一个标签页写了数据时，分两种情况——
-       · 本页没有待写改动（只是被动开着，最常见）：磁盘上那份就是最新真相，
-         静默载入并继续同步，不问任何问题（微信同时登录也不会问）；
-       · 本页刚有改动还没落盘：两份内容会互相覆盖，才需要人来选（保留三选一横幅）。 */
-    function autoAdoptExternal() {
+    function reconcileExternal() {
+      if (!store.isStale()) return;
+      var before = store.getState();
       var r;
-      try { r = store.resolveStale('reload'); } catch (e) { r = { ok: false, error: e && e.message }; }
-      if (!r || !r.ok) {
-        showStaleBanner();
-        return;
-      }
+      try { r = store.resolveStale(hasUnsavedLocal() ? 'keep' : 'reload'); } catch (e) { r = { ok: false }; }
+      if (!r || !r.ok || r.action !== 'reload') return;
       syncDockFromDoc(store.getState());
-      resumeSync();
-      M.toast('已载入另一个标签页的最新内容');
+      if (!sameContent(before, store.getState())) onDataChanged();
+      refreshSaveState();
+    }
+
+    function scheduleReconcile() {
+      if (reconcileTimer !== null) return;
+      reconcileTimer = setTimeout(function () {
+        reconcileTimer = null;
+        reconcileExternal();
+      }, 0);
     }
 
     function onExternalChange(key) {
-      var hadPending = false;
-      try { hadPending = typeof store.hasPendingSave === 'function' && store.hasPendingSave(); } catch (e) { hadPending = true; }
       if (!store.noteExternalChange(key)) return;
-      /* D23b：不再调用 pauseSyncForStale——本机被别的标签页更新不是错误。
-         先快照再自动采纳磁盘内容，采纳后的下一次推送自然带上正确数据。 */
-      /* D21（2026-10-29）：本页有未落盘改动也不再停下来问。先把这个瞬时状态
-         快照到本机（dayplan.sync-snapshot.v1 环形 3 份），然后自动采纳磁盘上
-         的最新内容。真正丢掉的最多是另一页写入前 0.8s 内本页的编辑，而且
-         快照里查得到——「停下来要人选」的保护，代价是每个被动标签页都可能
-         变成永久停止保存的死状态（用户点过「暂不处理」后就是这样），不值。 */
-      if (hadPending) {
-        try {
-          autoResumeHelpers().snapshotBackup('tab-conflict', store.exportDocument());
-        } catch (e) { /* 快照失败照旧自动采纳 */ }
-      }
-      autoAdoptExternal();
+      staleSeen = true;
+      scheduleReconcile();
     }
 
     window.addEventListener('storage', function (e) {
-      if (e && typeof e.key === 'string') onExternalChange(e.key);
+      if (!e || typeof e.key !== 'string') return;
+      /* 另一个标签页保存到云端后只写标记键：本页的蓝字要跟着回黑。 */
+      var uid = sessionUserId();
+      if (uid && e.key === markerKey(uid)) { refreshSaveState(); return; }
+      onExternalChange(e.key);
     });
 
     /* 检测点 3（写后回读不一致）不会触发 storage 事件——它是本页自己写坏的。
-       在每次渲染/冲刷之后补一次检查，处置与 storage 路径一致：自动采纳磁盘
-       内容（D23b：不再暂停、不再摆三选一横幅）。 */
+       处置与 storage 路径一致：干净页静默重载，有改动的页保持陈旧等本页保存。 */
     store.subscribe(function () {
-      if (store.isStale() && !staleBanner) {
-        staleBanner = true;
-        setTimeout(function () {
-          staleBanner = null;
-          autoAdoptExternal();
-        }, 0);
-      }
+      if (!store.isStale()) { staleSeen = false; return; }
+      if (staleSeen) return;
+      staleSeen = true;
+      scheduleReconcile();
     });
 
     /* ---------------- 初始化渲染 ---------------- */
@@ -1872,23 +1798,19 @@
       goWeek: goWeek,
       goMonth: goMonth,
       openSettings: function () { SettingsView.openSettings(settingsOpts); },
-      /* 同步线的只读快照：排障时最想知道的是「引擎停在哪一步」，
-         而它不在 DOM 里（状态行只显示一部分）。只读，不提供任何写入口。 */
-      sync: function () {
-        if (!syncWiring) return { mode: 'off', engineState: null, uid: null, error: null, steady: false };
-        var d = null;
-        try { d = syncWiring.describe(); } catch (e) { d = null; }
+      /* 手动保存线的只读快照：排障时最想知道「登录了没、标记是什么、有没有在忙」。
+         只读，不提供任何写入口。 */
+      cloud: function () {
+        var uid = sessionUserId();
+        var marker = null;
+        if (uid) { try { marker = readMarker(uid); } catch (e) { marker = null; } }
         return {
-          mode: d && d.mode,
-          uid: d && d.uid,
-          sessionState: d && d.sessionState,
-          engineState: d && d.engineState,
-          bootKind: d && d.bootKind,
-          /* 租约（§5.4）。多标签问题在界面上几乎不可见，
-             排障时必须能一眼看出「本页到底有没有拿着租约、被谁挡着」。 */
-          lease: (d && d.lease) || null,
-          error: d && d.error,
-          steady: !!syncSteady
+          signedIn: !!uid,
+          uid: uid,
+          scope: store.getScopeId(),
+          kind: uid ? CloudRecord.classify(marker, localHash()) : null,
+          marker: marker,
+          busy: !!cloudBusy
         };
       }
     };

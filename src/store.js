@@ -20,7 +20,7 @@
     isNode ? require('./core/schema.js') : root.DayPlan.schema,
     isNode ? require('./core/id.js') : root.DayPlan.id,
     isNode ? require('./core/scope-storage.js') : root.DayPlan.scopeStorage,
-    isNode ? require('./core/sync-keys.js') : root.DayPlan.syncKeys
+    isNode ? require('./core/storage-keys.js') : root.DayPlan.storageKeys
   );
   if (isNode) {
     module.exports = api;
@@ -452,6 +452,10 @@
       var draft = clone(state);
       var result = fn(draft);
       var next = result === undefined ? draft : result;
+      /* 内容没变（典型：同步拉回的合并结果只差 meta.updatedAt）→ 不落盘、不通知。
+         空写会向同源的其它标签页发 storage 事件，它们会当成「数据被改了」整份
+         采纳磁盘内容；正在编辑的那一页因此会丢掉尚未落盘的改动。 */
+      if (schema.sameDocumentContent(next, state)) return getState();
       if (opts.validate !== false) {
         var v = schema.validateDocument(next);
         if (!v.ok) {
@@ -1128,7 +1132,9 @@
         color: color,
         builtin: false,
         order: maxOrder + 1,
-        createdAt: now()
+        createdAt: now(),
+        /* D25：跨设备合并靠它判「谁后改的」；没有它的类别在合并里永远让本机赢。 */
+        updatedAt: now()
       };
       mutate(function (draft) { draft.categories.push(cat); });
       return cat.id;
@@ -1142,6 +1148,7 @@
         /* 2026-10-20（用户反馈「除了紧急类型仅可改名，其他类型均可自定义」）：
            · 紧急：**只允许改名** —— id / 颜色 / 次序 / 存在性全部固定（颜色恒 #dc2626）。
            · 非紧急（含三个内置类别）：改名、改色、排序、删除都放开（四十八轮起）。 */
+        var touched = false;
         if (patch.name !== undefined) {
           var name = String(patch.name).trim();
           if (!name) throw StoreError('E_INVALID_NAME', '类别名称不能为空');
@@ -1149,6 +1156,7 @@
           var lower = name.toLowerCase();
           var dup = draft.categories.some(function (c) { return c.id !== id && c.name.trim().toLowerCase() === lower; });
           if (dup) throw StoreError('E_DUPLICATE_NAME', '已存在同名类别：' + name);
+          if (cat.name !== name) touched = true;
           cat.name = name;
         }
         if (patch.color !== undefined) {
@@ -1161,8 +1169,11 @@
           }
           /* 统一小写落盘：颜色在数据里是字符串比较的（药丸/胶囊按色值查表），
              '#DC2626' 与 '#dc2626' 必须视为同一色。 */
-          cat.color = String(patch.color).toLowerCase();
+          var nextColor = String(patch.color).toLowerCase();
+          if (cat.color !== nextColor) touched = true;
+          cat.color = nextColor;
         }
+        if (touched) cat.updatedAt = now();
         draft.categories[i] = cat;
       });
       return getCategory(id);
@@ -1331,6 +1342,11 @@
     function setNote(dateISO, text) {
       if (!dt.isValidDate(dateISO)) throw StoreError('E_INVALID_DATE', '非法日期：' + dateISO);
       var clean = text === null || text === undefined ? '' : String(text);
+      var existing = state.notes[dateISO];
+      /* 记录栏失焦、页面卸载都会无条件 flush 一次：内容没变就不刷新时间戳，
+         否则每次刷新本机内容指纹都会变，云端会当成「有未保存改动」。 */
+      if (clean.trim() === '' && !existing) return true;
+      if (existing && clean === existing.text) return true;
       mutate(function (draft) {
         if (clean.trim() === '') {
           if (draft.notes[dateISO]) delete draft.notes[dateISO];
@@ -1363,6 +1379,9 @@
       if (!dt.isValidDate(mondayISO)) throw StoreError('E_INVALID_DATE', '非法日期：' + mondayISO);
       if (!isMonday(mondayISO)) throw StoreError('E_NOT_MONDAY', '当周记录的键必须是周一：' + mondayISO);
       var clean = text === null || text === undefined ? '' : String(text);
+      var existsW = state.weekNotes ? state.weekNotes[mondayISO] : null;
+      if (clean.trim() === '' && !existsW) return true;
+      if (existsW && clean === existsW.text) return true;
       mutate(function (draft) {
         if (!schema.isPlainObject(draft.weekNotes)) draft.weekNotes = {};
         if (clean.trim() === '') {
@@ -1931,6 +1950,8 @@
      * 本地冲突（staleLocal）的处置（契约 §5.2「冲突处理」三个选项）。
      *
      *   'reload'    丢弃本页修改，重新 load 磁盘内容（**界面必须先导出**，这里不管导出）
+     *   'merge'     本页有未落盘改动时用：把磁盘内容三向合并进本页（基线取上次写入），
+     *               两边改动都保留；磁盘已含本页内容时只对齐基线、不回写
      *   'overwrite' 先把磁盘上那份备份到 `dayplan.db.recover.<ISO>`，再用本页内容覆盖
      *   'keep'      什么都不做，继续保持 stale（允许内存编辑，不落盘、不推送）
      *
@@ -1940,7 +1961,7 @@
      * 只有真的 stale 时才允许调用：否则它会变成绕开写前检测的「强制覆盖」后门，
      * §5.2 的整层保护就形同虚设。
      *
-     * @param {('reload'|'overwrite'|'keep')} mode
+     * @param {('reload'|'merge'|'overwrite'|'keep')} mode
      * @returns {{ok:boolean, action?:string, backupKey?:string|null, code?:string, error?:string}}
      */
     function resolveStale(mode) {
@@ -1954,6 +1975,77 @@
       if (mode === 'reload') {
         var loaded = load();
         return { ok: true, action: 'reload', backupKey: null, load: loaded };
+      }
+      /* D28（2026-10-29）：本页**有未落盘改动**时的处置——把磁盘内容并进本页再落盘，
+         而不是整份换掉。以前整份 reload 会把用户刚点的那一下静默抹掉（同 profile
+         两个窗口/标签页同时动手时），另一页看到的就是「我这边被盖回去了」。
+         只给有 pending 的那一页用：被动页（内存 == 基线）必须保持只 reload 不回写，
+         否则两页每次收到对方的写就回写一次，会互相唤醒成死循环。 */
+      if (mode === 'merge') {
+        var diskRaw = readDbRaw();
+        if (diskRaw === null || diskRaw === undefined || diskRaw === '') {
+          return { ok: false, code: 'E_NO_DISK', error: '磁盘上没有内容可合并' };
+        }
+        var diskParsed = parseDocument(diskRaw);
+        if (!diskParsed.ok) {
+          return { ok: false, code: diskParsed.code || 'E_CORRUPT', error: '磁盘内容损坏，无法合并' };
+        }
+        /* 磁盘上已经是本页内容（只差 meta.updatedAt 之类）→ 只对齐基线，不回写。 */
+        if (schema.sameDocumentContent(state, diskParsed.doc)) {
+          if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+          setBaseline(diskRaw);
+          lastError = null;
+          return { ok: true, action: 'merge', backupKey: null, wrote: false };
+        }
+        var mergeBase = null;
+        if (lastWrittenRaw) {
+          try {
+            var baseParsed = parseDocument(lastWrittenRaw);
+            if (baseParsed.ok) mergeBase = baseParsed.doc;
+          } catch (e2) { mergeBase = null; }
+        }
+        var merged;
+        try {
+          var mergeRes = schema.mergeDocuments(state, diskParsed.doc, mergeBase);
+          if (!mergeRes || !mergeRes.doc) {
+            return { ok: false, code: 'E_MERGE_FAILED', error: '两端内容无法归一，合并中止' };
+          }
+          merged = mergeRes.doc;
+        } catch (e3) {
+          return { ok: false, code: 'E_MERGE_FAILED', error: '合并失败：' + (e3 && e3.message ? e3.message : '未知错误') };
+        }
+        var mergeRaw = JSON.stringify(merged);
+        var mergeBackupKey = null;
+        var mergeWrote = false;
+        if (!schema.sameDocumentContent(merged, diskParsed.doc)) {
+          mergeBackupKey = 'dayplan.db.recover.' + new Date().toISOString();
+          try {
+            storage.setItem(mergeBackupKey, diskRaw);
+            if (storage.getItem(mergeBackupKey) !== diskRaw) {
+              return { ok: false, code: 'E_BACKUP_FAILED', error: '备份合并前内容失败，已取消合并', backupKey: mergeBackupKey };
+            }
+            storage.setItem(dbKey, mergeRaw);
+          } catch (e4) {
+            return {
+              ok: false, code: 'E_STORAGE',
+              error: '写入失败：' + (e4 && e4.message ? e4.message : '未知错误'), backupKey: mergeBackupKey
+            };
+          }
+          if (readDbRaw() !== mergeRaw) {
+            return { ok: false, code: 'E_STALE', error: '合并后回读不一致', backupKey: mergeBackupKey };
+          }
+          mergeWrote = true;
+        }
+        if (saveTimer) {
+          clearTimeout(saveTimer);
+          saveTimer = null;
+        }
+        state = merged;
+        /* 没回写时磁盘上仍是原文，基线必须跟磁盘走，否则下一次保存又会误判 stale。 */
+        setBaseline(mergeWrote ? mergeRaw : diskRaw);
+        lastError = null;
+        notify();
+        return { ok: true, action: 'merge', backupKey: mergeBackupKey, wrote: mergeWrote };
       }
       if (mode !== 'overwrite') {
         return { ok: false, code: 'E_BAD_MODE', error: '未知的处置方式：' + String(mode) };
@@ -2103,9 +2195,9 @@
       hasPendingSave: hasPendingSave,
       subscribe: subscribe,
       getState: getState,
-      /* 同步装配层（src/app.js buildSyncWiring）的 setLocalDoc / onDocApplied 依赖它做
-         整文档替换：引擎已把远端内容合并进一份完整文档，这里只负责校验 + 提交 +
-         落盘 + 通知订阅者。导出的是与内部所有写操作同一个入口，校验默认开启。 */
+      /* 云端载入（src/app.js applyDocFromCloud）依赖它做整文档替换：
+         云端那份已经是完整文档，这里只负责校验 + 提交 + 落盘 + 通知订阅者。
+         导出的是与内部所有写操作同一个入口，校验默认开启。 */
       mutate: mutate,
       reset: function () { state = schema.createEmptyDocument(); commit(true); },
       // 查询
@@ -2119,9 +2211,9 @@
       getBaseline: getBaseline,
       noteExternalChange: noteExternalChange,
       isStorageDegraded: isStorageDegraded,
-      /* 同步装配层需要与非数据键（dayplan.auth.v1 / 同步记录）共用一个 storage 实例，
-         否则会出现「数据已降级到内存、同步元数据仍写 localStorage」的错位。
-         只允许读写同步元数据键，**不得**用它写数据键——那会绕过 lastWrittenRaw 保护。 */
+      /* 云端装配层需要与非数据键（dayplan.auth.v1 / 云端标记）共用一个 storage 实例，
+         否则会出现「数据已降级到内存、云端标记仍写 localStorage」的错位。
+         只允许读写非数据键，**不得**用它写数据键——那会绕过 lastWrittenRaw 保护。 */
       getStorage: function () { return storage; },
       isSeeded: isSeeded,
       // 数据作用域（Phase 1B）

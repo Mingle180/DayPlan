@@ -68,6 +68,12 @@
   transition: background var(--ease), color var(--ease), box-shadow var(--ease);
 }
 .view-switch-btn + .view-switch-btn { border-left: 0; }
+/* 2026-10-29（用户反馈）：桌面档分段控件定高 32px，与右侧「保存」「设置」白块上下边对齐。
+   手机档（≤640px）仍是 44px 触控高度，不进这条规则。 */
+@media (min-width: 641px) {
+  .view-switch { height: 32px; }
+  .view-switch-btn { height: 100%; padding: 0 14px; line-height: 28px; }
+}
 @media (hover: hover) {
   .view-switch-btn:hover { color: var(--text); }
 }

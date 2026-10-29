@@ -1,7 +1,6 @@
 /**
- * DayPlan · 同步键与数据作用域（纯函数，无 DOM / 存储 / 网络依赖）
+ * DayPlan · 本地键与数据作用域（纯函数，无 DOM / 存储 / 网络依赖）
  *
- * 契约：docs/spec/13-sync-contract.md §2.1（键清单）、§2.2（活动数据源）。
  * 本模块只生成键名与解析作用域，不读取也不写入任何存储。
  *
  * uid 约束：Supabase uid（UUID）只含字母、数字、连字符与下划线。
@@ -14,7 +13,7 @@
     module.exports = api;
   } else {
     root.DayPlan = root.DayPlan || {};
-    root.DayPlan.syncKeys = api;
+    root.DayPlan.storageKeys = api;
   }
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
@@ -28,7 +27,11 @@
     ui: 'dayplan.ui.v1',
     auth: 'dayplan.auth.v1',
     active: 'dayplan.active.v1',
-    seedGuest: 'dayplan.seed.v1'
+    seedGuest: 'dayplan.seed.v1',
+    /* 云端连接配置（url + publishable key，两者都是可公开的值）。 */
+    cloudConn: 'dayplan.cloud.conn.v1',
+    /* 旧名（实时同步时代）：只读一次用于迁移，不再写入。 */
+    legacyConn: 'dayplan.sync.conn.v1'
   };
 
   function makeError(code, message) {
@@ -103,7 +106,7 @@
   /**
    * 解析活动数据源指针。
    * 缺失/空值按契约回落 guest（implicit=true）；未知值只报告非法，
-   * 由调用方按 §2.2 回落 guest 并暂停同步——本函数不做任何写入。
+   * 由调用方回落 guest——本函数不做任何写入。
    */
   function parseActivePointer(raw) {
     if (raw === undefined || raw === null || raw === '') {
@@ -127,35 +130,22 @@
     return isGuestScope(scope) ? KEYS.seedGuest : 'dayplan.seed.' + scope.uid + '.v1';
   }
 
-  /** 同步记录只属于账号；游客没有同步记录键。 */
-  function syncRecordKey(uid) {
-    assertUid(uid);
-    return 'dayplan.sync.v1.' + uid;
-  }
-
-  function syncHistoryKey(uid) {
-    assertUid(uid);
-    return 'dayplan.sync.history.' + uid;
-  }
-
   /**
-   * 合并基线键（D20）：上次同步成功时两端的共同内容。
-   *
-   * 只给三向合并判定「谁删了什么」用，不参与任何展示。
-   * 与同步记录分开存：记录的形状由 §1.9 严格约束，塞一份文档进去会把
-   * 校验规则搞脏；基线缺失时合并自动退化为二向并集（宁可复活不丢）。
+   * 云端标记：记录「上一次成功保存到云端的版本」在各端本地的指纹。
+   * 只属于账号，形状 { revision, savedAt, device, hash, declinedRevision }。
    */
-  function syncBaseKey(uid) {
+  function cloudRecordKey(uid) {
     assertUid(uid);
-    return 'dayplan.sync.base.' + uid;
+    return 'dayplan.cloud.v1.' + uid;
   }
 
-  function syncLeaseKey(uid) {
+  /** 账号显示名缓存（用户名只在登录请求里拿得到）。 */
+  function accountNameKey(uid) {
     assertUid(uid);
-    return 'dayplan.sync.lease.' + uid;
+    return 'dayplan.account-name.v1.' + uid;
   }
 
-  /** 旧版本只写了字符串 "done"，读取时需与对象基准区分（§3.1）。 */
+  /** 旧版本只写了字符串 "done"，读取时需与对象基准区分。 */
   function isSeedDoneMarker(raw) {
     return raw === 'done';
   }
@@ -181,10 +171,8 @@
     parseActivePointer: parseActivePointer,
     dbKeyForScope: dbKeyForScope,
     seedKeyForScope: seedKeyForScope,
-    syncRecordKey: syncRecordKey,
-    syncHistoryKey: syncHistoryKey,
-    syncLeaseKey: syncLeaseKey,
-    syncBaseKey: syncBaseKey,
+    cloudRecordKey: cloudRecordKey,
+    accountNameKey: accountNameKey,
     isSeedDoneMarker: isSeedDoneMarker,
     scopeEquals: scopeEquals
   };

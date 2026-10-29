@@ -582,6 +582,13 @@
     out.name = out.name.trim().slice(0, CATEGORY_NAME_MAX);
     if (!COLOR_RE.test(String(out.color))) out.color = '#6b7280';
     out.builtin = !!out.builtin;
+    /* D25：类别带 updatedAt，跨设备合并才能判「谁后改的」。
+       非法值当没有——留着只会让合并取到不可比的字符串。 */
+    if (isNonEmptyString(out.updatedAt) && !isNaN(Date.parse(out.updatedAt))) {
+      out.updatedAt = new Date(out.updatedAt).toISOString();
+    } else {
+      delete out.updatedAt;
+    }
     // DM-18：special 只允许紧急类别携带；紧急必须是内置且 order = -1（恒首位）
     if (isUrgentCategory(out)) {
       out.builtin = true;
@@ -1507,6 +1514,47 @@
     }
   }
 
+  function deepEqual(a, b) {
+    if (a === b) return true;
+    if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
+    var aArr = Array.isArray(a);
+    if (aArr !== Array.isArray(b)) return false;
+    if (aArr) {
+      if (a.length !== b.length) return false;
+      for (var i = 0; i < a.length; i++) {
+        if (!deepEqual(a[i], b[i])) return false;
+      }
+      return true;
+    }
+    var ka = Object.keys(a);
+    var kb = Object.keys(b);
+    if (ka.length !== kb.length) return false;
+    for (var j = 0; j < ka.length; j++) {
+      var k = ka[j];
+      if (!Object.prototype.hasOwnProperty.call(b, k)) return false;
+      if (!deepEqual(a[k], b[k])) return false;
+    }
+    return true;
+  }
+
+  /**
+   * 两份文档的可见内容是否相同（只忽略 meta.updatedAt）。
+   *
+   * 同步会把远端合并结果写回本机；内容没变时不该再落一次盘——每次落盘都会让
+   * 其他标签页收到一次 storage 事件，误以为「数据被改了」而整份采纳磁盘内容，
+   * 正在编辑的那一页就会丢掉还没落盘的改动。meta.updatedAt 是落盘时刻的诊断值，
+   * 不是内容，单独变化不算改动。
+   */
+  function sameDocumentContent(a, b) {
+    if (!isPlainObject(a) || !isPlainObject(b)) return false;
+    if (deepEqual(a, b)) return true;
+    var ca = safeClone(a);
+    var cb = safeClone(b);
+    if (isPlainObject(ca.meta)) delete ca.meta.updatedAt;
+    if (isPlainObject(cb.meta)) delete cb.meta.updatedAt;
+    return deepEqual(ca, cb);
+  }
+
   /**
    * 三向按 key 合并一组条目（D20）。
    *
@@ -1523,7 +1571,10 @@
    * @param {Array|null} prev 上次同步的共同祖先
    * @param {function(*):string} keyOf 取 key；返回空则不参与合并
    * @param {function(*,*):boolean} preferIncoming 同 key 时远端是否胜出
-   * @param {{onConflict?:function(string), onDrop?:function(string)}} [opts]
+   * @param {{onConflict?:function(string), onDrop?:function(string),
+   *          mergeEntry?:function(*,*,*):*}} [opts]
+   *   mergeEntry 给了就逐字段合并同 key 的条目（D27），preferIncoming 只在
+   *   没有 mergeEntry 时生效；第三参是共同祖先，可能是 null。
    * @returns {Array}
    */
   function mergeKeyed(local, remote, prev, keyOf, preferIncoming, opts) {
@@ -1582,6 +1633,12 @@
         out.push(e);
         return;
       }
+      if (opts.mergeEntry) {
+        /* D27：给了字段级合并器就不再「整条取新者」——两端改的是不同字段时，
+           两边的改动都必须留下（见 mergeItemFields）。 */
+        out[idx] = opts.mergeEntry(out[idx], e, prevIndex ? prevIndex[k] : null);
+        return;
+      }
       if (preferIncoming(e, out[idx])) out[idx] = e;
       else if (opts.onConflict) opts.onConflict(k);
     });
@@ -1613,39 +1670,76 @@
     var prevClean = isPlainObject(prev) ? sanitizeDocument(safeClone(prev)).doc : null;
     var warnings = [];
 
-    // 类别：本机次序为权威（导入方的 order 不覆盖本机），导入方的新类别追加到末尾
-    var catById = {};
-    out.categories.forEach(function (c) { catById[c.id] = c; });
-    var ordered = out.categories.slice();
-    incomingClean.categories.forEach(function (c) {
-      var cur = catById[c.id];
-      if (!cur) {
-        catById[c.id] = c;
-        ordered.push(c);
+    /* 类别：本机次序为权威（导入方的 order 不覆盖本机），新类别追加到末尾。
+       D25：带 prev 时按三向合并 —— 同 id 取 updatedAt 较新者（改名/改色才会写它），
+       远端删掉且本机没再动过就跟随删除，本机删过的不被远端复活。
+
+       为什么以前同 id 永远本机赢：类别没有 updatedAt，「较新」无从判断，
+       于是另一台设备改的名字永远进不来；远端删类别也永远删不掉，删掉它的那台
+       设备上事项已经迁走，这台却还挂着一条谁也看不见的空类别。 */
+    var remoteCatById = {};
+    incomingClean.categories.forEach(function (c) { remoteCatById[c.id] = c; });
+    var prevCatById = {};
+    if (prevClean) prevClean.categories.forEach(function (c) { prevCatById[c.id] = c; });
+    var localCatIds = {};
+    out.categories.forEach(function (c) { localCatIds[c.id] = true; });
+
+    var ordered = [];
+    out.categories.forEach(function (cur) {
+      var inc = remoteCatById[cur.id];
+      if (inc) {
+        ordered.push(catNewer(inc, cur) ? inc : cur);
         return;
       }
-      if (cur.builtin) return; // 内置类别保留本地定义
-      if (newer(c, cur)) {
-        var idx = ordered.indexOf(cur);
-        catById[c.id] = c;
-        if (idx >= 0) ordered[idx] = c;
+      var pv = prevCatById[cur.id];
+      if (pv && !catChangedSince(cur, pv)) {
+        warnings.push(err('$.categories', '远端已删除类别，本机跟随删除：' + cur.id));
+        return;
       }
+      ordered.push(cur);
+    });
+    incomingClean.categories.forEach(function (c) {
+      if (localCatIds[c.id]) return;
+      var pv = prevCatById[c.id];
+      // prev 有、本机没有 = 本机删过它：不因远端还留着就复活
+      if (pv && !catChangedSince(c, pv)) return;
+      ordered.push(c);
     });
     var categories = compactCategories(ordered);
+    var catIds = {};
+    categories.forEach(function (c) { catIds[c.id] = true; });
 
     /* items：三向按 id 合并。prev 存在时，双向删除都能正确生效；
-       同 id 两边都改则取 updatedAt 较新者（后者赢）。 */
+       D27：同 id 两端都有时逐字段合并 —— 一端勾完成/排序（会重写整条
+       updatedAt）不再把另一端改的标题、备注整条盖掉。 */
     var items = mergeKeyed(
       out.items, incomingClean.items, prevClean ? prevClean.items : null,
       function (it) { return it && it.id; },
       function (incomingItem, localItem) { return newer(incomingItem, localItem); },
       {
         onConflict: function (id) { warnings.push(err('$.items', 'id 冲突，保留较新版本：' + id)); },
-        onDrop: function (id) { warnings.push(err('$.items', '远端已删除，本机跟随删除：' + id)); }
+        onDrop: function (id) { warnings.push(err('$.items', '远端已删除，本机跟随删除：' + id)); },
+        mergeEntry: mergeItemFields
       }
     );
     /* 本机条目顺序权威：mergeKeyed 已经保留了 out.items 的相对次序，
        远端新增的追加在末尾，因此这里直接用结果，不再重排。 */
+
+    /* D25：合并把某个类别删掉了（远端删的），仍引用它的事项必须迁到兜底类别——
+       否则 validateDocument 会判「引用了不存在的类别」，整次合并不成立。 */
+    var dangling = items.some(function (it) { return it && !catIds[it.categoryId]; });
+    if (dangling) {
+      var fallbackCat = pickFallbackCategory(out.settings, categories);
+      var stamp = new Date().toISOString();
+      items = items.map(function (it) {
+        if (!it || catIds[it.categoryId]) return it;
+        warnings.push(err('$.items', '类别已不存在，迁移到兜底类别：' + it.id));
+        return Object.assign({}, it, { categoryId: fallbackCat, updatedAt: stamp });
+      });
+    }
+    if (!catIds[out.settings.defaultCategoryId]) {
+      out.settings.defaultCategoryId = pickFallbackCategory(out.settings, categories);
+    }
 
 
     /* notes / weekNotes 是按日期键的对象，没有 id，用键本身当合并 key。
@@ -1696,7 +1790,9 @@
         monthPlans[k] = out.monthPlans[k].slice();
         return;
       }
-      monthPlans[k] = mergeKeyed(out.monthPlans[k], remoteList, prevList, keyOfId, preferNewerId, {});
+      monthPlans[k] = mergeKeyed(out.monthPlans[k], remoteList, prevList, keyOfId, preferNewerId, {
+        mergeEntry: mergeItemFields
+      });
     });
     Object.keys(incomingClean.monthPlans || {}).forEach(function (k) {
       if (monthPlans[k]) return;
@@ -1741,6 +1837,85 @@
     if (isNaN(ta)) ta = 0;
     if (isNaN(tb)) tb = 0;
     return ta > tb;
+  }
+
+  /**
+   * D27（2026-10-29）：同一条事项两端各改了不同字段时的三向合并。
+   *
+   * 以前同 id 一律整条取 updatedAt 较新者，而 updatedAt 是**整条**的时间戳：
+   * 另一端只是勾了完成、拖了排序（这两类操作都会重写 updatedAt），它那份
+   * 「除了标题/备注以外全是旧的」条目就会整条压过来，对方真正改的字被丢掉。
+   * 用户感受到的就是「我改的那条被没改动的一端盖回去了」。
+   *
+   * 逐字段判断：两端相同 → 取值；只有一端与祖先不同 → 取改过的那端；
+   * 两端都改了 → 取整条较新者的值（真冲突才让步）。updatedAt 本身也按这个
+   * 规则走，结果自然就是两边时间戳的较大值。
+   *
+   * 没有祖先（手工导入 / 老记录）或结构变了（kind 不同）时不逐字段合：
+   * 判不出谁改了什么，整条取较新者才是保守做法。
+   */
+  function mergeItemFields(localItem, remoteItem, prevItem) {
+    var remoteWins = newer(remoteItem, localItem);
+    if (!prevItem || localItem.kind !== remoteItem.kind) {
+      return remoteWins ? remoteItem : localItem;
+    }
+    var out = pickChangedFields(localItem, remoteItem, prevItem, remoteWins);
+    /* 序列事项的按日例外是「一天一个独立决定」，不是一坨整体：两边各改了不同
+       日期时必须都留下（一边标了某天不做，另一边改了另一天的时间）。 */
+    if (isPlainObject(localItem.exceptions) && isPlainObject(remoteItem.exceptions) &&
+        isPlainObject(prevItem.exceptions)) {
+      out.exceptions = pickChangedFields(
+        localItem.exceptions, remoteItem.exceptions, prevItem.exceptions, remoteWins
+      );
+    }
+    return out;
+  }
+
+  /** 逐个键做三向选择：只取改过的那一端，两端都改才按整体较新者让步。 */
+  function pickChangedFields(local, remote, prev, remoteWins) {
+    var out = {};
+    var seen = {};
+    Object.keys(local).concat(Object.keys(remote)).forEach(function (k) {
+      if (seen[k]) return;
+      seen[k] = true;
+      var l = local[k];
+      var r = remote[k];
+      var p = prev[k];
+      var value;
+      if (deepEqual(l, r)) value = l;
+      else if (!deepEqual(l, p)) value = deepEqual(r, p) ? l : (remoteWins ? r : l);
+      else value = r;
+      if (value !== undefined) out[k] = value;
+    });
+    return out;
+  }
+
+  /** 类别同 id 两边都有：远端严格更新才采用远端（并列时保留本机定义）。 */
+  function catNewer(incomingCat, localCat) {
+    return newer(incomingCat, localCat);
+  }
+
+  /** 这条类别在共同祖先之后被改过吗（改名 / 改色会写 updatedAt）。
+     没有祖先可比（旧数据还没有 updatedAt 字段）时保守当作「没改过」，
+      这样远端删除能正常生效，不会因为缺字段把类别永久钉住。 */
+  function catChangedSince(cur, prevEntry) {
+    var tc = cur && cur.updatedAt ? Date.parse(cur.updatedAt) : 0;
+    var tp = prevEntry && prevEntry.updatedAt ? Date.parse(prevEntry.updatedAt) : 0;
+    if (isNaN(tc)) tc = 0;
+    if (isNaN(tp)) tp = 0;
+    return tc > tp;
+  }
+
+  /** 合并后类别表里挑一个兜底：默认类别还在就用它，否则首个非紧急，最后任意。 */
+  function pickFallbackCategory(settings, categories) {
+    var ids = {};
+    categories.forEach(function (c) { ids[c.id] = true; });
+    var preferred = settings && settings.defaultCategoryId;
+    if (isNonEmptyString(preferred) && ids[preferred]) return preferred;
+    for (var i = 0; i < categories.length; i++) {
+      if (categories[i] && !isUrgentCategory(categories[i])) return categories[i].id;
+    }
+    return categories.length > 0 ? categories[0].id : URGENT_CATEGORY_ID;
   }
 
   /** 带 id 的条目（事项 / 月计划 / 倒计时的合并 key 都是 id）。 */
@@ -1830,6 +2005,7 @@
     validateImportPayload: validateImportPayload,
     mergeDocuments: mergeDocuments,
     mergeKeyed: mergeKeyed,
-    importInto: importInto
+    importInto: importInto,
+    sameDocumentContent: sameDocumentContent
   };
 });

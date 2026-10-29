@@ -1,10 +1,13 @@
 /**
  * DayPlan · 会话与令牌（dayplan.auth.v1 的唯一所有者）
  *
- * 契约：docs/spec/13-sync-contract.md
- *   §6  存储键、四态、单飞刷新、401 处理、刷新失败分流、会话恢复、退出登录
- *   §7  S-04（单个 401）、S-05（并发 401）、S-06（刷新令牌失效）、S-07（刷新时断网）、
- *       S-34（会话恢复失败 → signed-out；数据不动）
+ * 契约：docs/spec/18-manual-cloud-save.md
+ *   §2  存储键（`dayplan.auth.v1` 只属于本模块）
+ *   §4  登录 / 退出：会话四态、单飞刷新、401 处理、刷新失败分流、会话恢复
+ *
+ * 四态与单飞刷新等实现细节沿用原实时同步契约的 S-04…S-34，行为未变：
+ * 单个 401 重试一次、并发 401 只刷新一次、刷新令牌失效转 signed-out、
+ * 恢复失败不动任何数据键。
  *
  * 边界：
  *   · 本模块是 `dayplan.auth.v1` 的**唯一**读写者；其他模块只能 getToken / subscribe。
@@ -368,6 +371,17 @@
       }
       return refreshOnce().then(function (r) {
         if (r.ok) return { ok: true, state: state, refreshed: true };
+        /* 网络 / 超时 / 5xx 这类可重试失败：凭据本身没坏，人也还是「已登录」。
+           旧实现这里一律判 signed-out——离线状态下刷新一次，应用就把用户切去
+           游客作用域，账号副本从界面上消失，用户以为数据丢了。
+           保持登录、标记 deferred，联网后第一次请求会自动续期。 */
+        if (r && r.retryable) {
+          setState(STATES.signedIn);
+          return {
+            ok: true, state: state, refreshed: false, deferred: true,
+            code: r.code, retryable: true
+          };
+        }
         setState(STATES.signedOut);
         return { ok: false, code: r.code, state: state };
       });

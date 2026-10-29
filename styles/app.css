@@ -198,6 +198,8 @@ button { font: inherit; color: inherit; text-align: center; }
 }
 html[data-theme='dark'] .brand-logo { filter: invert(1); }
 
+/* 2026-10-29（用户反馈）：日期灰条移到 logo 右侧、左对齐；保存 / 设置留在右端成组。 */
+.header-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .header-right { display: flex; align-items: center; gap: 10px; }
 .today-chip {
   color: var(--text-2);
@@ -267,6 +269,12 @@ html[data-theme='dark'] .brand-logo { filter: invert(1); }
 
 .btn-danger { border-color: transparent; color: var(--danger); background: var(--danger-weak); font-weight: 600; }
 
+/* 手动保存（契约 18 §3.1）：按钮在视图滑槽左侧，恒为「保存」二字。
+   未上传的改动靠「保存」二字变主色蓝提示，传上去回黑——不再用额外的小圆点。
+   上传中只降低可点击性，不改文案、不弹进度。 */
+.btn-cloud-save.is-unsaved { color: var(--primary); }
+.btn-cloud-save.is-busy { opacity: .55; }
+
 /* 三十八轮（用户反馈）：触屏点按按钮不要闪灰。鼠标悬停的灰底只在真正支持 hover
    的设备生效，否则触屏会先套用 :hover 再回弹，看起来像按钮闪了一下灰色。 */
 @media (hover: hover) {
@@ -274,6 +282,30 @@ html[data-theme='dark'] .brand-logo { filter: invert(1); }
   .btn-primary:hover { background: var(--primary); box-shadow: 0 4px 14px rgba(0, 122, 255, .35); }
   .btn-ghost:hover { background: var(--surface-2); }
   .btn-danger:hover { background: rgba(255, 59, 48, .16); }
+}
+
+/* 2026-10-29（用户反馈）：顶栏「保存」「设置」→ 与左上角品牌块同族的白底按钮。
+   常驻一层软投影随时看得出可点；悬停抬一档（投影变大 + 上移 1px），按下落回原位。
+   高度与分段控件（.view-switch）取同一个 32px：三块上下边严格对齐。
+   两端圆头与「今天」一致（999px），品牌块仍是 8px 方角。
+   悬停只动投影与位移，不动尺寸与内边距，避免文字重排闪一下。 */
+.btn-plate {
+  height: 32px;
+  padding: 0 16px;
+  font-weight: 600;
+  background: var(--surface);
+  border-radius: 999px;
+  box-shadow: var(--shadow-block);
+}
+@media (hover: hover) {
+  .btn-plate:hover { background: var(--surface); box-shadow: var(--shadow); transform: translateY(-1px); }
+}
+.btn-plate:active { box-shadow: var(--shadow-block); transform: translateY(0); }
+/* 上传中 / 不可用时不悬停、不位移，否则看起来像还能点。
+   放在最后：与 :hover / :active 同权重，靠源码顺序压过去（不写裸 :hover，SC-112 守这条）。 */
+.btn-plate[disabled] {
+  box-shadow: var(--shadow-block);
+  transform: none;
 }
 
 .btn-sm { padding: 3px 10px; font-size: 12px; }
@@ -363,7 +395,8 @@ html[data-theme='dark'] .brand-logo { filter: invert(1); }
   display: grid;
   grid-template-columns: minmax(0, 1fr) clamp(240px, 27%, 380px);
   gap: 20px;
-  align-items: start;
+  /* 2026-10-29（用户反馈）：右栏跟左栏内容等高（同周视图），不再各自定高。 */
+  align-items: stretch;
 }
 .view-main { min-width: 0; }
 
@@ -385,8 +418,10 @@ html[data-theme='dark'] .brand-logo { filter: invert(1); }
   display: flex;
   flex-direction: column;
   gap: 14px;
-  /* 与时间表等高：贴住视口可用高度 */
-  height: calc(100vh - 96px);
+  /* 2026-10-29（用户反馈）：不再贴满视口 —— 缩放后视口变高会把「今日记录」拉得很长。
+     改为跟随左栏内容高度，最多到视口可用高度；内容更多时在栏内滚动。 */
+  height: auto;
+  max-height: calc(100vh - 96px);
   min-height: 320px;
   padding: 14px;
   border-radius: var(--radius);
@@ -398,10 +433,6 @@ html[data-theme='dark'] .brand-logo { filter: invert(1); }
   overflow-y: auto;
 }
 html[data-theme='dark'] .side-rail { background: var(--surface-2); }
-
-/* 周视图：周表自身有 max-height（内部滚动）→ 让右栏由 grid 拉伸到与周表等高，而不是贴满视口 */
-.week-view .view-body { align-items: stretch; }
-.week-view .side-rail { height: auto; max-height: calc(100vh - 96px); }
 
 /* 记录区吃掉右栏剩余高度（textarea 撑满，避免底部留大片空白） */
 .side-rail .notes-section {
@@ -1792,6 +1823,16 @@ html.has-modal body {
 .settings-section { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
 .settings-section:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
 .settings-section h3 { font-size: 13px; margin: 0 0 8px; }
+
+/* 云端（18 号契约）：账号行 + 版本列表 */
+.settings-row { display: flex; align-items: center; gap: 8px; }
+.settings-row-label { color: var(--text-3); font-size: 12px; }
+.settings-row-value { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cloud-versions { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.cloud-version-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--border); }
+.cloud-versions > .cloud-version-row:first-child { border-top: 0; }
+.cloud-version-meta { flex: 1 1 auto; min-width: 0; font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cloud-version-tag { font-size: 12px; color: var(--text-3); }
 
 /* 无障碍：屏幕阅读器专用 */
 .sr-only {

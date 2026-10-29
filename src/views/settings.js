@@ -640,87 +640,35 @@
             M.toast('清空失败：' + (err && err.message ? err.message : '浏览器存储不可用'));
             return;
           }
-          /* 只清的是**当前作用域**（游客或某个账号副本）。云端那一份没动，
-             但同步必须立刻停下：否则下一次编辑会走 push()，把空文档推上云端，
-             而用户以为自己只是「清空了本机」。 */
+          /* 只清的是**当前作用域**（游客或某个账号副本）。云端那一份不动，
+             保存按钮的文字会变蓝提醒「这份还没传上去」。 */
           if (typeof opts.onDataCleared === 'function') {
-            try { opts.onDataCleared(); } catch (e) { /* 同步暂停失败不影响清空结果 */ }
+            try { opts.onDataCleared(); } catch (e) { /* 蓝字没刷新不影响清空结果 */ }
           }
           dataChanged();
-          var cloudKept = false;
+          var signedIn = false;
           try {
-            var w = typeof opts.getWiring === 'function' ? opts.getWiring() : null;
-            var d = w && typeof w.describe === 'function' ? w.describe() : null;
-            cloudKept = !!(d && d.uid);
-          } catch (e) { cloudKept = false; }
-          M.toast(cloudKept ? '已清空本机数据（云端那份仍然保留）' : '已清空全部数据');
+            var s = opts.cloud && typeof opts.cloud.getSession === 'function' ? opts.cloud.getSession() : null;
+            signedIn = !!(s && s.getState() === 'signed-in');
+          } catch (e) { signedIn = false; }
+          M.toast(signedIn ? '已清空本机数据（云端那份仍然保留）' : '已清空全部数据');
         });
       }
     });
 
-    /* 同步分组自带 <section> + <h3>，这里只负责挂载，不再套一层外壳
-       （套了会让「同步」在设置里出现两次，SC-101 会判红）。 */
+    /* 云端分组自带 <section> + <h3>，这里只负责挂载。
+       18 号契约：设置里只有「云端」（账号 + 版本回溯），不再有实时同步分组。 */
     (function () {
-      var panel = root.DayPlan.syncPanel;
-      if (!panel || typeof panel.createSyncSection !== 'function') {
+      var panel = root.DayPlan.cloudPanel;
+      if (!panel || typeof panel.createCloudSection !== 'function' || !opts.cloud) {
         body.appendChild(el('section', { class: 'settings-section' }, [
-          el('h3', { text: '同步' }),
-          el('div', { class: 'field', text: '同步模块未加载，当前为本机模式。' })
+          el('h3', { text: '云端' }),
+          el('div', { class: 'field', text: '云端模块未加载，当前为本机模式。' })
         ]));
         return;
       }
-      /* 状态行要能实时刷新：调度层的推送是异步完成的，打开面板时读到的那一次
-         很可能还是上一次的结果。把实例存下来，onStatus 触发时重渲染。 */
-      var inst = panel.createSyncSection({
-        getWiring: opts.getWiring || function () { return null; },
-        getConn: opts.getConn || function () { return null; },
-        getSteady: opts.getSteady || function () { return null; },
-        /* 契约 §4.2 C / §4.7：覆盖前任一边之前必须先把本机导出一份。
-           这里复用「数据」分组同一个导出实现，命名上前缀区分开，便于事后辨认。 */
-        exportBackup: function () {
-          var payload = store.exportDocument();
-          var name = 'dayplan-同步前备份-' + D.todayISO().replace(/-/g, '') + '-' +
-            new Date().toTimeString().slice(0, 5).replace(':', '') + '.json';
-          downloadJson(name, payload);
-          M.toast('已导出备份，可随时用「导入 JSON」恢复');
-        },
-        onConnectReal: opts.onConnectReal,
-        /* 2026-10-27：必须转发——「登录并同步」按钮靠它判断内置云服务是否可用，
-           漏传会让按钮在任何环境都报「当前版本没有内置云服务」（UI-18 守护）。 */
-        getDefaultConn: opts.getDefaultConn,
-        /* D11：「断开连接」入口已移除，onDisconnectReal 不再下发给面板。 */
-        onEnableDemo: opts.onEnableDemoSync,
-        onDisable: opts.onDisableDemoSync,
-        onSessionChanged: opts.onSessionChanged,
-        /* 有损修复（§1.8）要求导出两份**指定文件名**的 JSON：
-           remote-raw.json（云端原始 payload）与 local-current.json（当前本机文档）。
-           文件名是引擎核对凭据的一部分（lossy-gate.REQUIRED_DOWNLOADS），
-           所以这里必须交出「按名字下载」的能力，不能只给一个「导出备份」。 */
-        downloadJson: downloadJson,
-        /* D19（2026-10-28）：自动路径的「备份」只落本机，**不触发任何文件下载**。
-           以前每个自动定向分支都调一次下载，用户看到的是「一直在下载各种备份」。
-           环形保留最近 3 份；要文件的人可以在「数据」分组手动导出。
-           配额不足 / 隐私模式下静默失败——备份永远不该阻塞同步。 */
-        snapshotBackup: function (reason, payload) {
-          try {
-            if (!root.localStorage) return;
-            var key = 'dayplan.sync-snapshot.v1';
-            var arr = [];
-            try { arr = JSON.parse(root.localStorage.getItem(key) || '[]'); } catch (e0) { arr = []; }
-            if (!Array.isArray(arr)) arr = [];
-            var doc = null;
-            try { doc = payload || store.exportDocument(); } catch (e1) { doc = null; }
-            arr.unshift({ at: new Date().toISOString(), reason: reason || 'auto', payload: doc });
-            while (arr.length > 3) arr.pop();
-            root.localStorage.setItem(key, JSON.stringify(arr));
-          } catch (e) { /* 配额不足：静默 */ }
-        },
-        exportDocument: function () { return store.exportDocument(); },
-        /* 清空本机之后必须让同步停下来（T-R03）：否则下一次编辑会把空文档推上云。 */
-        onDataCleared: opts.onDataCleared,
-        onDataChanged: function () { dataChanged(); }
-      });
-      if (opts.registerSyncSection) opts.registerSyncSection(inst);
+      var inst = panel.createCloudSection(opts.cloud);
+      if (opts.registerCloudSection) opts.registerCloudSection(inst);
       body.appendChild(inst.element);
     })();
 

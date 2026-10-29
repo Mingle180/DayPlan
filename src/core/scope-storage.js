@@ -1,8 +1,5 @@
 /**
- * DayPlan · 作用域存储与活动指针（Phase 1B 第一切片）
- *
- * 契约：docs/spec/13-sync-contract.md §2.1（键清单）、§2.2（活动数据源）、
- *       §2.3（状态转换中的本地键变化）、§1.9（reset 记录）。
+ * DayPlan · 作用域存储与活动指针
  *
  * 本模块只接受调用方注入的存储对象（localStorage 兼容），不自行访问
  * `localStorage`、不联网、不改 Store、不删除任何非当前作用域的键。
@@ -12,17 +9,14 @@
  */
 (function (root, factory) {
   var isNode = typeof module === 'object' && module.exports;
-  var api = factory(
-    isNode ? require('./sync-keys.js') : root.DayPlan.syncKeys,
-    isNode ? require('./sync-record.js') : root.DayPlan.syncRecord
-  );
+  var api = factory(isNode ? require('./storage-keys.js') : root.DayPlan.storageKeys);
   if (isNode) {
     module.exports = api;
   } else {
     root.DayPlan = root.DayPlan || {};
     root.DayPlan.scopeStorage = api;
   }
-})(typeof globalThis !== 'undefined' ? globalThis : this, function (K, syncRecord) {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (K) {
   'use strict';
 
   function fail(code, message, detail) {
@@ -194,46 +188,8 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * reset 同步记录
+   * 清空作用域
    * ------------------------------------------------------------------ */
-
-  /**
-   * 写合法 v0.5 reset 记录（§1.9）：enabled=false、hashMethod=null、三个锚点为 null。
-   * 保留历史标记（本函数不触碰 history 键）。写入失败时尝试恢复旧记录。
-   *
-   * @param {object} storage
-   * @param {string} uid
-   * @param {{now?:string, closedAt?:string|null}} [opts]
-   */
-  function writeResetSyncRecord(storage, uid, opts) {
-    opts = opts || {};
-    var key = K.syncRecordKey(uid);
-    var before = readRaw(storage, key);
-    var nowIso = opts.now || new Date().toISOString();
-    var enabledAt = nowIso;
-    if (before.ok && before.raw) {
-      try {
-        var prev = JSON.parse(before.raw);
-        if (prev && syncRecord.isIsoString(prev.enabledAt)) enabledAt = prev.enabledAt;
-      } catch (e) { /* 旧记录不可解析时按当前时间建立 reset */ }
-    }
-    var record = syncRecord.buildResetRecord({
-      enabledAt: enabledAt,
-      closedAt: opts.closedAt === undefined ? null : opts.closedAt,
-      now: nowIso
-    });
-    var w = writeVerified(storage, key, JSON.stringify(record));
-    if (w.ok) return { ok: true, record: record };
-
-    var rolledBack = false;
-    if (before.ok) {
-      var rb;
-      if (before.raw === null || before.raw === undefined) rb = removeVerified(storage, key);
-      else rb = writeVerified(storage, key, String(before.raw));
-      rolledBack = rb.ok;
-    }
-    return { ok: false, code: w.code, message: w.message, rolledBack: rolledBack };
-  }
 
   /** 把某个键恢复为快照值；快照不存在则删除该键。 */
   function restoreKey(storage, key, before) {
@@ -243,49 +199,22 @@
   }
 
   /**
-   * 清空指定作用域：
-   * - 先快照当前数据键与账号同步记录（任一步读取失败则零写入）；
-   * - 账号作用域先写合法 reset 记录（写失败则不动数据）；
-   * - 再删除该作用域数据键、写该作用域 seed 标记 "done"；
-   * - 删除或 seed 写入失败时，把数据键与同步记录恢复为操作前的值；
-   * - 游客作用域不触碰任何账号同步记录（Q-14 / A-1）。
+   * 清空指定作用域：删除该作用域数据键、写该作用域 seed 标记 "done"。
+   * 删除或 seed 写入失败时，把数据键恢复为操作前的值。
+   * 不触碰其他作用域，也不触碰云端标记与凭据。
    *
-   * @returns {{ok:boolean, resetWritten:boolean, removed:boolean, rolledBack:boolean,
+   * @returns {{ok:boolean, removed:boolean, rolledBack:boolean,
    *            code?:string, message?:string}}
    */
-  function clearScope(storage, scope, opts) {
-    opts = opts || {};
+  function clearScope(storage, scope) {
     var dataBefore = readScopeRecord(storage, scope);
     if (!dataBefore.ok) {
-      return { ok: false, resetWritten: false, removed: false, rolledBack: false, code: dataBefore.code, message: dataBefore.message };
-    }
-
-    var isUser = K.isUserScope(scope);
-    var recordKey = isUser ? K.syncRecordKey(scope.uid) : null;
-    var recordBefore = null;
-    if (isUser) {
-      recordBefore = readRaw(storage, recordKey);
-      if (!recordBefore.ok) {
-        return { ok: false, resetWritten: false, removed: false, rolledBack: false, code: recordBefore.code, message: recordBefore.message };
-      }
-    }
-
-    var resetWritten = false;
-    if (isUser) {
-      var reset = writeResetSyncRecord(storage, scope.uid, opts);
-      if (!reset.ok) {
-        return { ok: false, resetWritten: false, removed: false, rolledBack: false, code: reset.code, message: reset.message };
-      }
-      resetWritten = true;
+      return { ok: false, removed: false, rolledBack: false, code: dataBefore.code, message: dataBefore.message };
     }
 
     var rm = removeScopeRecord(storage, scope);
     if (!rm.ok) {
-      var recordBack = isUser ? restoreKey(storage, recordKey, recordBefore) : false;
-      return {
-        ok: false, resetWritten: resetWritten, removed: false,
-        rolledBack: !isUser || recordBack, code: rm.code, message: rm.message
-      };
+      return { ok: false, removed: false, rolledBack: false, code: rm.code, message: rm.message };
     }
 
     var seed = writeSeedDone(storage, scope);
@@ -293,13 +222,12 @@
       var dataBack = dataBefore.exists
         ? writeVerified(storage, K.dbKeyForScope(scope), String(dataBefore.raw)).ok
         : removeVerified(storage, K.dbKeyForScope(scope)).ok;
-      var recordBack2 = isUser ? restoreKey(storage, recordKey, recordBefore) : false;
       return {
-        ok: false, resetWritten: resetWritten, removed: !dataBack,
-        rolledBack: dataBack && (!isUser || recordBack2), code: seed.code, message: seed.message
+        ok: false, removed: !dataBack,
+        rolledBack: dataBack, code: seed.code, message: seed.message
       };
     }
-    return { ok: true, resetWritten: resetWritten, removed: true, rolledBack: false };
+    return { ok: true, removed: true, rolledBack: false };
   }
 
   return {
@@ -314,7 +242,6 @@
     removeScopeRecord: removeScopeRecord,
     writeSeedDone: writeSeedDone,
     readSeedMarker: readSeedMarker,
-    writeResetSyncRecord: writeResetSyncRecord,
     clearScope: clearScope
   };
 });
