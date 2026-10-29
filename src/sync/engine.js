@@ -193,7 +193,7 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
       lossyPush: '修复后的数据正在自动写回云端。',
       lossyStopped: '已停止与云端的同步。本机的修复结果与云端的原始内容都保持原样，两边不再互相同步；再次开启同步时会问你本机改动要不要上传。',
       resetReopen: '同步曾经关闭过，或者云端/本机被清空过。需要重新检查一次云端，不能沿用旧锚点。',
-      localCleared: '本机数据已清空，云端那份仍然保留。需要时点「开始检查」重新读取云端。'
+      localCleared: '本机数据已清空，云端那份仍然保留，正在自动恢复。'
     };
 
     function fail(code, message, detail) {
@@ -498,16 +498,12 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
       snapshotRing('lossy-' + source, row ? row.payload : undefined);
       var myPending = pendingLossy;
       Promise.resolve().then(async function () {
-        console.error('[heal] start');
         var applied = await applyLossyCore(myPending);
-        console.error('[heal] applied:', JSON.stringify(applied && {ok:applied.ok, code:applied.code, action:applied.action}));
         if (!applied || !applied.ok) {
           transientFail('E_LOSSY_HEAL', (applied && applied.message) || '自动修复失败，稍后自动重试');
           return;
         }
-        console.error('[heal] calling clp');
         var pushedBack = await confirmLossyPush();
-        console.error('[heal] clp:', JSON.stringify(pushedBack && {ok:pushedBack.ok, code:pushedBack.code}));
         if (!pushedBack || !pushedBack.ok) {
           /* 写回失败不致命：记录里留着 pendingPushAfterLossyApply，
              app.js 的 lossy-push-pending 自动补推会接手。 */
@@ -531,7 +527,6 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
 
     /** applyLossy 的核心（D23 抽出）：归一合并 → 哈希 → 落盘 → commitLossy。 */
     async function applyLossyCore(pending) {
-      console.error('[core] enter');
       var scope = K.userScope(uid);
       var dbKey = K.dbKeyForScope(scope);
       var fresh = readDocKey(kv, dbKey);
@@ -544,11 +539,9 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
       if (!h.ok) return fail(h.code, h.message, h.detail);
 
       var w = writeDocKey(kv, dbKey, merged.doc);
-      console.error('[core] written, commitLossy next, rev=', pending.revision);
       if (!w.ok) return fail(w.code, w.message, w.detail);
 
       var cl = commitLossy(pending.revision, h.hash, merged.doc);
-      console.error('[core] commitLossy:', JSON.stringify(cl && {ok:cl.ok, code:cl.code}));
       return cl;
     }
 
@@ -1665,6 +1658,14 @@ function (K, R, remoteDoc, remoteApply, H, S, L, LZ, SD) {
               }
             }
           }
+        }
+        /* D24（2026-10-29）：合并不可行（云端数据无效/无法归一）也**不许死在这里**。
+           旧行为落到 fail('E_CONFLICT') → paused-error 非可重试 → 自愈循环对它无解，
+           界面永远停在「上次失败：点开始检查」——用户实测截图正是这条。
+           按裁定以本机为准强推（enterLossy 进入时快照环已存下云端原始内容）。 */
+        if (!pushed.ok) {
+          var foLast = await forceOverwrite(buildPushPayload(cand.doc));
+          if (foLast.ok) pushed = foLast;
         }
       }
       if (!pushed.ok) {

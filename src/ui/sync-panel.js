@@ -25,7 +25,7 @@
     'local': '本机模式，未开启同步',
     'signed-in': '已登录，同步未开启',
     'checking': '正在检查云端…',
-    'awaiting-choice': '等待你选择处理方式',
+    'awaiting-choice': '正在自动处理…',
     'syncing': '同步已开启',
     'paused-error': '同步已暂停'
   };
@@ -33,9 +33,11 @@
   /**
    * 错误码 → 一句人话 + 该做什么。
    * 引擎返回的是给开发看的（如「条件未命中（0 行）」），直接摆给用户等于没说。
+   * D24（2026-10-29 用户裁定「删掉所有不让同步的限制」）：所有「点开始检查 /
+   * 选择保留哪一边」的人工指引全部退场——对应的失败现在都由自愈循环自动闭环。
    */
   var ERROR_TEXT = {
-    E_CONFLICT: '云端已被另一台设备改过，这次改动没有上传。点「开始检查」选择保留哪一边。',
+    E_CONFLICT: '云端刚被另一台设备改过，正在自动合并两边的改动，合并完自动重传。',
     E_NETWORK: '连不上云端（网络问题）。改动还在本机，网络恢复后会再试。',
     E_TIMEOUT: '云端响应超时。改动还在本机，稍后会再试。',
     E_UNAUTHORIZED: '登录已过期，需要重新登录。',
@@ -45,28 +47,25 @@
     E_EMAIL_NOT_CONFIRMED: '这个账号的邮箱还没确认。去 Supabase 控制台关闭 Confirm email，或手动确认该账号。',
     E_RATE_LIMIT: '请求太频繁，被服务器限流了。等一会儿再试。',
     E_NOT_CONFIGURED: '连接配置不完整，无法同步。',
-    E_PAUSED: '同步已暂停，改动只留在本机。点「开始检查」继续。',
-    E_RECORD_MISSING: '同步记录丢失了，需要重新检查一次云端。',
-    /* 下面三条都表示「本机记录的状态不对」，而不是网络或凭据问题。
-       文案不能写成「重试」——重试解决不了记录丢失，只会让用户多撞几次。 */
-    E_NEEDS_RECOVERY: '本机的同步记录丢失或损坏了。点「开始检查」后会列出两端的内容，由你决定保留哪一边。',
+    E_PAUSED: '同步已暂停，改动只留在本机，恢复后自动续传。',
+    E_RECORD_MISSING: '同步记录丢失了，正在自动重新检查一次云端。',
+    /* 下面三条都表示「本机记录的状态不对」，而不是网络或凭据问题。 */
+    E_NEEDS_RECOVERY: '本机的同步记录丢失或损坏了，正在自动恢复同步。',
     E_BOOT_BLOCKED: '本机的同步记录形状无法判定，已停止同步以避免覆盖。建议先导出本机数据，再退出登录重新开始。',
-    E_REMOTE_MISSING: '云端已经没有这个账号的数据了（可能是在别的设备上删掉了）。本机这一份还在，需要你确认是否重新上传。',
+    E_REMOTE_MISSING: '云端已经没有这个账号的数据了（可能是在别的设备上删掉了）。正在用本机这一份自动重建。',
     E_CANDIDATE_MISSING: '这台设备上没有该账号的数据副本，无法以本机为准。',
-    /* 租约（§5.4）：这不是失败，是「排队」。文案必须让用户知道改动没丢、会自己重试，
-       否则他会以为同步坏了而反复手点。 */
+    /* 租约（§5.4）：这不是失败，是「排队」。 */
     E_LEASE_BUSY: '另一个标签页正在同步，这次的改动还在本机，稍后会自动重试。',
     E_LEASE_LOST: '另一个标签页抢先开始了同步，这次的改动还在本机，稍后会自动重试。',
     E_LEASE_UNAVAILABLE: '本机存储写不了租约（配额或隐私模式），这次没有多标签保护，仍会按云端版本号校验。',
     E_STALE_LOCAL: '另一个标签页更新了本地数据，正在自动载入最新内容。',
-    /* 有损修复（§1.8）：这三条都不是「坏了」，而是「停在一个必须由人决定的路口」。
-       写成「重试」会误导——重试一千次也还是同一份会丢条目的文档。 */
-    E_LOSSY: '云端这份数据里有会被丢弃或改写的条目，这次没有应用。请查看预览后决定。',
+    /* 有损修复（§1.8）：D23 起全部自动应用并写回，不再有等人的路口。 */
+    E_LOSSY: '云端这份数据里有会被丢弃或改写的条目，正在自动修复并保留两边的内容。',
     E_LOSSY_UNCONFIRMED: '需要先勾选确认才能继续。',
     E_LOSSY_DOWNLOADS: '两份 JSON 都要下载成功才能继续（那是万一后悔时唯一的退路）。',
-    E_PENDING_LOSSY_PUSH: '修复后的数据还没写回云端。写回会覆盖云端那一份，需要你确认。',
+    E_PENDING_LOSSY_PUSH: '修复后的数据正在自动写回云端。',
     E_UPLOAD_CONFIRM_REQUIRED: '关闭同步期间本机有改动，重新开启需要确认是否上传。',
-    E_LOCAL_CLEARED: '本机数据已清空，云端那份仍然保留。点「开始检查」可重新读取云端。',
+    E_LOCAL_CLEARED: '本机数据已清空，云端那份仍然保留，正在自动恢复。',
     E_NOT_CLOSED: '当前同步记录不是「已关闭」状态，无需重新开启。',
     E_NOT_ACTIVE: '当前没有进行中的同步。'
   };
@@ -421,23 +420,14 @@
             onclick: function () { reopenHere(); }
           }));
         }
-        if (!needsReopen && (d.engineState === 'signed-in' || d.engineState === 'paused-error')) {
-          /* blocked 不给「开始检查」：记录形状无法判定，检查只会再拒一次，
-             点下去是个绕不出去的圈。给它的是「重新登录」（唯一能重建记录的路）。
-             D18：可重试的暂停（网络/超时/5xx/限流）也不给——界面正在自动重试，
-             放一个按钮只会让用户以为「必须点一下才会恢复」。 */
-          var autoHealing = d.engineState === 'paused-error' && d.error && d.error.retryable;
-          if (!bootBlocked && !autoHealing) {
-            buttons.push(el('button', {
-              class: 'btn btn-sm btn-primary', type: 'button', text: '开始检查',
-              onclick: function () { runCheck(w, render); }
-            }));
-          }
-          /* D19 兜底出口：云端数据连归一都救不了（不是 DayPlan 的数据 / 版本更高 /
-             结构损坏）。继续点「开始检查」只会再失败一次，是个绕不出去的圈。
-             这时唯一能走通的路是「以本机覆盖云端」——必须由人点，因为云端那份
-             会被替换掉（本机覆盖前已自动写快照）。 */
-          if (d.engineState === 'paused-error' && d.error && d.error.code === 'E_REMOTE_INVALID') {
+        /* D24（2026-10-29 用户裁定「删掉所有不让同步的限制」）：「开始检查」按钮退场。
+           signed-in 的首次检查由 maybeRestoreAutoCheck / ensureCheckFlow 自动补；
+           paused-error 由自愈循环闭环（D24 起 E_CONFLICT/E_MERGE_FAILED 强制生效）。
+           放一个按钮在这里，等于宣告「自动同步需要人推一把」——正是用户最反感的口径。
+           D19 兜底出口保留：云端数据连归一都救不了（不是 DayPlan 的数据 / 版本更高 /
+           结构损坏）且落在 paused-error 时，唯一的出路是以本机覆盖云端（覆盖前
+           引擎自动写快照）。 */
+        if (d.engineState === 'paused-error' && d.error && d.error.code === 'E_REMOTE_INVALID') {
             buttons.push(el('button', {
               class: 'btn btn-sm btn-primary', type: 'button', text: '用本机数据覆盖云端',
               title: '云端这份数据无法读取（不是本应用的数据、版本更高或已损坏）。用本机这份替换它',
@@ -470,26 +460,9 @@
               }
             }));
           }
-        }
-        /* 检查完把确认框关掉（点「暂不处理」或点遮罩）会停在 awaiting-choice。
-           这是流程中停住的第三种状态，必须留一条回到选择的回路——
-           否则用户只剩「退出登录」，等于把已经读到的云端状态白白扔掉。 */
-        if (d.engineState === 'awaiting-choice') {
-          buttons.push(el('button', {
-            class: 'btn btn-sm btn-primary', type: 'button', text: '继续选择',
-            title: '上次的检查结果还在，接着选保留哪一边',
-            onclick: function () {
-              var engine = w.getEngine();
-              var chk = engine && typeof engine.getCheck === 'function' ? engine.getCheck() : null;
-              if (!chk) { runCheck(w, render); return; }
-              openChoiceFor(w, chk, opts.exportBackup, function () {
-                if (typeof opts.onSessionChanged === 'function') opts.onSessionChanged(true);
-                if (typeof opts.onDataChanged === 'function') opts.onDataChanged();
-                render();
-              });
-            }
-          }));
-        }
+        /* D24：awaiting-choice 的「继续选择」按钮退场——自动定向（autoChoiceFor）
+           现在对 A/B/C/D 与恢复类总有答案，ensureCheckFlow 15 秒内自动闭环，
+           不再存在「停在等待选择」的稳态。 */
         /* D12（2026-10-27 裁定）：「立即同步」按钮已移除——稳态同步（3s 轮询 +
             0.8s 防抖）本身就是即时的，手动推送入口只会制造「自动同步不可靠」的
             错觉。steady.pushNow 引擎能力保留给测试与极端排障。 */
@@ -804,7 +777,7 @@
    * 检查阶段已经保证零写入，这里才允许选边。
    */
   /** 登录 / 验证 / 重置成功后自动跑一次引擎检查（D14：免点「开始检查」）。
-      只在装配层把 autoCheck 传进来时生效；失败时面板的「开始检查」仍在。 */
+      只在装配层把 autoCheck 传进来时生效；失败时由自愈循环按退避自动重跑（D24）。 */
   function scheduleAutoCheck(opts) {
     if (opts && typeof opts.autoCheck === 'function') setTimeout(opts.autoCheck, 0);
   }
@@ -1602,22 +1575,29 @@
     } catch (eBak) { /* 快照失败不阻塞自动修复 */ }
     Promise.resolve(engine.applyLossy({ confirmed: true, downloads: [], auto: true })).then(function (res) {
       if (!res || !res.ok) {
-        M.toast('云端数据未能自动修复：' + ((res && (res.message || res.code)) || '未知错误') + '，两端数据都还在');
-        if (onDone) onDone();
-        return;
+        /* D24（2026-10-29）：E_NO_LOSSY 不是失败——引擎在 enterLossy 里已经
+           自排了同一套「应用修复 → 写回」的后台链，这里再调一次时 pending 往往
+           已被消费掉。旧行为把它当失败弹「云端数据未能自动修复：当前没有待确认
+           的有损修复结果，两份数据都还在」，用户实测截图正是这条假失败。静默放行。 */
+        if (!res || res.code !== 'E_NO_LOSSY') {
+          M.toast('云端数据未能自动修复：' + ((res && (res.message || res.code)) || '未知错误') + '，两端数据都还在');
+          if (onDone) onDone();
+          return;
+        }
       }
-      if (res.requires === 'confirm-push') {
+      if (res && res.requires === 'confirm-push') {
         /* 修复已落到本机，写回云端按同一裁定自动完成 */
         Promise.resolve(engine.confirmLossyPush()).then(function (r2) {
-          M.toast((r2 && r2.ok) ? '云端数据已自动修复并写回' : '修复已应用，写回云端失败（可稍后重试）');
+          if (r2 && r2.ok) M.toast('云端数据已自动修复并写回');
+          /* 写回失败不再弹「待写回」toast：引擎已记为可重试，自愈循环按退避自动补推。 */
           if (onDone) onDone();
         }, function () {
-          M.toast('修复已应用，写回云端失败（可稍后重试）');
           if (onDone) onDone();
         });
         return;
       }
-      M.toast('云端数据已自动修复并应用');
+      if ((!res || res.code !== 'E_NO_LOSSY')) M.toast('云端数据已自动修复并应用');
+      if (typeof helpers.onDataChanged === 'function') helpers.onDataChanged();
       if (onDone) onDone();
     }, function (err) {
       M.toast('云端数据未能自动修复：' + (err && err.message ? err.message : '未知错误'));
@@ -1640,13 +1620,15 @@
     Promise.resolve(engine.confirmLossyPush()).then(function (res) {
       if (res && res.ok) {
         M.toast('已自动修复云端数据');
-      } else {
-        M.toast('修复结果待写回，稍后自动重试');
       }
+      /* D24：失败不再弹「修复结果待写回，稍后自动重试」——引擎侧已把这次失败
+         记为可重试（transientFail），自愈循环按退避自动补推。旧 toast 承诺的
+         「自动重试」在 E_CONFLICT 死角下从未兑现过（用户实测），现在引擎补了
+         forceOverwrite 兜底 + 自愈循环强制生效，无需再用 toast 承诺什么。 */
       if (typeof helpers.onDataChanged === 'function') helpers.onDataChanged();
       if (onDone) onDone();
     }, function () {
-      M.toast('修复结果待写回，稍后自动重试');
+      if (typeof helpers.onDataChanged === 'function') helpers.onDataChanged();
       if (onDone) onDone();
     });
   }
@@ -1671,14 +1653,16 @@
     if (!chk) return null;
     if (chk.case === 'A' || chk.case === 'D') return 'local';
     if (chk.case === 'B') {
+      /* B 且云端不可用：本机是空的，取本机等于用空内容覆盖云端——这一种仍留人工 */
       return (chk.remote && chk.remoteValid) ? 'remote' : null;
     }
     if (chk.case === 'C') {
       if (chk.remote && !chk.remoteValid && onlyVersionLower(chk)) return 'local';
       if (chk.remoteValid && chk.localIsDemo) return 'remote';
       if (chk.remoteValid && chk.sameContent) return 'local';
-      if (chk.remoteValid) return 'local';
-      return null;
+      /* D24：C 且云端不可用也自动以本机为准（confirm 前已有快照备份）——
+         旧版返回 null 落进人工，是「开始检查」死循环的最后一种入口。 */
+      return 'local';
     }
     return null;
   }
@@ -1724,14 +1708,32 @@
         autoRecoveryRemote(w, helpers, function () { res({ ok: true, kind: 'recovery' }); });
       }).then(finish);
     }
+    if (kind === 'recovery' || kind === 'remote-missing') {
+      /* D24（2026-10-29）：恢复类的最后两个人工路口退场。
+         · recovery 且云端没有可取内容 → 本机原样重建；
+         · remote-missing（云端行没了）→ 本机原样重建云端行。
+         旧版返回 manual 后没有任何入口兜着（「继续选择」按钮已随 D24 删除），
+         状态会永远停在 awaiting-choice。 */
+      return new Promise(function (res) {
+        var engine2 = engine;
+        Promise.resolve(engine2.resolveRecovery('local')).then(function () {
+          M.toast('已以本机为准恢复同步');
+          if (typeof helpers.onSessionChanged === 'function') helpers.onSessionChanged(true);
+          if (typeof helpers.onDataChanged === 'function') helpers.onDataChanged();
+          res({ ok: true, kind: kind });
+        }, function () {
+          res({ ok: false, code: 'E_RECOVERY_FAILED', message: '自动恢复失败', kind: kind });
+        });
+      }).then(finish);
+    }
     if (kind === 'lossy-applied') {
       return new Promise(function (res) {
         autoLossyPush(w, helpers, function () { res({ ok: true, kind: 'lossy-applied' }); });
       }).then(finish);
     }
-    /* 这些必须人来：重开上传确认（违背删除意图的关闭期上传）、云端行丢失、
-       恢复对话框里「以云端为准」不可用（缺远端候选）——自动做任何一个都越权。 */
-    if (kind === 'reopen-upload' || kind === 'recovery' || kind === 'remote-missing') {
+    /* D24：只剩 reopen-upload 一种人工（引擎侧已无产生它的路径，保留映射作兜底）。
+       recovery / remote-missing 已在上面自动闭环。 */
+    if (kind === 'reopen-upload') {
       return finish({ ok: true, manual: true, kind: kind });
     }
 

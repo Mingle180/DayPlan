@@ -944,19 +944,13 @@
             if (syncSectionInst && typeof syncSectionInst.render === 'function') {
               try { syncSectionInst.render(); } catch (e) { /* 面板已关闭 */ }
             }
-            /* 冲突是唯一一种「用户必须立刻知道」的失败：引擎会转 paused-error，
-               steady 从此不再推送，本机继续编辑也上不了云。不弹一次提示，
-               用户会以为一切正常，直到换设备才发现数据没过去。 */
+            /* 冲突类失败：D22c 起引擎会自动合并重传，D24 起自愈循环对 E_CONFLICT
+               也真正生效（15 秒内闭环）。不再弹「去同步设置点开始检查」的横幅——
+               那是已废除的人工链路；只提示一句事实，随后自动恢复。 */
             if (st && st.kind === 'push' && st.ok === false && st.code === 'E_CONFLICT'
                 && !conflictNotified) {
               conflictNotified = true;
-              warn('danger',
-                '云端已被另一台设备改过，这次的改动没有上传（你的数据都还在本机，没有被覆盖）。'
-                + '请到「同步」里点「开始检查」，选择保留哪一边。',
-                [
-                  { label: '去同步设置', onClick: function () { SettingsView.openSettings(settingsOpts); } },
-                  { label: '稍后再说', onClick: function () { /* 仅关闭 */ } }
-                ]);
+              M.toast('云端刚被另一台设备改过，正在自动合并两边的改动');
             }
           }
         });
@@ -1031,11 +1025,14 @@
     }
 
     var ensureCheckBusy = false;
-    function ensureCheckFlow() {
+    function ensureCheckFlow(force) {
       if (ensureCheckBusy) return;
       var es = engineStateNow();
       if (!es.eng) return;
-      if (es.st !== 'signed-in' && es.st !== 'awaiting-choice') return;
+      /* D24（2026-10-29）：force=true 供 paused-error 死状态的强制自愈使用。
+         旧版这里无条件按状态过滤，导致 tryAutoHeal 对 E_CONFLICT 的自愈调用
+         在第一行就被吞掉——「自愈」从未真正跑过，界面永远停在「开始检查」。 */
+      if (!force && es.st !== 'signed-in' && es.st !== 'awaiting-choice') return;
       /* D22d（2026-10-29）：只在**同步决策对话框**开着时让路——用户正在看
          有损预览/首次同步确认时别背后抢跑。以前这里拦的是一切弹窗，结果
          设置面板本身就是弹窗：用户开着面板看「同步已暂停」时，修复恰恰
@@ -1076,10 +1073,17 @@
       Panel.autoRecoveryRemote(syncWiring, autoResumeHelpers(), afterAutoResume);
     }
 
-    function autoResumeLossy() {
-      var Panel = root.DayPlan && root.DayPlan.syncPanel;
-      if (!Panel || typeof Panel.autoLossyApply !== 'function' || !syncWiring) return;
-      Panel.autoLossyApply(syncWiring, autoResumeHelpers(), afterAutoResume);
+    /**
+     * D24：等引擎的 lossy 后台自愈链跑完再挂稳态。轮询引擎状态：
+     * 回到 syncing（成功）或 paused-error（失败，交给自愈循环按退避重试）即算落定。
+     */
+    function waitAutoHealSettled(tries) {
+      var es = engineStateNow();
+      if (!es.eng || es.st === 'syncing' || es.st === 'paused-error' || tries >= 24) {
+        afterAutoResume();
+        return;
+      }
+      root.setTimeout(function () { waitAutoHealSettled(tries + 1); }, 500);
     }
 
     /** D19：修复结果已落本机、只差写回云端时自动完成（不弹第二次确认）。 */
@@ -1111,31 +1115,23 @@
           return;
         }
         if (r.action === 'conflict') {
-          warn('danger',
-            '本机和云端都改过，这次没有自动合并。请到「同步」里点「开始检查」，选择保留哪一边。',
-            [
-              { label: '去同步设置', onClick: function () { SettingsView.openSettings(settingsOpts); } },
-              { label: '稍后再说', onClick: function () { /* 仅关闭 */ } }
-            ]);
+          /* D24：四象限的「两边都有内容」不再停下等人选——引擎已停在
+             awaiting-choice，check 结果就在，自动定向（快照 → LWW）直接闭环。 */
+          teardownSteady();
+          ensureCheckFlow();
           return;
         }
         /* 记录丢失/损坏，或云端行已经不在了。D17（2026-10-28）：
            - 本机同步记录丢失（recovery）→ 按 D16 裁定「记录丢失时默认以云端为准」
              直接自动恢复，不再弹红色横幅等人点（弹窗路径与面板同款）；
-           - remote-missing（云端被另一台设备删掉）→ 不自动：自动重建会违背删除意图，
-             仍用横幅说明并让用户到「同步」里决定。 */
+           - remote-missing（云端被另一台设备删掉）→ D24：同样不再弹横幅等人——
+             引擎停在 awaiting-choice，自动定向（本机原样重建）直接闭环。 */
         if (r.action === 'recovery') {
+          teardownSteady();
           if (r.kind === 'remote-missing') {
-            warn('danger',
-              '云端已经没有这个账号的数据了（可能是在别的设备上删掉了）。本机这一份还在，'
-              + '这次没有自动上传。请到「同步」里决定是否重新上传。',
-              [
-                { label: '去同步设置', onClick: function () { SettingsView.openSettings(settingsOpts); } },
-                { label: '稍后再说', onClick: function () { /* 仅关闭 */ } }
-              ]);
+            ensureCheckFlow();
             return;
           }
-          teardownSteady();
           autoResumeRecovery();
           return;
         }
@@ -1148,12 +1144,13 @@
           M.toast('另一个标签页正在同步，这次改动稍后自动重试');
           return;
         }
-        /* 有损修复（§1.8）：D17（2026-10-28）——按 D16 裁定「记录丢失时默认以云端为准」，
-           启动/登录路径判到 lossy 时同样**自动应用修复并写回**（先静默备份，尽力而为），
-           不再弹红色横幅停下。修复失败时 toast 说明，面板「继续选择」仍是兜底出口。 */
+        /* 有损修复（§1.8）：D24（2026-10-29）——引擎在 enterLossy 里已经自排了
+           「快照 → 应用修复 → 写回」的后台链（D23），面板侧再调一次 applyLossy
+           只会撞 E_NO_LOSSY、弹出「云端数据未能自动修复」的假失败（用户实测截图
+           正是这条）。这里只等它跑完，跑完把稳态挂回去。 */
         if (r.action === 'lossy') {
           teardownSteady();
-          autoResumeLossy();
+          waitAutoHealSettled(0);
           return;
         }
         /* 修复结果还没写回云端。D19：以前这里直接 return——于是只要写回失败一次
@@ -1226,14 +1223,16 @@
       }
       /* D22c（2026-10-29）：冲突类 paused-error 也自愈。引擎侧已把条件推送的
          revision 分歧改为自动合并，但历史会话/极端竞态仍可能落进这个死状态
-         （「点开始检查选择保留哪一边」）。check() → autoResolveChoice 的
-         case C 自动路径（先快照再 LWW）就是它的解药，15 秒内闭环。 */
+         （「点开始检查选择保留哪一边」）。D24：这里必须**强制**进 ensureCheckFlow——
+         旧版传普通调用，被 ensureCheckFlow 的状态过滤整个吞掉，自愈从未跑过。
+         check() → autoResolveChoice 的 case C 自动路径（先快照再 LWW）就是解药，
+         15 秒内闭环。 */
       if (es.st === 'paused-error' && syncWiring && typeof syncWiring.describe === 'function') {
         var snap = null;
         try { snap = syncWiring.describe(); } catch (e) { snap = null; }
         var errCode = snap && snap.error && snap.error.code;
         if (errCode === 'E_CONFLICT' || errCode === 'E_MERGE_FAILED') {
-          ensureCheckFlow();
+          ensureCheckFlow(true);
           return;
         }
       }
