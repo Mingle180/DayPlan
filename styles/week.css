@@ -134,7 +134,7 @@
 .wk-item.is-done .wk-title { text-decoration: line-through; }
 /* 美化迭代 10 / 2026-10-20（用户裁定）：标题行 = [省略号] + 标题；类别胶囊取**首字**
  * 并**固定在本块右上角**（绝对定位，不再挤在标题后面）→ 窄列也一定看得到类型。 */
-.wk-item .wk-titlerow { display: flex; align-items: center; gap: 4px; min-width: 0; padding-right: 17px; }
+.wk-item .wk-titlerow { display: flex; align-items: center; gap: 4px; min-width: 0; padding-right: 27px; }
 .wk-item .wk-title {
   flex: 0 1 auto;
   min-width: 0;
@@ -208,10 +208,13 @@
 .wk-item.is-omitted > .wk-time,
 .wk-item.is-omitted > .wk-note { display: none; }
 .wk-item.is-omitted .wk-dots { display: block; }
-/* 2026-10-20（用户反馈）：省略号居中 —— 周视图的省略块可能只有 26px 高，
-   纵向居中会与右上角胶囊相撞，所以**只横向居中**，并且居中范围是
-   「块内宽 − 胶囊让位 15px」这块真正空着的区域。 */
-.wk-item.is-omitted .wk-titlerow { width: 100%; padding-right: 15px; justify-content: center; }
+/* 2026-10-30（用户口径）：省略号要落在块的正中央，不再为右上角胶囊预留宽度 ——
+   那条 26px 的让位让省略号固定偏左 13px。胶囊本身钉在右上角，与居中的省略号不相交。 */
+.wk-item.is-omitted .wk-titlerow { width: 100%; padding-right: 0; justify-content: center; }
+/* 矮省略块（< 34px，常见于 15–45 分钟）：胶囊与居中的「…」挤在同一行，
+   半透明胶囊会盖掉省略号右半，看上去仍然偏左。折叠态直接收起胶囊，
+   类别仍由块底色表达；展开 / 悬停预览时恢复胶囊。 */
+.wk-item.is-omitted.is-short:not(.is-expanded):not(.is-peek) .wk-chip { display: none; }
 /* 展开态要给按钮留可读宽度（同 .wk-item 上的变量）—— 仅限折叠时被省略/只剩色块的块，
    普通块展开必须与原块完全重叠（2026-10-21 用户裁定）。 */
 .wk-item.is-expanded.is-expanded-grow,
@@ -243,7 +246,7 @@
   padding: 3px 6px;
   box-shadow: var(--shadow-lg);
 }
-.wk-item.is-peek > .wk-titlerow { display: flex !important; padding-right: 20px !important; }
+.wk-item.is-peek > .wk-titlerow { display: flex !important; padding-right: 29px !important; }
 .wk-item.is-peek > .wk-time { display: block !important; }
 .wk-item.is-peek > .wk-note { display: block !important; max-height: 4em; overflow: hidden; }
 .wk-item.is-peek .wk-dots { display: none !important; }

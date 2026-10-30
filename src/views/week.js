@@ -31,6 +31,13 @@
   var Layout = root.DayPlan.layout;      /* 迭代 6（F-38）：复用日视图的折叠轴纯函数 */
   var M = root.DayPlan.modal;
   var el = M.el;
+  /* 2026-10-30：类别色统一走色板（20 色）；旧高饱和色由 categoryTone 就近归一 */
+  var Palette = root.DayPlan.palette;
+  var toneOf = (Palette && Palette.categoryTone) ? Palette.categoryTone : null;
+  var catAccent = function (hex) {
+    var tone = toneOf ? toneOf(hex) : null;
+    return tone ? tone.accent : hex;
+  };
 
   var DOW_LABELS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
   var NOTES_DEBOUNCE_MS = 300;
@@ -59,11 +66,18 @@
     return (n < 10 ? '0' : '') + n;
   }
 
-  /** 周视图胶囊只显示类别首字（与 ui/itemcard.js::firstChar 同口径，按码点取） */
+  /** 周视图胶囊显示类别前两个字（与日视图、完成台同口径，按码点取）。 */
   function chipLabelOf(name) {
     var s = (name === null || name === undefined) ? '' : String(name);
     if (!s) return '';
-    return String.fromCodePoint(s.codePointAt(0));
+    var out = '';
+    var i = 0;
+    while (out.length < 2 && i < s.length) {
+      var cp = s.codePointAt(i);
+      out += String.fromCodePoint(cp);
+      i += cp > 0xffff ? 2 : 1;
+    }
+    return out;
   }
 
   function errText(e) {
@@ -228,9 +242,11 @@
   }
 
   /**
-   * 标题：2026 年 10 月 12 日 – 10 月 18 日
+   * 标题：2026年10月26日–11月1日
    * 迭代 6（F-41 / R-19）：不再输出「（第 N 周）」——界面与 Excel 两处口径一致；
    * isoWeekNumber 仍保留导出（供工具/单元格口径复用）。
+   * 2026-10-30 用户口径：去掉数字与「年月日」之间的空格（与日标题同日式），
+   * 手机 20px 下才能单行排完。
    */
   function weekTitle(monday) {
     var sunday = D.addDays(monday, 6);
@@ -238,10 +254,9 @@
     var b = D.parseYearMonth(sunday);
     if (!a || !b) return String(monday || '');
     var right;
-    if (b.year !== a.year) right = b.year + ' 年 ' + b.month + ' 月 ' + b.day + ' 日';
-    else if (b.month !== a.month) right = b.month + ' 月 ' + b.day + ' 日';
-    else right = b.month + ' 月 ' + b.day + ' 日';
-    return a.year + ' 年 ' + a.month + ' 月 ' + a.day + ' 日 – ' + right;
+    if (b.year !== a.year) right = b.year + '年' + b.month + '月' + b.day + '日';
+    else right = b.month + '月' + b.day + '日';
+    return a.year + '年' + a.month + '月' + a.day + '日–' + right;
   }
 
   function createWeekView(opts) {
@@ -252,6 +267,8 @@
     var state = { monday: null, hideDone: false };
     var notesTimer = null;
     var lastRenderStamp = null;   /* 最近一次渲染时的文档指纹（见 setWeekStart 的过期判断） */
+    /* 2026-10-30 用户口径：切到本周时，窄屏下表要横向划到今天那一列 */
+    var pendingTodayScroll = false;
 
     /* ------------------------------------------------------------------ *
      * 1. 静态骨架（只建一次：记录栏不能在重渲染时被重建，否则会丢焦点）
@@ -280,13 +297,6 @@
 
     /* 迭代 10 批次 4（条8）：white-card = .panel-day —— 与日视图同一张白卡、同样的圆角/投影 */
     var rootEl = el('div', { class: 'week-view panel-day', id: 'week-view' });
-    rootEl.appendChild(el('div', { class: 'week-head' }, [
-      titleEl,
-      el('div', { class: 'head-actions' }, [
-        el('div', { class: 'date-nav', role: 'group', 'aria-label': '周导航' }, [btnThis]),
-        btnNew
-      ])
-    ]));
     /* 迭代 10 批次 4（条8）：左侧周表 + 右侧「当周记录」（独立白底、与周表等高相对静止） */
     var railEl = el('aside', { class: 'side-rail', id: 'week-rail', 'aria-label': '当周记录' }, [
       el('section', { class: 'notes-section', 'aria-label': '当周记录' }, [
@@ -299,8 +309,20 @@
     ]);
     /* 悬停预览的边界参照（.week-scroll 会横向滚动，展开后需按它的视口让位） */
     var scrollEl = el('div', { class: 'week-scroll', id: 'week-scroll' }, [gridScrollEl]);
+    /* 2026-10-30 用户口径：标题 +「本周」「+」收进左侧周表卡片里（与日视图的日期行同构），
+       卡片本身不再是滚动容器，滚动只发生在下面的 .week-scroll。 */
+    var cardEl = el('section', { class: 'week-card', 'aria-label': '周计划' }, [
+      el('div', { class: 'week-head' }, [
+        titleEl,
+        el('div', { class: 'head-actions' }, [
+          el('div', { class: 'date-nav', role: 'group', 'aria-label': '周导航' }, [btnThis]),
+          btnNew
+        ])
+      ]),
+      scrollEl
+    ]);
     rootEl.appendChild(el('div', { class: 'view-body', id: 'week-view-body' }, [
-      el('div', { class: 'view-main' }, [scrollEl]),
+      el('div', { class: 'view-main' }, [cardEl]),
       railEl
     ]));
     if (container) container.appendChild(rootEl);
@@ -597,7 +619,7 @@
       var card = el('div', {
         class: 'wk-item' + (occ.done ? ' is-done' : ''),
         role: 'button', tabindex: '0',
-        style: '--cat:' + cat.color + ';',
+        style: '--cat:' + catAccent(cat.color) + ';',
         title: (occ.time ? occ.time.start + '–' + occ.time.end + ' ' : '') + (occ.title || '')
       });
       card.appendChild(el('div', { class: 'wk-time', text: occ.time ? occ.time.start + '–' + occ.time.end : '' }));
@@ -658,6 +680,12 @@
       card.style.height = place.height + 'px';
       /* 迭代 10 批次 3（条7）：展开后先保持原块高度，内容放不下时才向下加长 */
       card.style.setProperty('--block-h', place.height + 'px');
+      /* 2026-10-30（用户口径）：矮块里右上角类别胶囊和居中的「…」抢同一行，
+         半透明胶囊会盖掉省略号右半 —— 看起来「省略号总是偏左」。
+         矮块标记放这里（高度只有渲染层知道），CSS 在折叠态收起胶囊。 */
+      if (place.height < 34 && card.classList && card.classList.contains('is-omitted')) {
+        card.classList.add('is-short');
+      }
       /* US-22.2：事项块的点击=折叠/展开，不得冒泡到 .wk-col 触发「进入日视图」 */
       card.addEventListener('click', function (e) {
         if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
@@ -767,7 +795,7 @@
                 var chipSrc = occ || (cellItems && cellItems[0]) || null;
                 if (typeof Layout.chipWidthFor === 'function' && chipSrc) {
                   var cat = (doc.categories || []).filter(function (c) { return c && c.id === chipSrc.categoryId; })[0];
-                  /* 迭代 10 批次 1 二轮反馈：胶囊只显示类别首字 → 列宽度量也只按首字占宽 */
+                  /* 胶囊显示类别前两个字 → 列宽度量也按两个字占宽 */
                   chipW = Layout.chipWidthFor(chipLabelOf(cat ? cat.name : ''), { padX: 12, gap: 6 });
                 }
                 return Layout.maxBlockWidthNeed(cellItems || [], { chipWidth: chipW });
@@ -862,14 +890,53 @@
       if (pinner) { try { pinner.sync(); } catch (e) { /* 忽略 */ } }
     }
 
+    /** 横向真正溢出的容器：内层 grid-scroll 负责横滚，周表外层只负责纵滚 */
+    function weekHScroller() {
+      var list = [gridScrollEl, scrollEl];
+      for (var i = 0; i < list.length; i += 1) {
+        var n = list[i];
+        if (!n) continue;
+        if (!(Number(n.clientWidth) > 0)) continue;
+        if (Number(n.scrollWidth) > Number(n.clientWidth) + 1) return n;
+      }
+      return null;
+    }
+
+    /** 把「今天」那一列滚到可视区中间（本周且窄到需要横滚时才生效） */
+    function scrollToTodayColumn() {
+      var today = D.todayISO();
+      if (!today) { pendingTodayScroll = false; return; }
+      var sc = weekHScroller();
+      if (!sc) {
+        /* 容器还没布局（视图隐藏中）→ 留到下一次渲染；宽度够则不滚，标记可以撤 */
+        var laid = gridScrollEl && Number(gridScrollEl.clientWidth) > 0;
+        if (laid) pendingTodayScroll = false;
+        return;
+      }
+      pendingTodayScroll = false;
+      var head = gridEl && typeof gridEl.querySelector === 'function'
+        ? gridEl.querySelector('.wk-head[data-date="' + today + '"]')
+        : null;
+      if (!head || typeof head.getBoundingClientRect !== 'function') return;
+      var hr = head.getBoundingClientRect();
+      var sr = sc.getBoundingClientRect();
+      if (!(hr.width > 0)) return;
+      var center = (hr.left - sr.left) + (Number(sc.scrollLeft) || 0) + hr.width / 2;
+      sc.scrollLeft = Math.max(0, Math.round(center - Number(sc.clientWidth) / 2));
+    }
+
     function render() {
       var doc = docOf();
       var monday = state.monday || D.startOfWeek(D.todayISO()) || D.todayISO();
       state.monday = monday;
       titleEl.textContent = weekTitle(monday);
+      /* 看的就是本周时不再给「本周」按钮（点了也没有变化） */
+      var thisMonday = D.startOfWeek(D.todayISO());
+      if (btnThis) btnThis.hidden = !!(thisMonday && monday === thisMonday);
       renderGrid(doc, monday);
       loadNotes();
       lastRenderStamp = dataStamp(doc);
+      if (pendingTodayScroll && monday === thisMonday) scrollToTodayColumn();
     }
 
     /** 轻量数据指纹：meta.updatedAt + 事项数（外部写入后据此判断视图是否过期） */
@@ -909,6 +976,9 @@
       if (notesTimer) flushNotes();
       var changed = next !== state.monday;
       state.monday = next;
+      /* 本周（含从别的周点「本周」/ 进入周视图落在本周）→ 窄屏要划到今天列 */
+      var thisMonday = D.startOfWeek(D.todayISO());
+      if (thisMonday && next === thisMonday) pendingTodayScroll = true;
       /* 除「周变化」外，文档在最近一次渲染之后被外部改写时也要重渲染：应用层没有 store.subscribe，
        * 直接调用 store.addItem / 导入 / 迁移不会通知视图，而 app.setViewMode('week') 每次都按同一周
        * 调 setDate —— 只看 changed 会留下过期 DOM（引导冒烟 SC-27 正是该调用序）。
@@ -1185,9 +1255,10 @@
 
     function applyOccurrenceEdit(item, occ, v, scope) {
       if (scope === 'only') {
-        store.addSeriesException(item.id, occ.date, {
+        var patch = {
           time: v.time, title: v.title, categoryId: v.categoryId, note: v.note, done: v.done
-        });
+        };
+        store.addSeriesException(item.id, occ.date, patch);
         M.toast('已修改此次（仅此次）', {
           actionLabel: '撤销',
           onAction: function () { store.removeSeriesException(item.id, occ.date); afterWrite(); }
@@ -1206,10 +1277,11 @@
       /* DM-18.4：starred 不再由视图读写（紧急状态由 categoryId 表达）。
        * updateItem 只带显式补丁键 → 不传 starred 即保留原值。 */
       if (v.kind === 'single' && item.kind === 'single') {
-        store.updateItem(item.id, {
+        var patch = {
           title: v.title, categoryId: v.categoryId, date: v.date,
           time: v.time, note: v.note, done: v.done
-        });
+        };
+        store.updateItem(item.id, patch);
         return;
       }
       var next = {
@@ -1305,6 +1377,7 @@
 
     state.monday = D.startOfWeek(D.todayISO()) || D.todayISO();
     state.hideDone = readHideDone();
+    pendingTodayScroll = true;
     render();
 
     return {

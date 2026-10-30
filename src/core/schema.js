@@ -36,7 +36,6 @@
   var CATEGORY_NAME_MAX = 10;
   var NAMED_MONTHS = ['正月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '冬月', '腊月'];
   var COLOR_RE = /^#[0-9a-fA-F]{6}$/;
-
   /* 2026-10-20 六轮：本月计划（月维度清单）
      · 只按月存一段文字清单，**不产生 items** —— 所以天然「不同步到每天」；
      · 键为 "YYYY-MM"；每条 {id, text, createdAt, updatedAt}，次序即数组顺序。 */
@@ -1479,7 +1478,7 @@
     var doc = isPlainObject(payload.data) ? payload.data : payload;
     var looksLikeDoc = Array.isArray(doc.categories) && Array.isArray(doc.items);
     if (payload.app !== APP_NAME && !looksLikeDoc) {
-      return { ok: false, code: 'E_SHAPE', errors: [err('$', '不是 DayPlan 数据文件（缺少 app 标记与 categories/items）')] };
+      return { ok: false, code: 'E_SHAPE', errors: [err('$', '不是 DayLight 数据文件（缺少 app 标记与 categories/items）')] };
     }
     if (!looksLikeDoc) {
       return { ok: false, code: 'E_SHAPE', errors: [err('$', '缺少 categories 或 items 数组')] };

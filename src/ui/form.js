@@ -14,23 +14,14 @@
   var M = root.DayPlan.modal;
   var el = M.el;
 
-  /* 2026-10-20（用户反馈）：类别颜色只给 12 种不够用 —— 扩到 19 种，按色相红→紫→蓝→绿→
-     黄→橙→棕→中性排列，相邻两色差异肉眼可辨。原 12 色**全部保留在原值上**（已存数据的
-     color 不做任何迁移，只是新选择变多）。新增的 7 色都取 600/700 档：类别色同时用作
-     9px 胶囊文字色与 14% 淡底的描边，太浅的 300/400 档在白底上读不出来。 */
-  var COLOR_PRESETS = [
-    '#dc2626', '#be123c', '#db2777', '#a21caf', '#7c3aed', '#4338ca',
-    '#2563eb', '#0ea5e9', '#0891b2', '#0d9488', '#059669', '#16a34a',
-    '#4d7c0f', '#ca8a04', '#ea580c', '#92400e', '#78716c', '#475569',
-    '#111827'
-  ];
+  /* 2026-10-30（用户口径）：类别色板换成 core/palette.js 的 20 色。
+     类别数据里存的是色板 accent；旧数据的 19 个高饱和色由 palette.categoryTone
+     在渲染时就近归入色板，存储值不动。 */
+  var PALETTE = root.DayPlan.palette || {};
+  var CATEGORY_TONES = Array.isArray(PALETTE.EVENT_PALETTE) ? PALETTE.EVENT_PALETTE : [];
+  var COLOR_PRESETS = CATEGORY_TONES.map(function (t) { return t.accent.toLowerCase(); });
   /** 与 COLOR_PRESETS 一一对应的中文色名（只用于 title / aria-label，不参与渲染） */
-  var COLOR_NAMES = [
-    '红', '玫红', '粉', '品红', '紫', '靛',
-    '蓝', '天蓝', '青', '蓝绿', '翠绿', '绿',
-    '橄榄', '黄', '橙', '棕', '灰', '石板灰',
-    '黑'
-  ];
+  var COLOR_NAMES = CATEGORY_TONES.map(function (t) { return t.name; });
   /** 迭代 7（F-47 / R-30）：时间滚轮刻度（分钟） */
   var TIME_STEP = 5;
   var WEEKDAY_LABELS = [[1, '周一'], [2, '周二'], [3, '周三'], [4, '周四'], [5, '周五'], [6, '周六'], [7, '周日']];
@@ -739,7 +730,7 @@
       var prevCat = urgentNow
         ? (preUrgentCategoryId || firstNonUrgentId(catOptions) || initial.categoryId)
         : null;
-      return {
+      var payload = {
         title: titleInput.value.trim(),
         categoryId: urgentNow ? URGENT_ID : catSelect.value,
         date: normalizeDateText(dateInput.value),
@@ -753,6 +744,7 @@
         repeat: repeatOut,
         kind: t === 'none' ? 'single' : 'series'
       };
+      return payload;
     }
 
     function updatePreview() {
@@ -1339,13 +1331,18 @@
 
   /**
    * 从预设中挑一个「还没被用过」的颜色，让新增类别默认不与现有类别撞色。
+   * 旧色先经由色板归一，避免「#2563eb 与牛仔蓝看起来一样」却仍被当成两种颜色。
    * @param {string[]} usedColors 现有类别颜色
-   * @returns {string} `#rrggbb`
+   * @returns {string} `#rrggbb`（色板 accent，小写）
    */
   function nextUnusedColor(usedColors) {
     var used = {};
     (Array.isArray(usedColors) ? usedColors : []).forEach(function (c) {
-      used[String(c || '').toLowerCase()] = true;
+      var tone = PALETTE && typeof PALETTE.categoryTone === 'function'
+        ? PALETTE.categoryTone(c)
+        : null;
+      var key = tone ? tone.accent : String(c || '');
+      used[key.toLowerCase()] = true;
     });
     for (var i = 0; i < COLOR_PRESETS.length; i++) {
       if (!used[COLOR_PRESETS[i]]) return COLOR_PRESETS[i];
@@ -1361,6 +1358,7 @@
     selectFieldControl: selectFieldControl,
     COLOR_PRESETS: COLOR_PRESETS,
     COLOR_NAMES: COLOR_NAMES,
+    CATEGORY_TONES: CATEGORY_TONES,
     colorNameOf: colorNameOf,
     nextUnusedColor: nextUnusedColor,
     REPEAT_TYPES: REPEAT_TYPES,

@@ -62,8 +62,11 @@
        11px 的字只放得下 1 个，「每个字后面都有空间却一字一行」。）
      NARROW_BLOCK_PX 与 ui/itemcard.js 的窄块阈值是同一个数（那边引用本常量）。 */
   var NARROW_BLOCK_PX = 72;
-  var TITLE_RESERVE = 22;
-  var TITLE_RESERVE_NARROW = 14;
+  /* 2026-10-30（用户口径）：类别胶囊显示**两个字**（紧急 / 长期 / 短期 / 临时），
+     让位宽度随之增加（胶囊 ≈ 2 字宽 + 内边距 + 右偏移 + 与标题的间隙）。
+     这两个值必须与 styles/app.css 里 .tl-titlerow 的 padding-right 保持一致。 */
+  var TITLE_RESERVE = 36;
+  var TITLE_RESERVE_NARROW = 22;
 
   /* ===== 2026-10-20：窄档的文字度量（与 CSS 同源）=====
    * 窄块（< NARROW_BLOCK_PX）在 CSS 里换了一整套排版：`.tl-block.is-narrow{padding:0 4px}`

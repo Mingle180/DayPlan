@@ -8,8 +8,20 @@
   var D = root.DayPlan.datetime;
   var S = root.DayPlan.schema;
   var Form = root.DayPlan.form;
+  var P = root.DayPlan.palette;
   var M = root.DayPlan.modal;
   var el = M.el;
+
+  /** 类别色值 -> 色板条目；palette 没加载时退回色值本身（保证不空白）。 */
+  function toneOf(hex) {
+    return (P && typeof P.categoryTone === 'function') ? P.categoryTone(hex) : null;
+  }
+
+  /** 类别列表里的色点用色板 accent（旧的高饱和色也会先归一到色板）。 */
+  function accentOf(hex) {
+    var tone = toneOf(hex);
+    return tone ? tone.accent : (hex || '#948675');
+  }
 
   /**
    * 类别管理（供设置面板与其它入口复用）
@@ -119,14 +131,14 @@
            避免用户点了没反应还以为界面坏了。 */
         if (urgent) {
           li.appendChild(el('span', {
-            class: 'cat-swatch is-locked', style: 'background:' + cat.color,
+            class: 'cat-swatch is-locked', style: 'background:' + accentOf(cat.color),
             title: '「' + cat.name + '」只可改名，颜色固定',
             'aria-label': '「' + cat.name + '」的颜色固定，不可修改'
           }));
         } else {
           li.appendChild(el('button', {
             class: 'cat-swatch', type: 'button',
-            style: 'background:' + cat.color,
+            style: 'background:' + accentOf(cat.color),
             title: '修改颜色', 'aria-label': '修改「' + cat.name + '」的颜色',
             onclick: function () { pickColor(cat); }
           }));
@@ -226,32 +238,35 @@
     }
 
     /**
-     * 颜色选择网格（19 色，带中文色名）。create / pickColor 共用，避免两处色板走偏。
-     * @param {string} current 当前颜色
-     * @param {function(string):void} onPick 选中回调
+     * 颜色选择网格（20 色色板，20 个真实色块）。create / pickColor 共用，避免两处色板走偏。
+     * 当前色先经由 categoryTone 归一：旧的高饱和色也会选中「看起来最接近」的那一块。
+     * @param {string} current 当前颜色（#rrggbb）
+     * @param {function(string):void} onPick 选中回调（返回色板 accent，小写）
      * @returns {HTMLElement}
      */
     function colorGrid(current, onPick) {
-      var grid = el('div', { class: 'color-grid', role: 'group', 'aria-label': '颜色' });
-      Form.COLOR_PRESETS.forEach(function (c) {
-        var name = Form.colorNameOf(c);
-        var dot = el('button', {
-          class: 'color-dot' + (c === current ? ' is-on' : ''), type: 'button',
-          style: 'background:' + c,
-          title: name + ' ' + c,
-          'aria-label': '颜色 ' + name + '（' + c + '）',
-          'aria-pressed': c === current ? 'true' : 'false',
-          onclick: function () {
-            Array.prototype.slice.call(grid.children).forEach(function (n) {
-              n.classList.remove('is-on');
-              n.setAttribute('aria-pressed', 'false');
-            });
-            dot.classList.add('is-on');
-            dot.setAttribute('aria-pressed', 'true');
-            onPick(c);
-          }
+      var selected = toneOf(current);
+      var grid = el('div', { class: 'color-swatches', role: 'radiogroup', 'aria-label': '颜色' });
+      Form.CATEGORY_TONES.forEach(function (entry) {
+        var on = !!selected && selected.id === entry.id;
+        var swatch = el('button', {
+          class: 'color-swatch' + (on ? ' is-on' : ''), type: 'button',
+          role: 'radio',
+          'aria-checked': on ? 'true' : 'false',
+          'data-color-id': entry.id,
+          title: entry.name,
+          'aria-label': '颜色 ' + entry.name,
+          style: '--sw-bg:' + entry.background + ';--sw-accent:' + entry.accent
         });
-        grid.appendChild(dot);
+        swatch.addEventListener('click', function () {
+          Array.prototype.slice.call(grid.children).forEach(function (n) {
+            var picked = n === swatch;
+            n.classList.toggle('is-on', picked);
+            n.setAttribute('aria-checked', picked ? 'true' : 'false');
+          });
+          onPick(entry.accent.toLowerCase());
+        });
+        grid.appendChild(swatch);
       });
       return grid;
     }
@@ -388,15 +403,14 @@
     }
 
     /* ---------- 类别 ---------- */
-    var catSection = el('section', { class: 'settings-section' }, [
-      el('h3', { text: '类别' })
-    ]);
+    /* 2026-10-30（用户口径）：四大类默认收起，标题行即折叠入口（见 modal.foldSection）。 */
     var catMgr = categoryManager({
       store: store,
       onChange: function () { dataChanged(); }
     });
-    catSection.appendChild(catMgr.element);
-    body.appendChild(catSection);
+    var catSection = M.foldSection('类别');
+    catSection.body.appendChild(catMgr.element);
+    body.appendChild(catSection.element);
 
     /* ---------- 显示 ---------- */
     var doc = store.getState();
@@ -536,22 +550,21 @@
     syncRangeFill(zoomRange);
     syncRangeFill(weekRange);
 
-    body.appendChild(el('section', { class: 'settings-section' }, [
-      el('h3', { text: '显示' }),
-      el('div', { class: 'field' }, [
-        el('label', { class: 'field-label', text: '界面主题' }), Form.selectFieldControl(themeSelect).wrap
-      ]),
-      el('div', { class: 'switch-grid' }, [
-        switchField(lunarChk, '月历显示农历日期'),
-        switchField(noteChk, '月历标注有记录的日子'),
-        switchField(holidayChk, '标注中国大陆节假日（休 / 班）'),
-        switchField(compressChk, '压缩无安排时段（首末两端，日/周视图）'),
-        switchField(hideDoneChk, '隐藏已完成（日 / 周视图）'),
-        switchField(finishSoundChk, '事项完成台计时结束提示音')
-      ]),
-      rangeField('日视图时间轴宽度', zoomRange, zoomOut),
-      rangeField('周视图时间轴高度', weekRange, weekOut)
+    var displaySection = M.foldSection('显示');
+    displaySection.body.appendChild(el('div', { class: 'field' }, [
+      el('label', { class: 'field-label', text: '界面主题' }), Form.selectFieldControl(themeSelect).wrap
     ]));
+    displaySection.body.appendChild(el('div', { class: 'switch-grid' }, [
+      switchField(lunarChk, '月历显示农历日期'),
+      switchField(noteChk, '月历标注有记录的日子'),
+      switchField(holidayChk, '标注中国大陆节假日（休 / 班）'),
+      switchField(compressChk, '压缩无安排时段（首末两端，日/周视图）'),
+      switchField(hideDoneChk, '隐藏已完成（日 / 周视图）'),
+      switchField(finishSoundChk, '事项完成台计时结束提示音')
+    ]));
+    displaySection.body.appendChild(rangeField('日视图时间轴宽度', zoomRange, zoomOut));
+    displaySection.body.appendChild(rangeField('周视图时间轴高度', weekRange, weekOut));
+    body.appendChild(displaySection.element);
 
     /* ---------- 数据 ---------- */
     var exportBtn = el('button', {
@@ -656,15 +669,14 @@
       }
     });
 
-    /* 云端分组自带 <section> + <h3>，这里只负责挂载。
+    /* 云端分组自带折叠壳（同样走 modal.foldSection），这里只负责挂载。
        18 号契约：设置里只有「云端」（账号 + 版本回溯），不再有实时同步分组。 */
     (function () {
       var panel = root.DayPlan.cloudPanel;
       if (!panel || typeof panel.createCloudSection !== 'function' || !opts.cloud) {
-        body.appendChild(el('section', { class: 'settings-section' }, [
-          el('h3', { text: '云端' }),
-          el('div', { class: 'field', text: '云端模块未加载，当前为本机模式。' })
-        ]));
+        var fallback = M.foldSection('云端');
+        fallback.body.appendChild(el('div', { class: 'field', text: '云端模块未加载，当前为本机模式。' }));
+        body.appendChild(fallback.element);
         return;
       }
       var inst = panel.createCloudSection(opts.cloud);
@@ -672,16 +684,15 @@
       body.appendChild(inst.element);
     })();
 
-    body.appendChild(el('section', { class: 'settings-section' }, [
-      el('h3', { text: '数据' }),
-      el('div', { class: 'field' }, [
-        el('div', { class: 'inline' }, [exportBtn, importBtn, rollbackBtn, fileInput])
-      ]),
-      el('div', { class: 'field' }, [
-        el('label', { class: 'field-label', text: '导入方式' }), Form.selectFieldControl(modeSelect).wrap
-      ]),
-      el('div', { class: 'field', style: 'margin-top:14px' }, [clearBtn])
+    var dataSection = M.foldSection('数据');
+    dataSection.body.appendChild(el('div', { class: 'field' }, [
+      el('div', { class: 'inline' }, [exportBtn, importBtn, rollbackBtn, fileInput])
     ]));
+    dataSection.body.appendChild(el('div', { class: 'field' }, [
+      el('label', { class: 'field-label', text: '导入方式' }), Form.selectFieldControl(modeSelect).wrap
+    ]));
+    dataSection.body.appendChild(el('div', { class: 'field', style: 'margin-top:14px' }, [clearBtn]));
+    body.appendChild(dataSection.element);
 
     M.open({
       title: '设置',

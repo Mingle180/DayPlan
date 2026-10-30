@@ -52,7 +52,11 @@
    */
   function createCloudSection(opts) {
     opts = opts || {};
-    var wrap = el('section', { class: 'settings-section' }, [el('h3', { text: '云端' })]);
+    /* 2026-10-30：设置整体按大类折叠（见 modal.foldSection）。这里只往稳定的
+       body 里灌内容，重渲染（重试 / 回溯 / 登录态变化）不会把折叠壳一起冲掉。 */
+    var fold = M.foldSection('云端');
+    var wrap = fold.element;
+    var panelBody = fold.body;
     var loadSeq = 0;
 
     function session() {
@@ -175,12 +179,11 @@
 
     function render() {
       loadSeq++;  // 任何一次重渲染都让进行中的读取作废
-      wrap.innerHTML = '';
-      wrap.appendChild(el('h3', { text: '云端' }));
+      panelBody.innerHTML = '';
       var body = el('div', {});
       if (isSignedIn()) renderSignedIn(body);
       else renderSignedOut(body);
-      wrap.appendChild(body);
+      panelBody.appendChild(body);
     }
 
     render();

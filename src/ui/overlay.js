@@ -98,8 +98,27 @@
       if (vw > 0 && effective > 0 && left + effective > vw - 8) {
         left = Math.max(8, Math.round(vw - 8 - effective));
       }
+      /* 2026-10-30：手机档的展开卡由 CSS 放大到接近屏宽，靠「右边缘夹回」会贴在原块左侧、
+         整卡偏右。窄屏改为水平居中（仅 grow 面板，普通块的重叠定位不受影响）。 */
+      if (vw > 0 && vw <= 640 && effective > 0 && effective <= vw - 16) {
+        left = Math.round((vw - effective) / 2);
+      }
     }
     node.style.left = left + 'px';
+    if (grow) {
+      /* 2026-10-30：手机端展开卡可大于原块 → 纵向也要夹回视口，避免下半截按钮落在屏幕外。
+         CSS 已给 max-height，这里只负责补出被底边裁掉的高度。 */
+      try {
+        var vh = (typeof window !== 'undefined' && window.innerHeight) ? window.innerHeight : 0;
+        var box = node.getBoundingClientRect();
+        if (vh > 0 && box && box.height > 0) {
+          var top = r.top + dy;
+          if (top + box.height > vh - 8) top = Math.max(8, vh - 8 - box.height);
+          if (top < 8) top = 8;
+          node.style.top = Math.round(top) + 'px';
+        }
+      } catch (e) { /* 无布局能力 → 保持原位 */ }
+    }
   }
 
     /**

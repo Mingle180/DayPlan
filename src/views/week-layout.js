@@ -289,8 +289,11 @@
       }
       var order = bucketOrder(buckets, firstSeen, categoryOrder, pinFirst);
 
-      /* 3) 类别内贪心分道 → 全局道号按「类别序 → 该类别第 k 道」编号，超 laneCap 回落溢出 */
+      /* 3) 类别内贪心分道 → 全局道号按「类别序 → 该类别第 k 道」编号，超 laneCap 回落溢出。
+         2026-10-30 修复：输出宽度时用的是「类别内道号」，不是全局道号 —— 第二个及以后的
+         类别只要各自有 ≥2 道，用全局道号会被 clamp 到同一道而完全重叠（用户截图）。 */
       var laneByIndex = [];
+      var catLaneByIndex = [];
       var overflowByIndex = [];
       var usedLanes = 0;
       var overflowSeq = 0;
@@ -303,6 +306,7 @@
           for (var m = 0; m < bucket.length; m += 1) {
             if (res.lanes[m] !== k) { continue; }
             var blockIndex = bucket[m].index;
+            catLaneByIndex[blockIndex] = k;
             if (overflowing) {
               overflowSeq += 1;
               laneByIndex[blockIndex] = laneCap - 1;
@@ -365,7 +369,7 @@
              不同类别的列按需占用，不再等分（用户裁定） */
           var cw = catWidthPx[blocks[n].categoryId] || 0;
           var lanesInCat = Math.max(1, laneCountByCat[blocks[n].categoryId] || 1);
-          var laneInCat = Math.min(Number(lane) || 0, lanesInCat - 1);
+          var laneInCat = Math.min(Number(catLaneByIndex[n]) || 0, lanesInCat - 1);
           item.left = (catLeftPx[blocks[n].categoryId] + laneInCat * cw / lanesInCat) / dayWidthPx * 100;
           item.width = (cw / lanesInCat) / dayWidthPx * 100;
           /* 2026-10-21：块的**真实像素宽**（渲染层展开时按它挑按钮排布；百分比无法判断） */

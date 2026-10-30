@@ -254,6 +254,8 @@ html[data-theme='dark'] .brand-logo { filter: invert(1); }
 /* .btn 自带 display:inline-flex，会盖掉 UA 的 [hidden]{display:none} ——
    倒计时空态曾因此同时露出框内 + 与右上角 +。补回 [hidden] 语义。 */
 .btn[hidden] { display: none; }
+/* .date-nav-btn 同为 inline-flex：日视图看今天时隐藏「今天」、周视图看本周时隐藏「本周」 */
+.date-nav-btn[hidden] { display: none; }
 
 .btn-primary {
   background: var(--primary);
@@ -521,31 +523,20 @@ html[data-theme='dark'] .lower-row > .finish-dock { background: var(--surface-2)
   gap: 8px;
 }
 
-/* 空台：横向撑满、居中一个加号的白色块（灰色阴影） */
-.cd-empty-add {
+/* 空台：横向撑满的虚线框，中央放一张静物插画（添加入口在区域右上角「+」） */
+.cd-empty-art {
   width: 100%;
   min-height: 96px;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 0;
-  font: inherit;
-  font-size: 24px;
-  line-height: 1;
-  color: var(--text-3);
+  overflow: hidden;
   background: var(--surface);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-block);
-  cursor: pointer;
-  /* 悬停只提阴影、不做横向放大 —— 放大后的卡片会撑出可滚动溢出，在列表里冒出一条横向滚动条 */
-  transition: box-shadow var(--ease);
 }
-.cd-empty-add[hidden] { display: none; }
-@media (hover: hover) {
-  .cd-empty-add:hover { box-shadow: var(--shadow); }
-}
-.cd-empty-add:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.cd-empty-art[hidden] { display: none; }
 
 /* 条目块：与排定事项块同款的白底 + 阴影卡片 */
 .cd-item {
@@ -987,13 +978,13 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
   .tl-block:hover { box-shadow: var(--shadow); transform: scale(1.02); z-index: 4; }
 }
 .tl-block:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; z-index: 4; }
-/* 美化迭代 10：标题行 = [省略号] + 标题（不省略、可换行）；右侧 22px 让给右上角的胶囊 */
+/* 美化迭代 10：标题行 = [省略号] + 标题（不省略、可换行）；右侧 36px 让给右上角的两字胶囊 */
 .tl-block .tl-titlerow {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
-  padding-right: 22px;
+  padding-right: 36px;
 }
 .tl-block .tl-title {
   flex: 1;
@@ -1067,12 +1058,10 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
 .tl-block.is-narrow .tl-time { font-size: 10px; line-height: 1.25; }
 .tl-block.is-narrow .tl-repeat { font-size: 9px; }
 .tl-block.is-narrow .tl-title { font-size: 11px; }
-/* 2026-10-20（用户反馈）：窄块标题「一个字一行」——
-   45px 宽的块内宽只有 37px，再让位 17px 给右上角胶囊，标题只剩 20px
-   （11px 的字只放得下 1 个），于是「每个字后面都有空间却一字一行」。
-   把窄档胶囊收到 12px、让位收到 14px 后，44px 起就能排下 2 个字。
+/* 2026-10-30（用户口径）：胶囊改成**两个字**（紧急 / 长期 / 短期 / 临时）。
+   窄档胶囊宽 ≈ 8px×2 + 左右各 2px = 20px，加 right:2px 共 22px 让位。
    **让位值必须与 core/layout.js::titleChipReserve 的窄档常量同源**。 */
-.tl-block.is-narrow .tl-titlerow { gap: 3px; padding-right: 14px; }
+.tl-block.is-narrow .tl-titlerow { gap: 3px; padding-right: 22px; }
 .tl-block.is-narrow .tl-chip { font-size: 8px; padding: 1px 2px; top: 2px; right: 2px; }
 /* 2026-10-20 三轮补（用户反馈：「每个字后面都有空间，却一个字一行 —— 标题文本框没铺满块？」）：
    胶囊钉在**右上角**，实际只会压到**首行**，可上面的规则给每一行都让位 14px ——
@@ -1088,7 +1077,7 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
 .tl-block.is-narrow:not(.is-omitted):not(.is-expanded):not(.is-peek) .tl-titlerow::before {
   content: "";
   float: right;
-  width: 12px;     /* = 胶囊（8px 字 + 左右各 2px 内边距），与 right:2px 合起来 14px 让位 */
+  width: 20px;     /* = 两字胶囊（8px 字 × 2 + 左右各 2px），与 right:2px 合起来 22px 让位 */
   height: 11px;    /* ≤ 一行（11px 字、行高 14.85px）→ 只让首行让位 */
   margin-left: 2px;
 }
@@ -1169,7 +1158,7 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
   transform: none;
   box-shadow: var(--shadow-lg);
 }
-.tl-block.is-peek > .tl-titlerow { display: flex !important; padding-right: 22px !important; }
+.tl-block.is-peek > .tl-titlerow { display: flex !important; padding-right: 36px !important; }
 .tl-block.is-peek > .tl-time { display: block !important; }
 .tl-block.is-peek > .tl-repeat { display: block !important; white-space: normal; overflow: visible; }
 .tl-block.is-peek > .tl-note { display: block !important; max-height: 3.8em; overflow: hidden; }
@@ -1250,9 +1239,26 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
   gap: 8px;
 }
 .ui-main:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
-.ui-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* 美化迭代 15：类别标签改为 8px 小色点（悬停显示类别名） */
+.ui-title { flex: 1 1 auto; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 美化迭代 15：类别标签改为 8px 小色点（悬停显示类别名）
+   2026-10-30（用户口径）：色点移到标题左侧，只作颜色提示。 */
 .ui-cat { width: 8px; height: 8px; border-radius: 50%; padding: 0; flex: none; }
+/* 2026-10-30（用户口径）：两位类别胶囊挂在未排事项条的最右侧，垂直居中、文字居中。 */
+.ui-chip {
+  flex: 0 0 auto;
+  margin-left: auto;
+  align-self: center;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: var(--cat, var(--text-2));
+  background: var(--cat-bg, var(--surface-2));
+  white-space: nowrap;
+  text-align: center;
+  pointer-events: none;
+}
 /* 迭代 10 条13：.ui-actions（▲▼）已随「拖动改次序」下线 */
 
 .empty-hint {
@@ -1310,6 +1316,11 @@ html.has-modal body {
   justify-content: center;
   padding: 40px 16px;
   overflow-y: auto;
+  /* 2026-10-30（用户反馈）：设置里展开「类别 / 显示」时整页抖动。
+     展开让内容变高 → 遮罩层从不出滚动条变成出滚动条（10px）→
+     居中弹窗的可滚动容器窄了 10px，横向整体左移 5px；
+     收起时再跳回来。两侧常驻同宽槽位，宽度恒定，抖动消失。 */
+  scrollbar-gutter: stable both-edges;
   z-index: 50;
   animation: dp-backdrop-in 160ms ease-out;
 }
@@ -1805,24 +1816,49 @@ html.has-modal body {
 .cat-swatch.is-locked { cursor: not-allowed; }
 .cat-name { flex: 1; min-width: 0; font-weight: 600; }
 .cat-name input { width: 100%; }
-/* 色板：19 色按 8 列网格排（红→紫→蓝→绿→黄→橙→棕→中性），最后一个落单也不参差 */
-.color-grid { display: grid; grid-template-columns: repeat(8, 22px); gap: 6px; }
-.color-dot {
-  width: 22px; height: 22px;
-  border-radius: 50%;
-  border: 2px solid transparent;
-  cursor: pointer;
-  padding: 0;
-}
-@media (hover: hover) {
-  .color-dot:hover { transform: scale(1.1); }
-}
-.color-dot:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
-.color-dot.is-on { border-color: var(--text); box-shadow: 0 0 0 2px var(--surface); }
-
 .settings-section { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
 .settings-section:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
 .settings-section h3 { font-size: 13px; margin: 0 0 8px; }
+
+/* 2026-10-30（用户口径）：设置按大类折叠 —— 标题行整行可点，右侧 +/− 随开合旋转变色，
+ * 高度走 grid-template-rows 0fr ↔ 1fr 过渡，展开时下面的大类被平滑推开。 */
+.settings-section.is-folded { padding-top: 0; margin-top: 0; }
+.settings-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  width: 100%; margin: 0; padding: 13px 8px 13px 2px;
+  background: none; border: 0; border-radius: var(--radius-xs);
+  font: inherit; color: var(--text); text-align: left; cursor: pointer;
+}
+.settings-title { font-size: 14px; font-weight: 700; letter-spacing: .2px; }
+.settings-sign {
+  flex: none; width: 18px; text-align: center;
+  font-size: 19px; line-height: 1; font-weight: 400;
+  color: var(--text-3);
+  transition: color .3s var(--ease), transform .35s var(--ease);
+}
+.settings-head:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+@media (hover: hover) {
+  .settings-head:hover .settings-title { color: var(--primary); }
+}
+.settings-section.is-open > .settings-head > .settings-title,
+.settings-section.is-open > .settings-head > .settings-sign { color: var(--primary); }
+.settings-section.is-open > .settings-head > .settings-sign { transform: rotate(180deg); }
+.settings-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows .34s var(--ease);
+}
+.settings-section.is-open > .settings-collapse { grid-template-rows: 1fr; }
+/* 收起时内容不可见也不可聚焦（visibility 延迟到收起动画结束再藏，展开时立即恢复） */
+.settings-body {
+  min-height: 0; overflow: hidden; padding: 0 2px;
+  visibility: hidden;
+  transition: visibility 0s linear .34s;
+}
+.settings-section.is-open > .settings-collapse > .settings-body {
+  visibility: visible;
+  transition-delay: 0s;
+}
 
 /* 云端（18 号契约）：账号行 + 版本列表 */
 .settings-row { display: flex; align-items: center; gap: 8px; }
@@ -1904,18 +1940,21 @@ html.has-modal body {
   .dp-select-pop { left: 0; right: 0; }
   .dp-select-item { padding: 11px 12px; font-size: 16px; }
 
-  /* 弹窗：底部抽屉 + 内部滚动，底部按钮避开 Home 指示条 */
+  /* 弹窗：2026-10-30（用户口径）改为屏幕居中，不再贴底抽屉；内部滚动，
+     底部按钮仍避开 Home 指示条 */
   .modal-backdrop {
-    align-items: flex-end;
-    padding: 0;
-    overflow: hidden;
+    align-items: center;
+    padding: 16px;
+    overflow-y: auto;
+    /* 手机上弹窗自己限高、内部滚动，遮罩层基本不滚；常驻两侧槽位只会把弹窗压窄 20px */
+    scrollbar-gutter: auto;
   }
-  .modal-backdrop[class~="is-centered"] { align-items: flex-end; }
+  .modal-backdrop[class~="is-centered"] { align-items: center; }
   .modal {
-    max-width: none;
-    max-height: calc(100vh - 8px);
-    max-height: calc(100dvh - 8px);
-    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    max-width: 520px;
+    max-height: calc(100vh - 32px);
+    max-height: calc(100dvh - 32px);
+    border-radius: var(--radius-lg);
     display: flex;
     flex-direction: column;
   }
@@ -1930,9 +1969,9 @@ html.has-modal body {
   .modal-foot {
     flex: none;
     padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
-    border-radius: 0;
+    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
   }
-  .modal.modal-wide { max-width: none; }
+  .modal.modal-wide { max-width: 520px; }
 
   .side-rail { padding: 12px; gap: 12px; }
 }

@@ -58,11 +58,24 @@
     return pad2(Math.floor(t / 3600)) + ':' + pad2(Math.floor((t % 3600) / 60)) + ':' + pad2(t % 60);
   }
 
-  function firstChar(name) {
+  function firstChars(name, n) {
     var s = String(name === null || name === undefined ? '' : name);
     if (!s) return '';
-    var cp = s.codePointAt ? s.codePointAt(0) : s.charCodeAt(0);
-    return String.fromCodePoint ? String.fromCodePoint(cp) : s.charAt(0);
+    var take = Math.max(1, Number(n) || 2);
+    var out = '';
+    var i = 0;
+    while (out.length < take && i < s.length) {
+      var cp = s.codePointAt(i);
+      out += String.fromCodePoint(cp);
+      i += cp > 0xffff ? 2 : 1;
+    }
+    return out;
+  }
+
+  /** 2026-10-30：类别色走 20 色色板（旧高饱和色由 categoryTone 就近归一） */
+  function inkOf(hex) {
+    var P = root && root.DayPlan && root.DayPlan.palette;
+    return (P && typeof P.categoryTone === 'function') ? P.categoryTone(hex).accent : hex;
   }
 
   function tintOf(hex, alpha) {
@@ -477,9 +490,9 @@
 
       var cat = getCat(it.occ.categoryId);
       if (cat && cat.name) {
-        var chip = mk(doc, 'span', 'dock-chip', firstChar(cat.name));
-        chip.style.setProperty('--cat', cat.color || '');
-        chip.style.setProperty('--cat-bg', tintOf(cat.color, 0.14));
+        var chip = mk(doc, 'span', 'dock-chip', firstChars(cat.name, 2));
+        chip.style.setProperty('--cat', inkOf(cat.color));
+        chip.style.setProperty('--cat-bg', tintOf(inkOf(cat.color), 0.10));
         chip.title = '类别：' + cat.name;
         chip.setAttribute('aria-label', '类别：' + cat.name);
         head.appendChild(chip);

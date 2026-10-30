@@ -27,6 +27,13 @@
   var Overlay = root.DayPlan.overlay;
   var M = root.DayPlan.modal;
   var el = M.el;
+  /* 2026-10-30：类别色统一走色板（20 色）；旧高饱和色由 categoryTone 就近归一 */
+  var Palette = root.DayPlan.palette;
+  var toneOf = (Palette && Palette.categoryTone) ? Palette.categoryTone : null;
+  var catAccent = function (hex) {
+    var tone = toneOf ? toneOf(hex) : null;
+    return tone ? tone.accent : hex;
+  };
 
   var FALLBACK_PX_PER_HOUR = 96;
   var MIN_PX_PER_HOUR = 60;
@@ -44,7 +51,9 @@
   var LABEL_CHAR_PX = 14;
   var LABEL_PAD_PX = 8;
   var OVERFLOW_OFFSET_STEP = 8;
-  var RULER_TICK_TOP = 4;
+  /* 刻度文字下移：vintage.css 把刻度带加高 24px，上沿留给当前时间胶囊与尾巴。
+     刻度绝对定位 + 内联 top，CSS 改不动它，只能由这里改。 */
+  var RULER_TICK_TOP = 28;
   /* 刻度贴边阈值：半个「00:00」标签约 15px；小于它就把标签改为贴边对齐 */
   var RULER_TICK_EDGE_PAD = 16;
   var URGENT_CATEGORY_ID = 'urgent';
@@ -86,16 +95,16 @@
       labels: document.getElementById('timeline-labels') || document.createElement('div'),
       track: document.getElementById('timeline-track'),
       nowLine: document.getElementById('timeline-now'),
+      nowLabel: document.getElementById('timeline-now-label'),
       untimedTitle: document.getElementById('untimed-title'),
-      untimedCount: document.getElementById('untimed-count'),
       untimedList: document.getElementById('untimed-list'),
       untimedEmpty: document.getElementById('untimed-empty'),
       countdownList: document.getElementById('countdown-list'),
-      countdownEmpty: document.getElementById('btn-countdown-empty'),
+      countdownEmpty: document.getElementById('countdown-empty'),
       countdownAdd: document.getElementById('btn-new-countdown'),
-      countdownCount: document.getElementById('countdown-count'),
       notesInput: document.getElementById('notes-input'),
-      notesStatus: document.getElementById('notes-status')
+      notesStatus: document.getElementById('notes-status'),
+      notesCount: document.getElementById('notes-count')
     };
 
     var state = {
@@ -112,6 +121,9 @@
        互动引起的重绘（展开/收起、隐藏已完成、写入后刷新）**必须保留**用户当前的
        横向位置 —— 否则轴较长时点右侧的事项，时间轴会立刻弹回头部、根本没法操作。 */
     var pendingFirstScroll = true;
+    /* 2026-10-30 用户口径：切到今天时，横轴要划到能看见「现在」指针的位置。
+       只在这个标记为真时移动；平时每分钟刷新指针不打扰用户已滚到的位置。 */
+    var pendingNowScroll = true;
 
     /* 迭代 10 批次 5（条9）：拖放结束后浏览器可能补发一次 click，
        用短时间窗抑制，避免「拖进完成台」又顺手把卡片展开 */
@@ -189,11 +201,6 @@
       return true;
     }
 
-    function hiddenDoneCount() {
-      if (!state.hideDone) return 0;
-      return state.occurrences.filter(function (o) { return o.done; }).length;
-    }
-
     /* ---------------- 提示条 ---------------- */
 
     function banner(type, text, actions) {
@@ -222,14 +229,14 @@
     /* ---------------- 渲染：标题 ---------------- */
 
     function renderHead() {
-      els.title.textContent = D.formatDateCN(state.date);
-      var parts = [];
+      /* 2026-10-30 用户口径：标题 = 日期 + 星期（+ 前天/昨天/今天/明天/后天），
+         副标题只留农历日期（有节假日才附带），事项计数不再进副标题。 */
       var today = D.todayISO();
-      if (state.date === today) parts.push('今天');
-      else {
-        var diff = D.diffDays(today, state.date); // 正值 = 未来
-        parts.push(diff > 0 ? diff + ' 天后' : Math.abs(diff) + ' 天前');
-      }
+      var diff = D.diffDays(today, state.date); // 正值 = 未来
+      var rel = diff === 0 ? '今天' : diff === -1 ? '昨天' : diff === -2 ? '前天'
+        : diff === 1 ? '明天' : diff === 2 ? '后天' : '';
+      els.title.textContent = D.formatDateCN(state.date) + (rel ? ' · ' + rel : '');
+      var parts = [];
       var lunar = root.DayPlan.lunar && root.DayPlan.lunar.solarToLunar ? root.DayPlan.lunar.solarToLunar(state.date) : null;
       if (lunar) {
         var mName = root.DayPlan.lunar.lunarMonthName
@@ -247,19 +254,10 @@
       if (holiday && holiday.name) {
         parts.push((holiday.type === 'workday' ? '班 ' : '休 ') + holiday.name);
       }
-      var counts = { timed: 0, untimed: 0, done: 0 };
-      state.occurrences.forEach(function (o) {
-        if (o.time) counts.timed++; else counts.untimed++;
-        if (o.done) counts.done++;
-      });
-      parts.push('共 ' + state.occurrences.length + ' 项（时段 ' + counts.timed + ' · 未排时段 ' + counts.untimed +
-        (counts.done ? ' · 已完成 ' + counts.done : '') + '）');
-      /* 2026-10-22：工具条删除后，「隐藏已完成」状态说明并入日期副标题。 */
-      var visibleTimed = state.occurrences.filter(function (o) { return o.time && visible(o); }).length;
-      if (!visibleTimed && hiddenDoneCount() > 0) {
-        parts.push('已隐藏 ' + hiddenDoneCount() + ' 项已完成事项');
-      }
       els.sub.textContent = parts.join(' · ');
+      els.sub.hidden = parts.length === 0;
+      /* 今天的页面不再给一个「今天」按钮（点了也没有变化） */
+      if (els.today) els.today.hidden = (state.date === today);
       if (els.panel) {
         els.panel.dataset.holiday = holiday ? holiday.type : '';
       }
@@ -469,8 +467,34 @@
       return out;
     }
 
-    /** 组纵向排布（DM-21.6 / BR-26）：laneHeight 由类别名推导；组间不相交。 */
-    function layoutGroups(geometry, groups, catNames, rate, lanesMax) {
+    /**
+     * 2026-10-30：时间轴的纵向拉伸。
+     * 卡片按视口高度固定后，若轨道仍按内容高度排版，底部会空出一大片纸 ——
+     * 参考图里时间轴是视觉中心，所以把富余高度先摊给组间距（≤22px），
+     * 剩下的均摊进每条道。只在桌面分栏生效；窄屏保持内容高度。
+     */
+    function stretchTimeline(geometry, laid, groups, catNames, rate, lanesMax) {
+      if (!els.scroll || !laid || !laid.groups || !laid.groups.length) return null;
+      if (typeof root !== 'undefined' && root.innerWidth && root.innerWidth < 1024) return null;
+      var rulerH = (els.ruler && els.ruler.offsetHeight) || 30;
+      var avail = els.scroll.clientHeight - rulerH;
+      var extra = avail - laid.height;
+      if (!(extra > 10)) return null;
+      var gapCount = Math.max(0, laid.groups.length - 1);
+      var gapExtra = gapCount ? Math.min(22, Math.floor(extra / gapCount)) : 0;
+      var rest = extra - gapExtra * gapCount;
+      var lanes = 0;
+      laid.groups.forEach(function (g) { lanes += Math.max(1, Number(g.laneCount) || 1); });
+      var laneExtra = lanes ? rest / lanes : 0;
+      var next = layoutGroups(geometry, groups, catNames, rate, lanesMax,
+        { laneExtra: laneExtra, gapExtra: gapExtra });
+      return (next && next.height > laid.height + 1) ? next : null;
+    }
+
+    /** 组纵向排布（DM-21.6 / BR-26）：laneHeight 由类别名推导；组间不相交。
+     *  2026-10-30：新增 stretch（{laneExtra, gapExtra}）—— 卡片有富余高度时把差值
+     *  均摊到道高与组间距，让时间轴成为页面主体，而不是缩成一条矮带。 */
+    function layoutGroups(geometry, groups, catNames, rate, lanesMax, stretch) {
       var ordered = groups.slice();
       var pin = urgentCategoryId();          /* v2 由 pinFirst 处理；v1 在此本地前置（幂等） */
       if (pin) {
@@ -483,6 +507,10 @@
       var minBlockWidth = Number(Layout.DEFAULT_MIN_BLOCK_WIDTH) || 12;
       var groupGap = Number(Layout.GROUP_GAP);
       if (!isFinite(groupGap) || groupGap < 0) groupGap = GROUP_GAP_FALLBACK;
+      var extra = stretch || {};
+      var laneExtra = Math.max(0, Number(extra.laneExtra) || 0);
+      var gapExtra = Math.max(0, Number(extra.gapExtra) || 0);
+      groupGap += gapExtra;
 
       var laid = (Layout && typeof Layout.assignGroupedLanes === 'function')
         ? Layout.assignGroupedLanes(ordered, {
@@ -498,7 +526,7 @@
             }
             var its = (g && g.items) || [];
             return groupLaneHeightFor(catNames[categoryId] || '未分类', its,
-              groupWrapWidth(geometry, its, minBlockWidth), geometry);
+              groupWrapWidth(geometry, its, minBlockWidth), geometry) + laneExtra;
           },
           minBlockWidth: minBlockWidth,
           groupGap: groupGap,
@@ -514,8 +542,8 @@
       list.forEach(function (g) {
         var catName = catNames[g.categoryId] || '未分类';
         var laneHeight = needsVerticalFix
-          ? groupLaneHeightFor(catName, g.items || [], groupWrapWidth(geometry, g.items, minBlockWidth), geometry)
-          : Math.max(LANE_HEIGHT_MIN, Number(g.laneHeight) || LANE_HEIGHT_MIN);
+          ? groupLaneHeightFor(catName, g.items || [], groupWrapWidth(geometry, g.items, minBlockWidth), geometry) + laneExtra
+          : Math.max(LANE_HEIGHT_MIN, Number(g.laneHeight) || LANE_HEIGHT_MIN) + laneExtra;
         var laneCount = Math.max(1, Number(g.laneCount) || 1);
         if (needsVerticalFix) {
           if (y > 0) y += groupGap;
@@ -612,13 +640,35 @@
       }
       var narrow = Number(w) < 72;
       return narrow
-        ? { unitPx: 11, padX: 8, chipWidth: 14 }
-        : { unitPx: 13, padX: 14, chipWidth: 22 };
+        ? { unitPx: 11, padX: 8, chipWidth: 22 }
+        : { unitPx: 13, padX: 14, chipWidth: 36 };
     }
 
     /** 设置内联 px 值：真实浏览器与 DOM 垫片（含 getPropertyValue 回退）都能读到。 */
     function setPx(node, prop, value) {
       node.style[prop] = Math.round(value) + 'px';
+    }
+
+    /**
+     * 本轮的轨道内容比滚动区高时（窄视口 / 页面放大后道高被挤高），把面板垫高到装得下：
+     * 宁可整页滚动，也不让底部事项被 `.timeline-scroll` 的 overflow 裁掉。
+     * 用**本轮刚算出的**内容高度而不是上一轮轨道的 scrollHeight，避免越垫越高。
+     */
+    function fitPanelToContent(contentH) {
+      var panel = els.panel;
+      var sc = els.scroll;
+      if (!panel || !sc || !(contentH > 0)) return;
+      if (typeof root.innerWidth === 'number' && root.innerWidth < 1024) return;
+      var rulerH = (els.ruler && els.ruler.offsetHeight) || 30;
+      var avail = sc.clientHeight - rulerH;
+      if (!(avail > 0)) return;
+      var need = contentH - avail;
+      /* 滚动区底部的 padding 固定吃掉几个像素，低于它不算裁切 */
+      if (!(need > 6)) return;
+      var base = panel.getBoundingClientRect().height || 0;
+      var floor = Math.ceil(base + need + 2);
+      var cur = parseFloat(panel.style.getPropertyValue('--day-floor')) || 0;
+      if (floor > cur) panel.style.setProperty('--day-floor', floor + 'px');
     }
 
     function renderTimeline() {
@@ -659,11 +709,19 @@
 
       var groups = Layout.layoutDayGroups(timed, categoryOrder(), { pinFirst: urgentCategoryId() });
       var laid = layoutGroups(geometry, groups, catNames, rate, lanesMax);
+      /* 装不下就先长高面板（读 clientHeight 会顺带把新高度落到布局里），再分配富余 */
+      fitPanelToContent(laid.height);
+      /* 2026-10-30（用户口径）：时间轴是页面主体 —— 桌面端把卡片富余高度摊进道高与组间距 */
+      var stretched = stretchTimeline(geometry, laid, groups, catNames, rate, lanesMax);
+      if (stretched) laid = stretched;
 
-      /* ADR-19：inner 宽 = 类别名列宽 + 轴长（美化迭代 10：labelWidth 恒 0） */
+      /* ADR-19：inner 宽 = 类别名列宽 + 轴长（美化迭代 10：labelWidth 恒 0）。
+         空日程时 computeAxisGeometry 返回 null，Number(null) === 0 能骗过 isFinite，
+         inner 会被写成 0px（只剩 min-width:100% 撑开），而刻度 / 当前时间仍按整日排版，
+         胶囊的边界回推就按容器宽夹取，出现「胶囊在最左、竖线在最右」的分离（2026-10-30）。 */
       var axisLength = Number(geometry && geometry.axisLength);
-      if (!isFinite(axisLength)) axisLength = Number(geometry && geometry.totalHeight);
-      if (!isFinite(axisLength)) axisLength = Math.round(24 * rate);
+      if (!isFinite(axisLength) || axisLength <= 0) axisLength = Number(geometry && geometry.totalHeight);
+      if (!isFinite(axisLength) || axisLength <= 0) axisLength = Math.round(24 * rate);
       els.inner.style.width = Math.round(labelWidth + axisLength) + 'px';
       /* 轴元素自身宽 = axisLength（.timeline-body 内 flex 布局下与可用宽度一致） */
       setPx(els.track, 'width', axisLength);
@@ -748,9 +806,9 @@
             } catch (e) { showsTime = true; }
             if (!showsTime) node.classList.add('is-time-hidden');
           }
-          node.style.setProperty('--cat', cat.color);
-          node.style.setProperty('--cat-bg', hexToRgba(cat.color, 0.14));
-          node.style.setProperty('--cat-border', hexToRgba(cat.color, 0.45));
+          node.style.setProperty('--cat', catAccent(cat.color));
+          node.style.setProperty('--cat-bg', hexToRgba(catAccent(cat.color), 0.10));
+          node.style.setProperty('--cat-border', hexToRgba(catAccent(cat.color), 0.30));
           if (expanded) {
             /* 迭代 10 批次 3（条7）：展开后与原形状一致 —— 不再横向加宽、不再左移；
                仅抬高层级（pin 成功时由 overlay 覆盖为 fixed） */
@@ -879,10 +937,6 @@
       var list = Order.sortUntimed(p.untimed).filter(visible);
 
       els.untimedList.innerHTML = '';
-      /* 迭代 10 批次 5（条9）：已进完成台的未排事项不再计入（原位置已空出） */
-      els.untimedCount.textContent = p.untimed.filter(function (o) {
-        return !dock || !dock.has(o.key);
-      }).length + ' 项';
       els.untimedTitle.textContent = '未排时段';
 
       var hiddenCount = p.untimed.filter(function (o) { return o.done; }).length;
@@ -916,9 +970,16 @@
       updateNotesStatus();
     }
 
+    /* 500 只是软目标：超出只把计数染成暖橙，不截断输入；计数只显示「n字」（2026-10-30 用户口径） */
+    var NOTES_SOFT_LIMIT = 500;
+
     function updateNotesStatus(saving) {
       var len = els.notesInput.value.length;
-      els.notesStatus.textContent = (saving ? '保存中… ' : '') + len + ' 字';
+      els.notesStatus.textContent = saving ? '保存中…' : '';
+      if (els.notesCount) {
+        els.notesCount.textContent = len + '字';
+        els.notesCount.classList.toggle('is-over', len > NOTES_SOFT_LIMIT);
+      }
     }
 
     function flushNotes() {
@@ -954,8 +1015,34 @@
       els.nowLine.hidden = !isToday;
       if (!isToday) return;
       var now = D.nowMinutes();
-      els.nowLine.style.left = Math.round(catLabelWidth() + axisX(axis, now)) + 'px';
+      var x = Math.round(catLabelWidth() + axisX(axis, now));
+      els.nowLine.style.left = x + 'px';
       els.nowLine.title = '当前时间 ' + D.formatMinutes(now);
+      if (els.nowLabel) {
+        var text = D.formatMinutes(now);
+        if (els.nowLabel.textContent !== text) els.nowLabel.textContent = text;
+        els.nowLabel.style.setProperty('--now-shift', nowLabelShift(x) + 'px');
+      }
+      if (pendingNowScroll && els.scroll) {
+        var viewW = Number(els.scroll.clientWidth) || 0;
+        if (viewW > 0) {
+          /* 指针停在左侧 35% 处，前后时段都留出可读余量 */
+          els.scroll.scrollLeft = Math.max(0, Math.round(x - viewW * 0.35));
+          pendingNowScroll = false;
+        }
+      }
+    }
+
+    /** 时间胶囊以竖线为中心；靠近轴左/右边界时整体推回轴内（尾巴由 CSS 反向抵消）。
+        量不到宽度（隐藏 / 垫片环境）时返回 0，不写内联样式。 */
+    function nowLabelShift(centerX) {
+      var labelW = (els.nowLabel && els.nowLabel.offsetWidth) || 0;
+      var total = (els.inner && els.inner.clientWidth) || 0;
+      if (!labelW || !total) return 0;
+      var half = labelW / 2 + 2;
+      if (centerX - half < 0) return Math.round(half - centerX);
+      if (centerX + half > total) return -Math.round(centerX + half - total);
+      return 0;
     }
 
     /* ---------------- 折叠卡接线 ---------------- */
@@ -1021,7 +1108,7 @@
       var node = el(ctx.variant === 'card' ? 'li' : 'div', {
         class: ctx.variant === 'card' ? 'untimed-item' : 'tl-block',
         role: 'button', tabindex: '0',
-        style: '--cat:' + cat.color
+        style: '--cat:' + catAccent(cat.color)
       });
       node.appendChild(el('span', { class: ctx.variant === 'card' ? 'ui-title' : 'tl-title', text: occ.title }));
       node.addEventListener('click', function () { openEdit(occ); });
@@ -1404,10 +1491,11 @@
       var meta = metaForCategoryChange(item, v.categoryId);
       if (v.kind === 'single' && item.kind === 'single') {
         /* starred 不再由表单写入（DM-18.4）；不带该键即保留原值 */
-        store.updateItem(item.id, {
+        var patch = {
           title: v.title, categoryId: v.categoryId, date: v.date,
           time: v.time, note: v.note, done: v.done, meta: meta
-        });
+        };
+        store.updateItem(item.id, patch);
         return;
       }
       var next = {
@@ -1470,6 +1558,7 @@
       state.date = iso;
       /* 换日期（或 app 切回日视图）→ 允许下一次渲染重新做首屏定位 */
       pendingFirstScroll = true;
+      pendingNowScroll = (iso === D.todayISO());
       if (opts2.notify !== false && opts.onSelectDate) opts.onSelectDate(iso);
       compute();
       renderAll();
@@ -1749,9 +1838,8 @@
       if (!CD || typeof CD.create !== 'function' || !els.countdownList) return;
       countdown = CD.create({
         list: els.countdownList,
-        emptyBtn: els.countdownEmpty,
+        emptyArt: els.countdownEmpty,
         addBtn: els.countdownAdd,
-        countEl: els.countdownCount,
         store: store,
         getCat: function (id) { return categoryMap()[id]; },
         onChange: function () { afterWrite(); }
@@ -1786,6 +1874,30 @@
 
     nowTimer = setInterval(updateNowLine, 60000);
     if (nowTimer && typeof nowTimer.unref === 'function') nowTimer.unref();
+
+    /* 页面缩放 / 改窗后，轨道高度是按渲染那一刻的视口量出来的内联值。
+       不重排就会沿用旧高度：视口变矮时轨道比滚动区高一截，底部事项被横向滚动条盖住。
+       只认宽高真的变了（滚动不会触发），日视图不可见时跳过。
+       注意：Electron 的 setZoomFactor 实测不派发 resize，故再加一条低频轮询兜底。 */
+    var viewport = { w: root.innerWidth || 0, h: root.innerHeight || 0 };
+    var resizeTimer = null;
+    function scheduleReflow() {
+      var w = root.innerWidth || 0;
+      var h = root.innerHeight || 0;
+      if (w === viewport.w && h === viewport.h) return;
+      viewport.w = w;
+      viewport.h = h;
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(function () {
+        resizeTimer = null;
+        if (els.panel.hidden) return;
+        if (els.panel.style) els.panel.style.removeProperty('--day-floor');
+        renderTimeline();
+      }, 160);
+    }
+    if (typeof root.addEventListener === 'function') root.addEventListener('resize', scheduleReflow);
+    var viewportPoll = setInterval(scheduleReflow, 400);
+    if (viewportPoll && typeof viewportPoll.unref === 'function') viewportPoll.unref();
 
     syncHideDone();
 

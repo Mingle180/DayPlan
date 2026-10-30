@@ -1,0 +1,1621 @@
+/* ============================================================
+ * DayPlan · 复古文艺风（Vintage Planner）
+ *   只改观感：色板 / 字体 / 纸张质感 / 装饰插画。
+ *   结构、几何与交互仍由 app.css / views.css / week.css / month.css 负责，
+ *   本文件最后加载，用同权重覆盖（不写裸 !important —— 唯一例外见文件末尾说明）。
+ *
+ *   设计口径（见 美化.md）：
+ *     · 页面 = 暖米纸底；卡片 = 略暖的米白纸面；边框细、投影轻。
+ *     · 标题用衬线（宋），正文保持无衬线；英文装饰用手写体。
+ *     · 类别色只做低饱和点缀（左色条 / 首字胶囊 / 倒计时卡底），不铺满整块。
+ * ============================================================ */
+
+/* 英文手写体随包内嵌（OFL，latin 子集 16KB）：系统字体各平台不一致，
+   右栏明信片的手写句必须每台设备同一个字形。 */
+@font-face {
+  font-family: "Rouge Script";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../assets/fonts/rouge-script-latin-400.woff2") format("woff2");
+}
+
+:root {
+  /* 2026-10-30：颜色按 美化.md 的色表逐项对齐（暖调纸张，不用纯白、不用冷灰） */
+  --bg: #f1e7d6;              /* 页面背景 */
+  --header-bg: #f8f2e8;       /* 顶部导航 */
+  --surface: #f4eee3;         /* 主卡片（图9 取样：比页面略深的米纸） */
+  --surface-2: #efe7d9;       /* 次级卡片 */
+  --surface-3: #e7dbc7;       /* 纸张纹理 */
+  --glass: rgba(248, 242, 232, .9);
+  --border: #e4d8c5;          /* 分割线 */
+  --border-strong: #d2c2ab;
+
+  --text: #382d22;            /* 主文字 */
+  --text-2: #776855;          /* 正文次级（时间行等，保证可读） */
+  --text-3: #948675;          /* 次级文字 */
+
+  --primary: #718065;         /* 鼠尾草绿 */
+  --primary-weak: rgba(113, 128, 101, .13);
+  --danger: #b4553f;
+  --danger-weak: rgba(180, 85, 63, .12);
+  --warn: #a9803f;
+  --warn-weak: rgba(195, 155, 101, .18);
+  --terracotta: #d8896d;
+  --gold: #c39b65;
+  --lavender: #8987b7;
+  --ok: #718065;
+  --ok-weak: rgba(113, 128, 101, .15);
+
+  --seg-active: #fbf7ef;
+  --seg-active-text: #382d22;
+
+  /* 半径分四档，不同元素各取其一，避免全站同一个圆角：
+       14 大容器 / 14 内容卡 / 12 按钮 / 10 表单与小内件 / 8 事项块（纸片更方一点） */
+  --radius-lg: 14px;
+  --radius: 14px;
+  --radius-sm: 12px;
+  --radius-xs: 10px;
+  --shadow-sm: 0 2px 6px rgba(74, 56, 34, .06);
+  --shadow: 0 10px 26px rgba(74, 56, 34, .10);
+  --shadow-lg: 0 18px 44px rgba(74, 56, 34, .16);
+  --shadow-block: 0 1px 2px rgba(74, 56, 34, .05), 0 4px 12px rgba(74, 56, 34, .07);
+  /* 单张纸卡：比 shadow-sm 更散一点，纸与纸之间才有层次 */
+  --shadow-paper: 0 3px 12px rgba(70, 52, 30, .07), 0 1px 2px rgba(70, 52, 30, .04);
+
+  --scroll-thumb: rgba(84, 66, 44, .22);
+  --scroll-thumb-hover: rgba(84, 66, 44, .36);
+
+  /* 2026-10-30（用户口径）：电脑端与手机端一致，全站正文 / 界面文字统一用霞鹜文楷。
+     两套token 都指向它，组件读哪个都是同一套字；缺字再回落到各自的系统字体。
+     顶栏英文手写体（--font-script）属于装饰图形，保留原字体。 */
+  --font-sans: 'LXGW WenKai', -apple-system, "SF Pro SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-serif: 'LXGW WenKai', "Songti SC", "STSong", "Noto Serif SC", "Source Han Serif SC", "SimSun", Georgia, "Times New Roman", serif;
+  --font-script: "Rouge Script", "Segoe Script", "Bradley Hand", "Snell Roundhand", "Apple Chancery", cursive;
+
+  /* 插画垫色（2026-10-30 用户反馈）：两张抠图内部都留着大片半透明纸雾，
+     浅色下贴纸面看不出，深色下直接透出底下的深色，成了插画中的暗斑。
+     浅色保持透明（外观不变），深色垫一层暖纸色，透出来的就是纸而不是黑。 */
+  --art-plate: transparent;
+  /* 章节小图标（线稿，用遮罩着色 → 跟随当前文字色） */
+  --ico-list: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 6h11M9 12h11M9 18h11'/%3E%3Cpath d='M4.4 6h.01M4.4 12h.01M4.4 18h.01' stroke-width='2.6'/%3E%3C/svg%3E");
+  --ico-check: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='8.6'/%3E%3Cpath d='M8.2 12.3l2.7 2.7 4.9-5.6'/%3E%3C/svg%3E");
+  --ico-clock: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='8.6'/%3E%3Cpath d='M12 7.4V12l3.2 2'/%3E%3C/svg%3E");
+  --ico-pen: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4.6 19.4l1-4.1 9.9-9.9 3.1 3.1-9.9 9.9-4.1 1z'/%3E%3Cpath d='M13.9 6.6l3.1 3.1'/%3E%3C/svg%3E");
+  --ico-calendar: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3.6' y='5.2' width='16.8' height='15.2' rx='2.6'/%3E%3Cpath d='M8 3.2v4M16 3.2v4M3.6 10.2h16.8'/%3E%3C/svg%3E");
+  --ico-gear: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='3.2'/%3E%3Cpath d='M19.4 14.4a1.6 1.6 0 0 0 .32 1.76l.06.06a1.94 1.94 0 1 1-2.74 2.74l-.06-.06a1.6 1.6 0 0 0-1.76-.32 1.6 1.6 0 0 0-.97 1.46V21a1.94 1.94 0 1 1-3.88 0v-.1a1.6 1.6 0 0 0-1.05-1.46 1.6 1.6 0 0 0-1.76.32l-.06.06a1.94 1.94 0 1 1-2.74-2.74l.06-.06a1.6 1.6 0 0 0 .32-1.76 1.6 1.6 0 0 0-1.46-.97H3a1.94 1.94 0 1 1 0-3.88h.1a1.6 1.6 0 0 0 1.46-1.05 1.6 1.6 0 0 0-.32-1.76l-.06-.06a1.94 1.94 0 1 1 2.74-2.74l.06.06a1.6 1.6 0 0 0 1.76.32h.08a1.6 1.6 0 0 0 .97-1.46V3a1.94 1.94 0 1 1 3.88 0v.1a1.6 1.6 0 0 0 .97 1.46 1.6 1.6 0 0 0 1.76-.32l.06-.06a1.94 1.94 0 1 1 2.74 2.74l-.06.06a1.6 1.6 0 0 0-.32 1.76v.08a1.6 1.6 0 0 0 1.46.97H21a1.94 1.94 0 1 1 0 3.88h-.1a1.6 1.6 0 0 0-1.46.97z'/%3E%3C/svg%3E");
+  /* 细花枝（生成后抠去白底）：日期旁 / 记录纸角 / 右栏手写卡共用 */
+}
+
+/* 暗色镜像：暖墨纸（不是纯黑，保留米纸的层次） */
+html[data-theme='dark'] {
+  --bg: #1b1712;
+  --header-bg: #211c16;
+  --surface: #262019;
+  --surface-2: rgba(238, 226, 203, .07);
+  --surface-3: rgba(238, 226, 203, .13);
+  --glass: rgba(38, 32, 25, .84);
+  --border: rgba(238, 226, 203, .13);
+  --border-strong: rgba(238, 226, 203, .24);
+
+  --text: #f1e8d8;
+  --text-2: #c6b8a2;
+  --text-3: #948875;
+
+  /* 深色插画垫色：暖纸色的半透明版，压在半透明纸雾底下，透出来的是纸不是黑 */
+  --art-plate: rgba(224, 205, 172, .46);
+
+  --primary: #9cae87;
+  --primary-weak: rgba(156, 174, 135, .17);
+  --danger: #dd8a71;
+  --danger-weak: rgba(221, 138, 113, .16);
+  --warn: #d3ae74;
+  --warn-weak: rgba(211, 174, 116, .18);
+  --terracotta: #e0917a;
+  --gold: #c9a97a;
+  --lavender: #a3a1c9;
+  --ok: #9cae87;
+  --ok-weak: rgba(156, 174, 135, .16);
+
+  --seg-active: #3a3126;
+  --seg-active-text: #f1e8d8;
+
+  --shadow-sm: 0 2px 6px rgba(0, 0, 0, .34);
+  --shadow: 0 10px 26px rgba(0, 0, 0, .42);
+  --shadow-lg: 0 18px 44px rgba(0, 0, 0, .55);
+  --shadow-block: 0 1px 2px rgba(0, 0, 0, .4), 0 4px 12px rgba(0, 0, 0, .3);
+  --shadow-paper: 0 3px 12px rgba(0, 0, 0, .38), 0 1px 2px rgba(0, 0, 0, .28);
+  --scroll-thumb: rgba(238, 226, 203, .22);
+  --scroll-thumb-hover: rgba(238, 226, 203, .36);
+}
+
+/* 毛玻璃回退（app.css 的同名规则在本文件之前，这里跟随新色板重写一次） */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root { --glass: #fbf7ef; }
+  html[data-theme='dark'] { --glass: #262019; }
+}
+
+/* ------------------------------------------------------------------ *
+ * 底层：纸张
+ * ------------------------------------------------------------------ */
+
+body {
+  /* 全站中文统一为衬线（与日期标题同一套字），英文装饰仍走 --font-script */
+  font-family: var(--font-serif);
+  /* 2026-10-30 用户口径：大背景改纯色 —— 原来的顶部暖光径向渐变在宽屏上
+     收边处会留下一道横向色带，改成单一 --bg，纸感交给卡片自身 */
+  background: var(--bg);
+}
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+/* 深色同样只用纯色底（不再叠顶部暖光与纸纹） */
+html[data-theme='dark'] body {
+  background: var(--bg);
+}
+
+::selection { background: rgba(104, 118, 90, .24); }
+html[data-theme='dark'] ::selection { background: rgba(156, 174, 135, .3); }
+
+/* ------------------------------------------------------------------ *
+ * 顶栏
+ * ------------------------------------------------------------------ */
+
+/* 顶栏 = 一整幅暖奶油纸（不再浮成一张卡片）：单行、底部一条极淡发丝线 */
+.app-header {
+  gap: 18px;
+  min-height: 82px;
+  padding: 10px 26px;
+  background: var(--header-bg);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  box-shadow: none;
+  overflow: hidden;
+}
+html[data-theme='dark'] .app-header {
+  box-shadow: none;
+}
+
+/* 品牌块：米白小方，内嵌网页 logo（logo 本身不动） */
+.brand {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-block);
+}
+@media (hover: hover) {
+  .brand:hover { box-shadow: var(--shadow); transform: translateY(-1px); }
+}
+
+/* 日期：衬线标题式排版（不再当灰色胶囊） */
+.today-chip {
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--text);
+  font-family: var(--font-serif);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: .4px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+/* 顶栏枝条：2026-10-30 用户口径删除诗句，枝条从居中装饰挪到日期右侧的原诗句位置 */
+.header-branch {
+  display: block;
+  flex: none;
+  width: 150px;
+  height: 56px;
+  margin-left: 6px;
+  pointer-events: none;
+  opacity: .84;
+  background: url("../assets/illustrations/header-botanical-branch.png") center / contain no-repeat;
+}
+@media (max-width: 1000px) {
+  .header-branch { display: none; }
+}
+html[data-theme='dark'] .header-branch {
+  opacity: .34;
+  filter: brightness(1.1) saturate(.85);
+}
+
+/* 保存 / 设置：仍是「白块 + 阴影」的胶囊，只换成纸色 */
+.btn-plate {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-block);
+  font-weight: 600;
+  letter-spacing: .3px;
+}
+@media (hover: hover) {
+  .btn-plate:hover { background: var(--surface); box-shadow: var(--shadow); transform: translateY(-1px); }
+}
+/* 未保存：整颗胶囊填充鼠尾草绿、反白字；保存成功后回到纸白 + 深字。
+   三条状态一起写，压住 .btn-plate:hover / :active 的纸白底，避免悬停时绿底被抽走。 */
+.btn-cloud-save.is-unsaved,
+.btn-cloud-save.is-unsaved:hover,
+.btn-cloud-save.is-unsaved:active {
+  background: var(--primary);
+  border-color: transparent;
+  color: #fbf7ef;
+  box-shadow: 0 6px 14px rgba(82, 96, 68, .26), 0 1px 2px rgba(74, 56, 34, .12);
+}
+@media (hover: hover) {
+  .btn-cloud-save.is-unsaved:hover {
+    box-shadow: 0 9px 20px rgba(82, 96, 68, .32), 0 1px 2px rgba(74, 56, 34, .12);
+    transform: translateY(-1px);
+  }
+}
+.btn-cloud-save.is-unsaved:active { transform: translateY(0); }
+html[data-theme='dark'] .btn-cloud-save.is-unsaved,
+html[data-theme='dark'] .btn-cloud-save.is-unsaved:hover,
+html[data-theme='dark'] .btn-cloud-save.is-unsaved:active {
+  color: #211c15;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, .4);
+}
+
+/* 设置按钮：加一枚线稿齿轮（装饰，不改变点击区域） */
+#btn-settings::before {
+  content: "";
+  width: 14px;
+  height: 14px;
+  flex: none;
+  background: currentColor;
+  -webkit-mask: var(--ico-gear) center / contain no-repeat;
+  mask: var(--ico-gear) center / contain no-repeat;
+  opacity: .8;
+}
+
+/* 分段控件：暖色轨道 + 鼠尾草选中块 */
+.view-switch {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px;
+  height: 34px;
+  /* 手机档按钮 40px 比轨道内容高（38px）——居中对齐让选中块上下留边相等，
+     不再贴着底边；桌面档 100% 高不受影响 */
+  align-items: center;
+}
+.view-switch-btn { border-radius: 999px; }
+@media (min-width: 641px) {
+  .view-switch { height: 34px; }
+  .view-switch-btn { height: 100%; line-height: 26px; }
+}
+.view-switch-btn.is-active,
+.view-switch.has-thumb .view-switch-btn.is-active {
+  color: #fbf7ef;
+}
+.view-switch.has-thumb .view-switch-btn.is-active { color: #fbf7ef; }
+html[data-theme='dark'] .view-switch.has-thumb .view-switch-btn.is-active { color: #1b1712; }
+.view-switch-btn.is-active {
+  background: var(--primary);
+  box-shadow: 0 1px 3px rgba(60, 46, 28, .28);
+}
+.view-switch-thumb {
+  background: var(--primary);
+  border-radius: 999px;
+  box-shadow: 0 1px 3px rgba(60, 46, 28, .28);
+}
+html[data-theme='dark'] .view-switch-thumb { box-shadow: 0 1px 3px rgba(0, 0, 0, .45); }
+
+/* 顶栏按钮与分段控件上下边对齐（34px） */
+.btn-plate { height: 34px; }
+/* 本文件后面的 `.btn` 方角默认值会把这枚胶囊也压成 8px；按设计只保留顶栏两枚圆头 */
+.app-header .btn-plate { border-radius: 999px; }
+/* 2026-10-30：游客态隐藏「保存」（JS 置 hidden），必须压过 .btn 的 inline-flex */
+.btn-cloud-save[hidden] { display: none; }
+@media (max-width: 640px) {
+  .btn-plate { height: 44px; }
+}
+
+/* ------------------------------------------------------------------ *
+ * 通用按钮 / 表单控件
+ * ------------------------------------------------------------------ */
+
+/* 按钮：12px 纸片圆角，不做全站胶囊（顶栏「保存 / 设置」是唯一胶囊例外）。
+   次级按钮 = 浅米白底 + 极浅暖棕边 + 一点轻投影；主按钮仍是鼠尾草绿 + 暖白字。 */
+.btn {
+  border-radius: var(--radius-sm);
+  border-color: rgba(115, 95, 66, .16);
+  box-shadow: 0 1px 2px rgba(74, 56, 34, .06);
+}
+.btn-ghost { border-color: transparent; box-shadow: none; }
+/* 微型按钮（设置行内「改名 / 删除」、日历翻页、提示条、完成台操作）：
+   高度收在 26px，圆角取 10px —— 12px 在 20 多像素的高度上会变成胶囊。 */
+.btn-sm,
+.banner .btn,
+.dock-actions .btn,
+.dp-cal-prev, .dp-cal-next, .dp-cal-today {
+  border-radius: var(--radius-xs);
+  min-height: 26px;
+}
+.btn-primary {
+  background: var(--primary);
+  color: #fbf7ef;
+  border-color: transparent;
+  box-shadow: 0 1px 2px rgba(60, 46, 28, .16);
+}
+html[data-theme='dark'] .btn-primary { color: #1b1712; }
+@media (hover: hover) {
+  .btn-primary:hover { background: color-mix(in srgb, var(--primary) 88%, #342c23); box-shadow: 0 3px 10px rgba(60, 46, 28, .22); }
+  html[data-theme='dark'] .btn-primary:hover { background: color-mix(in srgb, var(--primary) 88%, #f1e8d8); }
+}
+.btn[disabled] { opacity: .45; }
+.btn-danger { background: var(--danger-weak); color: var(--danger); }
+
+.switch input[type=checkbox] { background: rgba(120, 108, 90, .3); }
+.switch input[type=checkbox]:checked { background: var(--primary); }
+.switch input[type=radio] { accent-color: var(--primary); }
+/* 开关圆钮 / 滑条滑块：暖白纸面，不用纯白 */
+.switch input[type=checkbox]::after { background: var(--header-bg); }
+.field input[type="range"].range::-webkit-slider-thumb { background: var(--surface); }
+.field input[type="range"].range::-moz-range-thumb { background: var(--surface); }
+
+/* 提示条 */
+.banner {
+  background: var(--surface);
+  border-color: var(--border);
+  box-shadow: var(--shadow-sm);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.banner-info { background: var(--primary-weak); }
+.banner-warn { background: var(--warn-weak); }
+.banner-danger { background: var(--danger-weak); }
+
+/* ------------------------------------------------------------------ *
+ * 日视图 · 卡片与标题
+ * ------------------------------------------------------------------ */
+
+/* 日视图不再共用一块底板：整块面板透明，交给下面每张纸卡自己立起来。
+   标题 / 日期直接落在页面的米纸上，卡片之间露出纸底与间距。 */
+.panel-day {
+  position: relative;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+html[data-theme='dark'] .panel-day { box-shadow: none; }
+
+/* 日期行 */
+.day-title {
+  font-family: var(--font-serif);
+  font-size: 25px;
+  font-weight: 600;
+  letter-spacing: .6px;
+  color: var(--text);
+}
+.day-sub { font-size: 12px; color: var(--text-3); letter-spacing: .2px; }
+
+/* 「今天」：米白纸片（12px 圆角，与旁边圆形「+」形成层级差异） */
+.date-nav-btn { border-radius: var(--radius-sm); }
+.date-nav-btn.is-current {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-block);
+  font-weight: 600;
+}
+/* 新建：奶白圆钮 + 鼠尾草加号（唯一保留的圆形图标按钮，不上毛玻璃） */
+.btn-add-round {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--primary);
+  box-shadow: var(--shadow-block);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+@media (hover: hover) {
+  .btn-add-round:hover { background: var(--surface); box-shadow: var(--shadow); }
+}
+html[data-theme='dark'] .btn-add-round { border-color: var(--border); }
+@media (hover: hover) {
+  html[data-theme='dark'] .btn-add-round:hover { background: var(--surface); }
+}
+
+/* 章节标题：衬线 + 线稿小图标 */
+.section-head h2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-serif);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: .6px;
+  color: var(--text);
+}
+.section-head h2::before {
+  content: "";
+  width: 16px;
+  height: 16px;
+  flex: none;
+  /* 参考图里的分区图标是暖赭色细线，不再跟标题同色 */
+  background: var(--gold);
+  opacity: .92;
+  -webkit-mask: var(--ico, none) center / contain no-repeat;
+  mask: var(--ico, none) center / contain no-repeat;
+}
+.untimed-section { --ico: var(--ico-list); }
+.finish-dock { --ico: var(--ico-check); }
+.countdown-section { --ico: var(--ico-clock); }
+.notes-section { --ico: var(--ico-pen); }
+html[data-theme='dark'] .section-head h2::before { background: #cbb083; opacity: .86; }
+.muted { color: var(--text-3); }
+
+/* ------------------------------------------------------------------ *
+ * 时间轴
+ * ------------------------------------------------------------------ */
+
+.timeline-section {
+  position: relative;
+  margin-bottom: 20px;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-paper);
+}
+html[data-theme='dark'] .timeline-section { background: var(--surface); }
+
+.timeline-scroll {
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: var(--radius);
+  box-shadow: none;
+  scrollbar-gutter: stable;
+}
+/* 时间轴比卡片窄时（整日压缩后），刻度带仍铺满卡片宽度，避免半截色带 */
+.timeline-inner { min-width: 100%; }
+.timeline-ruler { min-width: 100%; }
+html[data-theme='dark'] .timeline-scroll {
+  background: transparent;
+  box-shadow: none;
+}
+
+.timeline-ruler {
+  /* 刻度带比原稿高 24px：上方留一条纸带，放当前时间胶囊与小尾巴；
+     刻度字号下移到最后一行，仍贴着内容区上沿。与 .timeline-now 的 --now-band 同值。 */
+  height: calc(var(--ruler-height) + 24px);
+  background: color-mix(in srgb, var(--surface) 78%, var(--surface-2));
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--radius) var(--radius) 0 0;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.ruler-tick {
+  font-size: 11px;
+  letter-spacing: .3px;
+  color: var(--text-3);
+}
+
+.tl-gridline { border-left-color: rgba(132, 112, 82, .16); }
+html[data-theme='dark'] .tl-gridline { border-left-color: rgba(238, 226, 203, .1); }
+
+/* 折叠的空闲段：不上任何底色（图5：直接透明），只保留可悬停的热区 */
+.tl-idle {
+  border: 0;
+  background: transparent;
+  -webkit-mask-image: none;
+  mask-image: none;
+  filter: none;
+  opacity: 1;
+  pointer-events: none;
+}
+html[data-theme='dark'] .tl-idle {
+  background: transparent;
+}
+
+/* 当前时间：一条鼠尾草细线自圆点贯穿内容区，末端一枚极小菱形；
+   圆点在胶囊正下方，留 3px 空隙（2026-10-30 用户口径：不要中间三角，
+   被推回轴内时三角会压住数字，改成把线往上延长、圆点贴近胶囊）。
+   全部由 CSS 画出（不用任何插画 / 矢量素材），线条和胶囊压在线与卡片之上，
+   但不吃点击（pointer-events: none）。 */
+.timeline-now {
+  --now-band: 24px;
+  --now-ruler: calc(var(--ruler-height) + var(--now-band));
+  --now-pin: #718065;
+  --now-tag-bg: #5d674f;
+  --now-tag-ink: #f8f1e4;
+  /* 胶囊 5..24（高 19），圆点 27..36：底部留 3px 空隙 */
+  --now-gap: 3px;
+  --now-dot-c: calc(var(--now-band) + var(--now-gap) + 4.5px);
+  width: 2px;
+  margin-left: -1px;
+  background-color: transparent;
+  background-image: linear-gradient(var(--now-pin), var(--now-pin));
+  background-repeat: no-repeat;
+  /* 线从圆点中心起，止于菱形上尖内侧（菱形 10px + 离底 2px，线伸进去 2px 免得出现缝） */
+  background-position: 50% var(--now-dot-c);
+  background-size: 2px calc(100% - var(--now-dot-c) - 10px);
+  z-index: 6;
+}
+.timeline-now::before {  /* 定位圆点：9px */
+  content: "";
+  position: absolute;
+  top: calc(var(--now-dot-c) - 4.5px);
+  left: 50%;
+  width: 9px;
+  height: 9px;
+  margin: 0 0 0 -4.5px;
+  border-radius: 50%;
+  background: var(--now-pin);
+  -webkit-mask: none;
+  mask: none;
+}
+.timeline-now::after {  /* 收尾：5×10 的极小菱形 */
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  width: 5px;
+  height: 10px;
+  margin: 0 0 0 -2.5px;
+  background: var(--now-pin);
+  -webkit-mask: none;
+  mask: none;
+  transform: none;
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+}
+.timeline-now-label {
+  position: absolute;
+  top: 5px;
+  left: 50%;
+  /* --now-shift 由 JS 写入：贴近时间轴左右边界时把胶囊推回轴内 */
+  transform: translateX(calc(-50% + var(--now-shift, 0px)));
+  height: 19px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--now-tag-bg);
+  color: var(--now-tag-ink);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 19px;
+  letter-spacing: .3px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+}
+html[data-theme='dark'] .timeline-now {
+  --now-pin: #9cae87;
+  --now-tag-bg: #6c785c;
+  --now-tag-ink: #f4eddf;
+}
+
+/* 事项块：统一纸纹 + 色板淡底 + 左侧强调色条（DM-25）
+   色值只来自 src/core/palette.js 写入的 --event-bg / --event-accent / --event-text；
+   半透明色层压在纸纹上，保留暖象牙白底纹，同时各自带出浅绿 / 浅橘 / 浅紫。 */
+.tl-block {
+  background-color: var(--event-bg, var(--surface-2));
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--event-bg, var(--surface-2)) 68%, transparent),
+      color-mix(in srgb, var(--event-bg, var(--surface-2)) 68%, transparent)),
+    url("../assets/textures/paper-event.jpg");
+  background-size: cover, cover;
+  background-position: center, center;
+  background-repeat: no-repeat, no-repeat;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border: 1px solid rgba(124, 106, 82, .16);
+  border-radius: 8px;
+  /* 行高/内边距比原稿各收 1px：块高由 layout.js 按字宽估算，
+     收紧后长标题 + 时间行不会在固定块高里被裁掉尾部 */
+  padding: 3px 9px 3px 14px;
+  /* 纸片浮在纸面上：一层贴边细影 + 一层很浅的扩散影 */
+  box-shadow: 0 1px 1px rgba(74, 56, 34, .05), 0 3px 7px rgba(74, 56, 34, .05);
+  color: var(--event-text, var(--text));
+}
+html[data-theme='dark'] .tl-block {
+  border-color: rgba(238, 226, 203, .12);
+  background-color: #2a231b;
+  /* 纸纹放上层只与下面的色层相乘（不再连带把深色底也乘进去，否则一团黑） */
+  background-image:
+    url("../assets/textures/paper-event.jpg"),
+    linear-gradient(color-mix(in srgb, var(--event-accent, #718065) 26%, #3a2f22),
+      color-mix(in srgb, var(--event-accent, #718065) 26%, #3a2f22));
+  background-blend-mode: multiply, normal;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, .18), 0 3px 7px rgba(0, 0, 0, .16);
+  color: var(--text);
+}
+.tl-block::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 7px;
+  bottom: 7px;
+  width: 4px;
+  border-radius: 2px;
+  background: var(--event-accent, var(--cat, var(--text-3)));
+  opacity: .8;
+  pointer-events: none;
+}
+.tl-block.is-narrow,
+.tl-block.is-omitted,
+.tl-block.is-tiny,
+.tl-block.is-expanded { padding-left: 6px; }
+/* 2026-10-30（用户口径）：省略块里只有一个居中的「…」——左右内边距必须等宽，
+   上面那句 6px 左内边距会让块中心整体右偏 1px（看上去「省略号又偏右」）。 */
+.tl-block.is-omitted { padding-left: 4px; }
+.tl-block.is-narrow::before,
+.tl-block.is-omitted::before,
+.tl-block.is-tiny::before,
+.tl-block.is-expanded::before { display: none; }
+
+.tl-block .tl-title { font-size: 13px; font-weight: 650; letter-spacing: .1px; line-height: 1.28; }
+.tl-block .tl-time,
+.tl-block .tl-note { color: color-mix(in srgb, var(--event-text, var(--text)) 74%, var(--text-2)); }
+.tl-block .tl-time { line-height: 1.2; }
+.tl-block .tl-note { line-height: 1.3; margin-top: 1px; }
+html[data-theme='dark'] .tl-block .tl-time,
+html[data-theme='dark'] .tl-block .tl-note { color: var(--text-2); }
+.tl-block .tl-chip {
+  /* 胶囊文字再压一档明度：淡色类别字放在暖纸底上也要读得清 */
+  color: color-mix(in srgb, var(--cat, var(--text-2)) 50%, #3a3025);
+  background: rgba(246, 239, 227, .82);
+  border: 1px solid rgba(120, 100, 72, .1);
+}
+html[data-theme='dark'] .tl-block .tl-chip {
+  color: color-mix(in srgb, var(--cat, var(--text-2)) 60%, #f1e8d8);
+  background: rgba(27, 23, 18, .35);
+  border-color: rgba(238, 226, 203, .12);
+}
+.tl-block.is-urgent .tl-title { color: var(--danger); }
+/* 2026-10-30（用户口径）：悬停预览是原块的「完整版」，必须盖住原块、左侧竖条照常显示。
+   省略/微块折叠态不给竖条留位，预览态要把竖条与内边距补回来。 */
+.tl-block.is-peek { padding: 4px 10px 4px 14px; }
+.tl-block.is-peek::before { display: block; }
+/* 展开卡（浮层）：不透明纸面，避免背后刻度透上来 */
+.is-pinned-expand {
+  background: var(--surface);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: var(--shadow-lg);
+}
+.tl-block .item-detail { background: transparent; }
+.item-actions .btn {
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 1px 2px rgba(74, 56, 34, .07), 0 2px 6px rgba(74, 56, 34, .05);
+}
+/* 未排事项的展开按钮是独立一行：给足 30px 高，12px 圆角才不会被压成胶囊 */
+.untimed-item.is-expanded .item-actions .btn {
+  min-height: 30px;
+  padding: 4px 9px;
+  border-radius: var(--radius-sm);
+}
+@media (hover: hover) {
+  .item-actions .btn:hover { background: var(--surface); box-shadow: 0 2px 6px rgba(74, 56, 34, .16), 0 6px 16px rgba(74, 56, 34, .1); }
+}
+.item-actions .btn.is-complete { color: var(--primary); }
+.item-actions .btn.is-on { color: var(--danger); }
+
+.timeline-empty { color: var(--text-3); }
+
+/* ------------------------------------------------------------------ *
+ * 未排时段：一张纸卡 + 细分隔线的行（不再每条都是厚重独立卡）
+ * ------------------------------------------------------------------ */
+
+.untimed-section {
+  position: relative;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-paper);
+}
+
+.untimed-list { gap: 0; }
+
+.untimed-item {
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  box-shadow: none;
+  padding: 9px 6px;
+}
+.untimed-list > .untimed-item:last-child { border-bottom: 0; }
+@media (hover: hover) {
+  .untimed-item:hover { box-shadow: none; transform: none; background: color-mix(in srgb, var(--surface-2) 55%, transparent); }
+  html[data-theme='dark'] .untimed-item:hover { background: rgba(238, 226, 203, .05); }
+}
+.untimed-item.is-expanded { background: color-mix(in srgb, var(--surface-2) 40%, transparent); }
+.untimed-item.is-dragging { opacity: .45; }
+.untimed-drop-line { background: var(--primary); }
+.ui-seq {
+  font-family: var(--font-serif);
+  font-size: 12px;
+  color: var(--text-3);
+  opacity: .9;
+  width: 20px;
+}
+.ui-title { font-size: 13.5px; font-weight: 600; letter-spacing: .2px; }
+.ui-cat { width: 7px; height: 7px; opacity: .8; }
+.ui-note { font-size: 11.5px; color: var(--text-2); }
+/* 2026-10-30（用户反馈）：深色下未排事项的类别胶囊太亮 —— 行内写的是浅色 --cat-bg
+   （奶油粉一类），压在深色纸卡上像一块发光标签。与时段块 / 周视图胶囊同一口径：
+   文字取类别色的 60% 混暖白，底改半透明深墨，只留一点色相。 */
+html[data-theme='dark'] .ui-chip {
+  color: color-mix(in srgb, var(--cat, var(--text-2)) 60%, #f1e8d8);
+  background: rgba(27, 23, 18, .35);
+  /* 用内阴影描边：胶囊没有固定宽高，真加 border 会撑大 2px，深浅切换时行高会跳 */
+  box-shadow: inset 0 0 0 1px rgba(238, 226, 203, .12);
+}
+.untimed-item.is-urgent .ui-title { color: var(--danger); }
+
+.empty-hint {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: rgba(251, 247, 239, .5);
+  color: var(--text-3);
+}
+html[data-theme='dark'] .empty-hint { background: rgba(238, 226, 203, .03); }
+
+/* ------------------------------------------------------------------ *
+ * 事项完成台（含空状态插画：猫在书堆上）
+ * ------------------------------------------------------------------ */
+
+.finish-dock {
+  position: relative;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-paper);
+}
+/* app.css 里 `html[data-theme='dark'] .lower-row > .finish-dock` 权重更高，
+   会把完成台压回半透明 surface-2；这里用同样的选择器把它拉回纸面 */
+html[data-theme='dark'] .finish-dock,
+html[data-theme='dark'] .lower-row > .finish-dock { background: var(--surface); }
+.finish-dock-body {
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  padding: 4px 2px;
+}
+.finish-dock.is-drop-target .finish-dock-body {
+  border: 1px dashed var(--primary);
+  background: var(--primary-weak);
+}
+
+/* 空台：只留插画（2026-10-30 用户口径：不再显示鼓励文案）。
+   插画四边用径向蒙版化开，不再是一块带硬边的浅色方块。 */
+.finish-dock-body:empty {
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px 10px 10px;
+  background: transparent;
+  /* 插画垫色（见 --art-plate）：略大于插画本体，半透明处透出的是暖纸不是深底 */
+  background-image: radial-gradient(closest-side, var(--art-plate) 0%, color-mix(in srgb, var(--art-plate) 40%, transparent) 68%, transparent 100%);
+  background-position: center;
+  background-size: 132px 120px;
+  background-repeat: no-repeat;
+}
+.finish-dock-body:empty::before {
+  content: "";
+  display: block;
+  width: 118px;
+  height: 106px;
+  /* 2026-10-30（用户反馈）：图内大片半透明纸雾，深色下会透出底下的深色成暗斑；
+     垫色画在容器上（不画在插画自身，插画的 drop-shadow 只按轮廓投影） */
+  background-image:
+    url("../assets/illustrations/empty-cat.png");
+  background-position: center;
+  background-size: contain;
+  background-repeat: no-repeat;
+  /* 底图已抠掉米色纸面；四边淡出，底边多淡一点，把书脚残留的白纸边化进纸里 */
+  -webkit-mask-image:
+    linear-gradient(90deg, transparent 0, #000 8%, #000 92%, transparent 100%),
+    linear-gradient(0deg, transparent 0, #000 8%, #000 78%, transparent 100%);
+  -webkit-mask-composite: source-in;
+  mask-image:
+    linear-gradient(90deg, transparent 0, #000 8%, #000 92%, transparent 100%),
+    linear-gradient(0deg, transparent 0, #000 8%, #000 78%, transparent 100%);
+  mask-composite: intersect;
+  filter: drop-shadow(0 6px 14px rgba(74, 56, 34, .08));
+  opacity: 1;
+}
+html[data-theme='dark'] .finish-dock-body:empty::before {
+  /* 深色下书脚那圈白纸会发光：底边多化一截，让书和纸边一起沉进底色 */
+  -webkit-mask-image:
+    linear-gradient(90deg, transparent 0, #000 12%, #000 88%, transparent 100%),
+    linear-gradient(0deg, transparent 0, #000 18%, #000 62%, transparent 100%);
+  mask-image:
+    linear-gradient(90deg, transparent 0, #000 12%, #000 88%, transparent 100%),
+    linear-gradient(0deg, transparent 0, #000 18%, #000 62%, transparent 100%);
+  filter: brightness(.86) saturate(.9) drop-shadow(0 6px 16px rgba(0, 0, 0, .42));
+  opacity: .95;
+}
+
+/* 完成台条目 */
+.dock-item {
+  background: var(--surface);
+  border-color: var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 1px 2px rgba(74, 56, 34, .05);
+}
+.dock-clock { font-family: var(--font-serif); font-weight: 600; letter-spacing: .5px; }
+.dock-chip { border-radius: 999px; }
+.dock-back:hover { background: var(--surface-2); }
+.dock-modes .dock-mode.is-active { background: var(--primary-weak); color: var(--primary); }
+.dock-select { background: var(--surface); border-color: var(--border); }
+.dock-phase { color: var(--primary); }
+.dock-phase[data-phase='break'] { color: var(--ok); }
+.dock-wheels::before,
+.dp-wheels::before,
+.dp-lock::before { background: var(--surface-2); }
+
+/* ------------------------------------------------------------------ *
+ * 右栏（倒计时 + 今日记录）
+ * ------------------------------------------------------------------ */
+
+.side-rail {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 0;
+  gap: 16px;
+}
+html[data-theme='dark'] .side-rail { background: transparent; }
+
+/* 右栏顶部：一张水彩明信片（山间小屋压在右侧，手写句走左边的浅坡） */
+.side-rail::before {
+  content: "DayLight";
+  white-space: pre;
+  flex: 0 0 auto;
+  display: block;
+  min-height: 112px;
+  margin: 0;
+  padding: 16px 18px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-paper);
+  font-family: var(--font-script);
+  font-size: 34px;
+  line-height: 1.12;
+  color: #4a3f2d;
+  letter-spacing: .2px;
+  background-color: var(--surface);
+  background-image: url("../assets/illustrations/rail-cottage.jpg");
+  background-repeat: no-repeat;
+  background-position: 50% 50%;
+  background-size: cover;
+  pointer-events: none;
+  overflow: hidden;
+}
+html[data-theme='dark'] .side-rail::before {
+  color: #2e2618;
+  background-color: var(--surface);
+  background-image: url("../assets/illustrations/rail-cottage.jpg");
+  /* 去掉渐变后，滤镜对文字与底图同等缩放 —— 亮天空与米色字会一起落到同一亮度，
+     所以暗色下改成深字，只把整张明信片压暗一档。 */
+  filter: brightness(.62) saturate(.82);
+}
+
+/* 倒计时 / 今日记录：各自一张纸卡，不再共用右栏底板 */
+.countdown-section {
+  position: relative;
+  padding: 14px 16px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-paper);
+  max-height: calc((100% - 16px) * 2 / 3);
+}
+html[data-theme='dark'] .countdown-section { background: var(--surface); }
+
+.notes-section {
+  position: relative;
+  padding: 14px 16px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-paper);
+}
+html[data-theme='dark'] .notes-section { background: var(--surface); }
+
+/* 周视图右栏只有「当周记录」这一节（:first-child 会把上内边距抹成 0），标题行会贴住
+   卡片上缘。补一段与下方 8px 行距等量的上留白，让笔图标 + 标题落在顶端空白带的正中。 */
+.week-view .side-rail .notes-section { padding-top: 8px; }
+
+/* 倒计时卡片：三张同款奶油纸卡，圆角比容器小一档，靠轻扩散投影落纸 */
+.cd-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 1px 2px rgba(70, 52, 30, .03), 0 3px 10px rgba(70, 52, 30, .04);
+  overflow: hidden;
+}
+@media (hover: hover) {
+  .cd-item:hover { box-shadow: var(--shadow-sm); }
+}
+.cd-title { font-size: 12.5px; font-weight: 600; letter-spacing: .2px; }
+.cd-dot { width: 6px; height: 6px; }
+/* 2026-10-30（参考图）：标题行右端一枚细线小日历，只做装饰 */
+.cd-ico {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  margin-left: 2px;
+  color: var(--text-3);
+  background: currentColor;
+  opacity: .62;
+  -webkit-mask: var(--ico-calendar) center / contain no-repeat;
+  mask: var(--ico-calendar) center / contain no-repeat;
+}
+html[data-theme='dark'] .cd-ico { opacity: .55; }
+.cd-clock {
+  font-family: var(--font-serif);
+  font-weight: 600;
+  letter-spacing: .5px;
+  color: var(--text);
+}
+.cd-num { font-variant-numeric: tabular-nums; }
+.cd-unit { color: var(--text-3); font-size: 11.5px; font-weight: 500; }
+.cd-expired { color: var(--text-3); }
+.cd-empty-art {
+  background-color: var(--surface);
+  /* 插画垫色（见 --art-plate）：略大于插画本体，半透明处透出的是暖纸不是深底 */
+  background-image: radial-gradient(closest-side, var(--art-plate) 0%, color-mix(in srgb, var(--art-plate) 40%, transparent) 68%, transparent 100%);
+  background-position: center;
+  background-size: 90px 98px;
+  background-repeat: no-repeat;
+  border-radius: var(--radius-sm);
+}
+/* 空态中央的静物插画（原在时间轴左下角，2026-10-30 用户口径移到倒计时空框里）：
+   比原先的淡影提亮，但收在框内、四边留白。
+   2026-10-30（用户反馈）：与完成台的猫图同一口径做四边虚化；
+   图内有大量半透明纸雾像素，深色下会直接透出底下的深色成为暗斑，
+   所以插画底下再垫一层暖色（--art-plate，浅色下为透明、不改变原样）。 */
+.cd-empty-art::before {
+  content: "";
+  width: 84px;
+  height: 92px;
+  background-image:
+    url("../assets/illustrations/timeline-coffee-books.png");
+  background-position: center;
+  background-size: contain;
+  background-repeat: no-repeat;
+  -webkit-mask-image:
+    linear-gradient(90deg, transparent 0, #000 8%, #000 92%, transparent 100%),
+    linear-gradient(0deg, transparent 0, #000 8%, #000 78%, transparent 100%);
+  -webkit-mask-composite: source-in;
+  mask-image:
+    linear-gradient(90deg, transparent 0, #000 8%, #000 92%, transparent 100%),
+    linear-gradient(0deg, transparent 0, #000 8%, #000 78%, transparent 100%);
+  mask-composite: intersect;
+  opacity: .9;
+  filter: drop-shadow(0 4px 10px rgba(74, 56, 34, .1));
+}
+/* 深色下不再整体提亮（brightness 1.4 会把暖色洗成灰白，和完成台猫图的自然色差很远），
+   只补一点饱和与更柔的投影，让插画自己原来的纸色透出来 */
+html[data-theme='dark'] .cd-empty-art::before {
+  opacity: .96;
+  filter: saturate(1.03) drop-shadow(0 6px 16px rgba(0, 0, 0, .42));
+}
+
+/* 今日记录：横线纸（2026-10-30 用户口径：水仙花下线，正文用霞鹜文楷、字号略大，
+   底部落在下方横线上；横线整体上移，与文字基线之间只留一点缝）。
+   纸纹取自事项块同一张 paper-event（multiply 压在底色上），横线画在纸纹之上。 */
+.notes-input {
+  background-color: color-mix(in srgb, var(--surface) 55%, var(--surface-2));
+  /* 与 .tl-block 同构：半透明纸色压住纸纹，纹理只透出三成，不会把记录区压成牛皮纸 */
+  background-image:
+    repeating-linear-gradient(180deg, transparent 0 27px, rgba(150, 128, 96, .21) 27px 28px),
+    linear-gradient(color-mix(in srgb, var(--surface) 68%, transparent),
+      color-mix(in srgb, var(--surface) 68%, transparent)),
+    url("../assets/textures/paper-event.jpg");
+  background-repeat: repeat, no-repeat, no-repeat;
+  background-position: 0 7px, center, center;
+  background-size: 100% 28px, cover, cover;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  line-height: 28px;
+  padding: 10px 14px;
+  color: var(--text);
+  font-family: var(--font-serif);
+  font-size: 15px;
+}
+html[data-theme='dark'] .notes-input {
+  background-color: #2a231b;
+  /* 深色：纸纹先与深色层相乘再叠横线 —— 与 .tl-block 的深色纸纹同一口径 */
+  background-image:
+    repeating-linear-gradient(180deg, transparent 0 27px, rgba(238, 226, 203, .09) 27px 28px),
+    url("../assets/textures/paper-event.jpg"),
+    linear-gradient(#332a20, #332a20);
+  background-repeat: repeat, no-repeat, no-repeat;
+  background-position: 0 7px, center, 0 0;
+  background-size: 100% 28px, cover, 100% 100%;
+  background-blend-mode: normal, multiply, normal;
+}
+.notes-input::placeholder { color: var(--text-3); opacity: 1; }
+.notes-input:focus {
+  border-color: var(--primary);
+  background-color: var(--surface);
+  box-shadow: 0 0 0 4px var(--primary-weak);
+}
+.notes-section .muted { font-variant-numeric: tabular-nums; }
+
+/* 字数计数：软目标 500，只提示不截断 */
+.notes-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+.notes-count {
+  font-size: 11.5px;
+  line-height: 1;
+  letter-spacing: .4px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  transition: color .18s ease;
+}
+.notes-count.is-over { color: var(--terracotta); }
+
+/* ------------------------------------------------------------------ *
+ * 周视图
+ * ------------------------------------------------------------------ */
+
+.week-title {
+  font-family: var(--font-serif);
+  font-size: 25px;
+  font-weight: 600;
+  letter-spacing: .5px;
+}
+/* 2026-10-30 用户口径：周表标题行收进左侧卡片内（同日视图），
+   卡片负责白底/边框/投影，滚动仍由 .week-scroll 承担。 */
+.week-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 14px 16px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+.week-card .week-head { flex: 0 0 auto; margin: 0 0 10px; }
+.week-scroll {
+  background: transparent;
+  /* 2026-10-30 用户口径：周表外框与日视图时间轴同一条细线（同色、同圆角） */
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: var(--radius);
+  box-shadow: none;
+}
+.wk-corner,
+.week-grid .wk-head {
+  background: color-mix(in srgb, var(--surface) 78%, var(--surface-2)) !important;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border-bottom: 1px solid var(--border);
+}
+.wk-head .wk-dow { font-family: var(--font-serif); font-size: 12.5px; letter-spacing: .6px; }
+.wk-head.is-today .wk-dow { color: var(--danger); }
+.wk-col { border-left: 1px solid rgba(132, 112, 82, .14); }
+@media (hover: hover) {
+  .wk-col:hover { background: rgba(140, 120, 90, .05); }
+}
+.wk-axis { background: color-mix(in srgb, var(--surface) 60%, var(--surface-2)); }
+.wk-axis-tick { color: var(--text-3); }
+.wk-hourline { border-top: 1px solid rgba(132, 112, 82, .14); }
+html[data-theme='dark'] .wk-hourline,
+html[data-theme='dark'] .wk-col { border-color: rgba(238, 226, 203, .1); }
+.wk-idle { background: transparent; }
+
+/* 周视图事项块（DM-25 / 2026-10-30 用户口径）：
+   块顶横条在窄列里像一道眉线、还会被右上角胶囊截断 → 改回与日视图同款的左侧竖条；
+   底色同样走「纸纹 + 半透明色层」，文字色取色板 text。 */
+.wk-item {
+  background-color: var(--event-bg, var(--surface-2));
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--event-bg, var(--surface-2)) 68%, transparent),
+      color-mix(in srgb, var(--event-bg, var(--surface-2)) 68%, transparent)),
+    url("../assets/textures/paper-event.jpg");
+  background-size: cover, cover;
+  background-position: center, center;
+  background-repeat: no-repeat, no-repeat;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border: 1px solid rgba(124, 106, 82, .16);
+  border-radius: 8px;
+  box-shadow: 0 1px 1px rgba(74, 56, 34, .05), 0 3px 7px rgba(74, 56, 34, .05);
+  padding: 5px 6px 5px 12px;
+  color: var(--event-text, var(--text));
+}
+.wk-item::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 5px;
+  bottom: 5px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--event-accent, var(--cat, var(--text-3)));
+  opacity: .8;
+  pointer-events: none;
+}
+/* 微块 / 省略态 / 展开态：不给竖条留位，与日视图隐藏竖条同口径 */
+.wk-item.is-tiny,
+.wk-item.is-omitted,
+.wk-item.is-expanded { padding-top: 2px; padding-left: 6px; }
+/* 2026-10-30（用户口径）：省略块内只有居中的「…」，四边内边距对称才真正居中
+   （原来左右 6/4、上下 2/1，中心右偏 1px）。 */
+.wk-item.is-omitted { padding: 2px 4px; }
+.wk-item.is-tiny::before,
+.wk-item.is-omitted::before,
+.wk-item.is-expanded::before { display: none; }
+/* 2026-10-30（用户口径）：悬停预览要像正常块一样带左侧竖条，并完整盖住原块
+   （高度下限取原块高 --block-h；宽度下限由 itemcard 内联 min-width 兜住）。 */
+.wk-item.is-peek {
+  padding: 4px 8px 4px 12px;
+  min-height: var(--block-h, 0px);
+}
+.wk-item.is-peek::before { display: block; }
+html[data-theme='dark'] .wk-item {
+  border-color: rgba(238, 226, 203, .12);
+  background-color: #2a231b;
+  background-image:
+    url("../assets/textures/paper-event.jpg"),
+    linear-gradient(color-mix(in srgb, var(--event-accent, #718065) 26%, #3a2f22),
+      color-mix(in srgb, var(--event-accent, #718065) 26%, #3a2f22));
+  background-blend-mode: multiply, normal;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, .18), 0 3px 7px rgba(0, 0, 0, .16);
+  color: var(--text);
+}
+.wk-item.is-pinned-expand {
+  background-image: none;
+  background: var(--surface);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.wk-item .wk-title { font-weight: 650; }
+.wk-item .wk-time,
+.wk-item .wk-note { color: color-mix(in srgb, var(--event-text, var(--text)) 74%, var(--text-2)); }
+html[data-theme='dark'] .wk-item .wk-time,
+html[data-theme='dark'] .wk-item .wk-note { color: var(--text-2); }
+.wk-item .wk-chip {
+  color: color-mix(in srgb, var(--cat, var(--text-2)) 50%, #3a3025);
+  background: rgba(246, 239, 227, .82);
+}
+html[data-theme='dark'] .wk-item .wk-chip {
+  color: color-mix(in srgb, var(--cat, var(--text-2)) 60%, #f1e8d8);
+  background: rgba(27, 23, 18, .35);
+}
+.week-grid-legend { color: var(--text-3); }
+
+/* ------------------------------------------------------------------ *
+ * 月 / 年视图
+ * ------------------------------------------------------------------ */
+
+.month-year-sep {
+  font-family: var(--font-serif);
+  font-size: 28px;
+  letter-spacing: 1px;
+  color: var(--text-3);
+  border-bottom: 1px solid var(--border);
+}
+.month-col {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 1px 2px rgba(74, 56, 34, .04);
+}
+@media (hover: hover) {
+  .month-col:hover { box-shadow: var(--shadow-sm); transform: none; background: color-mix(in srgb, var(--surface) 55%, var(--header-bg)); }
+  html[data-theme='dark'] .month-col:hover { background: color-mix(in srgb, var(--surface) 88%, var(--surface-2)); }
+}
+.month-col-head {
+  font-family: var(--font-serif);
+  font-size: 14px;
+  letter-spacing: .8px;
+  border-bottom: 1px solid var(--border);
+}
+.month-col-head .ym-m { font-size: 11px; letter-spacing: .3px; }
+.month-col-head .mch-plan { border-radius: var(--radius-xs); border-color: var(--border); }
+.month-dow { letter-spacing: 1px; color: var(--text-3); }
+.month-dow.is-weekend { color: var(--danger); opacity: .75; }
+.month-cell { border-radius: var(--radius-xs); }
+.month-cell.is-today {
+  background: var(--primary-weak);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 34%, transparent);
+}
+.month-cell.is-today .mc-day { color: var(--primary); }
+.mc-day { font-family: var(--font-serif); font-size: 12.5px; font-weight: 600; letter-spacing: .2px; }
+.mc-lunar { color: var(--text-3); }
+.mc-dot { background: var(--primary); opacity: .55; }
+.mc-noteline { background: var(--text-3); opacity: .7; }
+@media (hover: hover) {
+  .month-week-row:hover { background-color: var(--surface); box-shadow: var(--shadow-sm); }
+}
+.month-boundary {
+  background: var(--surface);
+  border-color: var(--border);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* 本月计划面板 */
+.month-plan { background: var(--surface); }
+.mp-title { font-family: var(--font-serif); font-weight: 600; letter-spacing: .6px; }
+.mp-head { border-bottom-color: var(--border); }
+.mp-item { background: var(--surface-2); border-radius: var(--radius-xs); }
+@media (hover: hover) {
+  .mp-item:hover { background: var(--surface-3); }
+}
+.mp-seq { background: var(--primary); color: #fbf7ef; font-weight: 600; }
+html[data-theme='dark'] .mp-seq { color: #1b1712; }
+.mp-add { border-radius: var(--radius-sm); }
+.mp-item:focus-within .mp-del { opacity: 1; }
+
+/* ------------------------------------------------------------------ *
+ * 弹窗 / 表单 / 选择器
+ * ------------------------------------------------------------------ */
+
+.modal-backdrop { background: rgba(52, 44, 35, .34); }
+html[data-theme='dark'] .modal-backdrop { background: rgba(0, 0, 0, .55); }
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+.modal-head { border-bottom: 1px solid var(--border); }
+.modal-title {
+  font-family: var(--font-serif);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: .6px;
+}
+.modal-foot {
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+.modal-foot .btn { border-radius: var(--radius-sm); }
+
+.field input[type="text"],
+.field input[type="date"],
+.field input[type="time"],
+.field select,
+.field textarea,
+.dp-date-btn,
+.dp-time-btn,
+.dp-select-btn {
+  background: var(--surface-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+}
+.field input:focus,
+.field select:focus,
+.field textarea:focus {
+  border-color: var(--primary);
+  background: var(--surface);
+  box-shadow: 0 0 0 4px var(--primary-weak);
+}
+.field > label,
+.field-label { color: var(--text-2); letter-spacing: .2px; }
+
+/* 事项颜色选择：20 个真实色块（DM-25）。底色 + 左侧强调色一起预览，
+   与时间轴事项块的「纸底 + 色条」同一套语言。 */
+.color-swatches {
+  display: grid;
+  /* 20 色固定 10 列 × 2 行：不用 auto-fill，免得窄弹窗里最后一行只剩两三个 */
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  gap: 6px;
+}
+.color-swatch {
+  position: relative;
+  height: 30px;
+  padding: 0;
+  cursor: pointer;
+  background: var(--sw-bg, var(--surface-2));
+  border: 1px solid rgba(74, 56, 34, .16);
+  border-radius: 6px;
+  box-shadow: 0 1px 1px rgba(74, 56, 34, .05);
+  transition: box-shadow var(--ease), transform var(--ease);
+}
+.color-swatch::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 7px;
+  bottom: 7px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--sw-accent, var(--text-3));
+  opacity: .9;
+}
+.color-swatch.is-on {
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--sw-accent, var(--primary)),
+    0 2px 6px rgba(74, 56, 34, .14);
+}
+@media (hover: hover) {
+  .color-swatch:hover { box-shadow: 0 0 0 1px var(--sw-accent, var(--primary)), 0 2px 6px rgba(74, 56, 34, .12); }
+}
+.color-swatch:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+html[data-theme='dark'] .color-swatch { border-color: rgba(238, 226, 203, .18); }
+
+.field input[type="range"].range::-webkit-slider-runnable-track {
+  background: linear-gradient(to right,
+    var(--primary) 0 var(--range-fill, 0%),
+    rgba(120, 108, 90, .26) var(--range-fill, 0%) 100%);
+}
+.field input[type="range"].range::-moz-range-progress { background: var(--primary); }
+.field input[type="range"].range::-moz-range-track { background: rgba(120, 108, 90, .26); }
+
+.dp-pop {
+  background: var(--surface);
+  border-color: var(--border);
+  border-radius: var(--radius);
+}
+.dp-select-item:hover { background: var(--surface-2); }
+.dp-select-item.is-selected { color: var(--primary); }
+.dp-cal-day.is-today { color: var(--primary); }
+.dp-cal-day.is-active { background: var(--primary); color: #fbf7ef; }
+html[data-theme='dark'] .dp-cal-day.is-active { color: #1b1712; }
+.dp-cal-day:hover { background: var(--surface-2); }
+.dp-wheel-item.is-active { color: var(--primary); }
+.dp-cal-prev, .dp-cal-next, .dp-cal-today { background: var(--surface-2); }
+.weekday-chip.is-on { background: var(--primary-weak); color: var(--primary); }
+.fieldset { border-color: var(--border); }
+.detail-row { border-bottom-color: var(--border); }
+.form-error { color: var(--danger); }
+
+/* 类别设置 */
+.cat-item {
+  background: var(--surface);
+  border-color: var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 1px 2px rgba(74, 56, 34, .04);
+}
+@media (hover: hover) {
+  .cat-item:hover { box-shadow: var(--shadow-sm); transform: none; }
+}
+.cat-swatch { border-radius: 4px; border-color: rgba(74, 56, 34, .12); }
+.settings-section { border-top: 1px solid var(--border); }
+.sync-meta { background: var(--surface-2); border-radius: var(--radius-xs); }
+
+/* Toast：暖墨底 */
+.toast {
+  background: rgba(52, 44, 35, .92);
+  color: #fbf7ef;
+  border-radius: var(--radius-xs);
+  box-shadow: var(--shadow-lg);
+}
+.toast .btn { color: #c7d3b6; }
+html[data-theme='dark'] .toast { background: rgba(241, 232, 216, .93); color: #1b1712; }
+html[data-theme='dark'] .toast .btn { color: var(--primary); }
+
+/* ------------------------------------------------------------------ *
+ * 2026-10-30 布局还原（美化.md 第二阶段）
+ *   左 70% / 右 30%，间距 16；时间轴撑到约 420，底行约 310；
+ *   两栏上下边对齐，内容不足时按比例拉伸。
+ * ------------------------------------------------------------------ */
+
+/* 日期行收进时间轴卡片内部：贴着卡片上沿的一条紧凑标题行 */
+.timeline-section > .day-head {
+  flex: 0 0 auto;
+  margin: 0 0 10px;
+  align-items: center;
+  gap: 12px;
+}
+.timeline-section > .day-head .day-title { font-size: 20px; letter-spacing: .5px; }
+.timeline-section > .day-head .day-sub { font-size: 11.5px; margin-top: 3px; }
+
+@media (min-width: 1024px) {
+  .app-body { padding: 14px 16px 16px; }
+  .panel-main { padding: 0; }
+  .panel-day {
+    display: flex;
+    flex-direction: column;
+    /* 定高：两栏共用同一个高度，时间轴才有确定的富余高度可分配。
+       676 = 320 时间轴 + 12 间距 + 310 底行 + 34 内边距，是观感下限；
+       --day-floor 由 day.js 在「轨道装不下滚动区」时垫高（窄视口 / 页面放大），
+       此时整页滚动，而不是把底部事项裁在横向滚动条下面。 */
+    height: max(calc(100vh - 82px - 30px), 676px, var(--day-floor, 0px));
+    min-height: 0;
+    padding: 16px 18px 18px;
+  }
+  .view-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    align-items: stretch;
+    grid-template-columns: minmax(0, 7fr) minmax(0, 3fr);
+    gap: 16px;
+  }
+  .view-body > * { min-height: 0; }
+  .view-main {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 0;
+  }
+  .timeline-section {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    /* 目标约 420（1440×900 时正好）；视口更矮时先让时间轴收，底行保持 310，
+       因为它是页面主体、但不该把页面顶出视口。 */
+    min-height: 320px;
+    margin-bottom: 0;
+    padding: 14px 16px 12px;
+  }
+  .timeline-scroll { flex: 1 1 0; min-height: 0; }
+  /* 周表原本按 max-height 自算高度，右栏却撑到面板底部 → 两边下沿错位。
+     这里让周表吃满左栏（内部滚动），底线自然与右栏对齐。 */
+  .week-view .week-card { flex: 1 1 auto; min-height: 0; }
+  .week-view .week-scroll { flex: 1 1 0; min-height: 280px; max-height: none; }
+  .lower-row {
+    flex: 0 0 auto;
+    min-height: 310px;
+    grid-template-columns: minmax(0, 7fr) minmax(0, 3fr);
+    gap: 16px;
+  }
+  .side-rail { min-height: 0; max-height: none; overflow-y: auto; }
+  .side-rail::before {
+    height: 84px;
+    min-height: 0;
+    padding: 9px 15px;
+    font-size: 30px;
+    line-height: 1.08;
+    box-sizing: border-box;
+  }
+  /* 右栏还有顶部明信片占位，2/3 上限会把记录区压到最低高度；
+     这里收到 5/9，记录区仍保有整段余量，倒计时超出时在卡内滚动。 */
+  .countdown-section { max-height: calc((100% - 16px) * 5 / 9); }
+}
+
+/* 窄屏：基础 2/3 上限在源序上晚于 app.css 的窄屏「不设上限」，
+   这里补一次同口径覆盖，手机端倒计时仍可整段撑开、不压缩记录区。 */
+@media (max-width: 1080px) {
+  .countdown-section { max-height: none; }
+}
+
+/* ------------------------------------------------------------------ *
+ * 2026-10-30 插画落位（美化.md 第五部分）
+ * ------------------------------------------------------------------ */
+
+/* ① 时间轴原有的小静物已移到倒计时空框中央（见 .cd-empty-art::before），
+      记录区的水仙花按用户口径一并下线。时间轴内容仍需压在各层之上。 */
+.timeline-scroll { position: relative; z-index: 1; }
+
+/* ------------------------------------------------------------------ *
+ * 响应式微调
+ * ------------------------------------------------------------------ */
+
+@media (max-width: 640px) {
+  .app-header { padding: calc(8px + env(safe-area-inset-top)) 10px 8px; gap: 6px; }
+  .header-right { gap: 6px; }
+  .brand { width: 44px; height: 44px; border-radius: 12px; }
+  /* 四档在 390px 宽里必须完整放下：收窄分段与两枚胶囊的内边距，
+     否则第 4 档（日）会顶出轨道，选中滑块跟着漏到卡片外 */
+  .view-switch { height: 44px; padding: 2px; }
+  .view-switch-btn {
+    min-width: 40px;
+    min-height: 40px;
+    height: 40px;
+    padding: 0 4px;
+    font-size: 13.5px;
+    border-radius: 999px;
+  }
+  .header-right > .btn { padding: 0 10px; }
+  .btn-plate { height: 44px; }
+  .panel-day { border-radius: 0; }
+  .day-title { font-size: 21px; letter-spacing: .4px; }
+  /* 2026-10-30 用户口径：周标题与日标题同号同字距（日标题实际落到 20px / .5px），
+     配合「2026年10月26日–11月1日」无空格格式即可在一行内排完。 */
+  .week-title { font-size: 20px; letter-spacing: .5px; }
+  /* 2026-10-30 用户口径：手机端「+」不再依赖字体基线，改由两根 CSS 细条精确居中 */
+  .btn-add-round { position: relative; font-size: 0; }
+  .btn-add-round::before,
+  .btn-add-round::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    background: currentColor;
+    border-radius: 1px;
+  }
+  .btn-add-round::before { width: 16px; height: 2px; margin: -1px 0 0 -8px; }
+  .btn-add-round::after { width: 2px; height: 16px; margin: -8px 0 0 -1px; }
+
+  /* 2026-10-30（用户口径）：手机端点开事项块 → 展开卡按视口放大，
+     完整显示标题 / 时间 / 备注；固定四颗按钮（完成 / 紧急 / 修改 / 删除）四宫格排布。
+     不再迁就原块尺寸（小块的按钮不再挤成 24px 高的一列），也不渲染「恢复默认」。 */
+  .tl-block.is-expanded.is-mobile-expand,
+  .wk-item.is-expanded.is-mobile-expand {
+    min-width: min(320px, calc(100vw - 32px));
+    max-width: calc(100vw - 24px);
+    height: auto !important;
+    min-height: 0;
+    max-height: calc(100vh - 32px);
+    overflow: auto;
+    padding: 9px 12px 10px 16px;
+    justify-content: flex-start;
+    align-items: stretch;
+  }
+  .tl-block.is-expanded.is-mobile-expand::before,
+  .wk-item.is-expanded.is-mobile-expand::before { display: block; }
+  .tl-block.is-expanded.is-mobile-expand > .tl-titlerow,
+  .wk-item.is-expanded.is-mobile-expand > .wk-titlerow {
+    display: flex;
+    padding-right: 42px;
+  }
+  .tl-block.is-expanded.is-mobile-expand > .tl-time,
+  .tl-block.is-expanded.is-mobile-expand > .tl-repeat,
+  .tl-block.is-expanded.is-mobile-expand > .tl-note,
+  .wk-item.is-expanded.is-mobile-expand > .wk-time,
+  .wk-item.is-expanded.is-mobile-expand > .wk-note { display: block; }
+  .tl-block.is-expanded.is-mobile-expand .tl-title { font-size: 15px; }
+  .tl-block.is-expanded.is-mobile-expand .tl-time,
+  .tl-block.is-expanded.is-mobile-expand .tl-repeat { font-size: 12px; }
+  .tl-block.is-expanded.is-mobile-expand .tl-note,
+  .wk-item.is-expanded.is-mobile-expand .wk-note { font-size: 12.5px; }
+  .wk-item.is-expanded.is-mobile-expand .wk-title { font-size: 14px; }
+  .wk-item.is-expanded.is-mobile-expand .wk-time { font-size: 12px; }
+  /* 折叠态把标题藏起来只留「…」，展开后必须撤回：否则手机展开卡顶行只剩省略号 */
+  .tl-block.is-expanded.is-mobile-expand .tl-dots,
+  .wk-item.is-expanded.is-mobile-expand .wk-dots { display: none; }
+  .tl-block.is-expanded.is-mobile-expand .tl-title,
+  .wk-item.is-expanded.is-mobile-expand .wk-title { display: block; }
+  .tl-block.is-expanded.is-mobile-expand .item-detail,
+  .wk-item.is-expanded.is-mobile-expand .item-detail {
+    flex: 0 0 auto;
+    padding: 8px 0 0;
+  }
+  .tl-block.is-expanded.is-mobile-expand .item-actions,
+  .wk-item.is-expanded.is-mobile-expand .item-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-auto-rows: minmax(34px, auto);
+    gap: 6px;
+    width: 100%;
+  }
+  .tl-block.is-expanded.is-mobile-expand .item-actions .btn,
+  .wk-item.is-expanded.is-mobile-expand .item-actions .btn {
+    flex: none;
+    width: auto;
+    min-height: 34px;
+    padding: 4px 8px;
+    font-size: 12.5px;
+  }
+
+  .timeline-section,
+  .untimed-section,
+  .finish-dock,
+  .countdown-section,
+  .notes-section,
+  .side-rail::before { border-radius: var(--radius); }
+  .timeline-section { padding: 10px; }
+  .week-card { padding: 12px; }
+  .untimed-section,
+  .finish-dock,
+  .countdown-section,
+  .notes-section { padding: 14px; }
+  .notes-input { font-size: 16px; line-height: 28px; }
+  /* 衬线比无衬线略宽，手机档副标题会多掉一个「3）」；收一点字距与字号让它回到两行 */
+  .day-sub { font-size: 11.5px; letter-spacing: 0; text-wrap: pretty; }
+}
+
+/* 触屏：去掉粘住的悬停位移（app.css 已有同名规则，这里把新加的 background 也收回） */
+@media (hover: none), (pointer: coarse) {
+  .untimed-item:hover,
+  .month-col:hover { background: var(--surface); transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brand:hover,
+  .btn-plate:hover,
+  .btn-add-round:hover { transform: none; }
+}

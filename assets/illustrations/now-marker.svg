@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 18 26" width="18" height="26">
+  <!-- 当前时间指针：一枚陶土小圆点 + 两片鼠尾草叶，线稿水彩感，不喧哗 -->
+  <g fill="none" stroke="#b97c62" stroke-width="1.1" stroke-linecap="round">
+    <circle cx="9" cy="6.2" r="3.1" fill="#fbf7ef"/>
+    <path d="M9 9.4V25" stroke="#8d9b7f" stroke-width="1"/>
+  </g>
+  <path d="M11.4 5.1c2.2-1.5 4.4-1.7 5.9-1.1-1.1 2-3.1 3.1-5.4 3.1z"
+        fill="#8d9b7f" fill-opacity=".72" stroke="#6f8165" stroke-width=".8" stroke-linejoin="round"/>
+  <path d="M6.6 5.3C5 4 3.3 3.7 2 4.2c.9 1.7 2.6 2.6 4.4 2.6z"
+        fill="#a8b49a" fill-opacity=".6" stroke="#6f8165" stroke-width=".8" stroke-linejoin="round"/>
+  <circle cx="9" cy="6.2" r="1.05" fill="#c9836a"/>
+</svg>

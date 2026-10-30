@@ -117,7 +117,7 @@
       return fail('E_SHAPE', '$', '云端内容不是对象');
     }
     if (payload.app !== schema.APP_NAME) {
-      return fail('E_APP', '$.app', '不是 DayPlan 的云端数据');
+      return fail('E_APP', '$.app', '不是 DayLight 的云端数据');
     }
     var sv = payload.schemaVersion;
     if (typeof sv !== 'number' || !isFinite(sv) || Math.floor(sv) !== sv) {

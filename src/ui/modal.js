@@ -31,6 +31,44 @@
     return node;
   }
 
+  /**
+   * 折叠分组（2026-10-30 用户口径）：设置里的每一大类都可折叠，交互照抄教程
+   * 「常见问题」——标题整行可点，右侧 +/− 随开合旋转变色；高度走
+   * grid-template-rows 0fr ↔ 1fr 过渡，展开时下方分组被平滑推开。
+   * @param {string} title 分组标题
+   * @param {object} [opts] { open: boolean } 默认收起
+   * @returns {{element:HTMLElement, body:HTMLElement, setOpen:Function}}
+   *   body 是**稳定**的内容容器：分组重渲染时只清空它，不要替换整节。
+   */
+  function foldSection(title, opts) {
+    opts = opts || {};
+    var open = opts.open === true;
+    var sign = el('span', { class: 'settings-sign', 'aria-hidden': 'true', text: open ? '−' : '+' });
+    var head = el('button', {
+      class: 'settings-head', type: 'button', 'aria-expanded': open ? 'true' : 'false'
+    }, [
+      el('span', { class: 'settings-title', text: title }),
+      sign
+    ]);
+    var body = el('div', { class: 'settings-body' });
+    var section = el('section', {
+      class: 'settings-section is-folded' + (open ? ' is-open' : '')
+    }, [
+      head,
+      el('div', { class: 'settings-collapse' }, [body])
+    ]);
+
+    function setOpen(next) {
+      var on = next === true;
+      section.classList.toggle('is-open', on);
+      head.setAttribute('aria-expanded', on ? 'true' : 'false');
+      sign.textContent = on ? '−' : '+';
+    }
+    head.addEventListener('click', function () { setOpen(!section.classList.contains('is-open')); });
+
+    return { element: section, body: body, setOpen: setOpen };
+  }
+
   function getModalRoot() {
     return document.getElementById('modal-root') || document.body;
   }
@@ -332,6 +370,7 @@
 
   root.DayPlan.modal = {
     el: el,
+    foldSection: foldSection,
     open: openModal,
     confirm: confirmDialog,
     typedConfirm: typedConfirmDialog,

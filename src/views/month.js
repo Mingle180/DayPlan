@@ -1590,8 +1590,14 @@
         markers: {}
       };
       var cats = doc.categories || [];
+      /* 2026-10-30：类别标记点走 20 色色板（旧高饱和色由 categoryTone 就近归一） */
+      var P = root.DayPlan && root.DayPlan.palette;
       for (var c = 0; c < cats.length; c += 1) {
-        if (cats[c] && cats[c].id) context.catColor[cats[c].id] = cats[c].color;
+        if (cats[c] && cats[c].id) {
+          context.catColor[cats[c].id] = (P && typeof P.categoryTone === 'function')
+            ? P.categoryTone(cats[c].color).accent
+            : cats[c].color;
+        }
       }
       state.months.forEach(function (m) { context.markers[m.ym] = markersFor(doc, m.ym); });
       return context;

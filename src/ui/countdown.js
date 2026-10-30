@@ -103,9 +103,8 @@
   function create(opts) {
     opts = opts || {};
     var listEl = opts.list;
-    var emptyBtn = opts.emptyBtn || null;
+    var emptyArt = opts.emptyArt || null;
     var addBtn = opts.addBtn || null;
-    var countEl = opts.countEl || null;
     var store = opts.store;
     var getCat = typeof opts.getCat === 'function' ? opts.getCat : function () { return null; };
     var onChange = typeof opts.onChange === 'function' ? opts.onChange : function () {};
@@ -166,13 +165,20 @@
       li.setAttribute('role', 'button');
       li.setAttribute('tabindex', '0');
       var cat = getCat(cd.categoryId) || {};
-      li.style.setProperty('--cat', cat.color || 'var(--text-3)');
+      var P = root && root.DayPlan && root.DayPlan.palette;
+      li.style.setProperty('--cat', (cat.color && P && P.categoryTone)
+        ? P.categoryTone(cat.color).accent
+        : (cat.color || 'var(--text-3)'));
 
       var head = mk('div', 'cd-head');
       var dot = mk('span', 'cd-dot');
       dot.setAttribute('aria-hidden', 'true');
       head.appendChild(dot);
       head.appendChild(mk('span', 'cd-title', cd.title));
+      /* 2026-10-30（参考图）：卡片右侧一枚细线小日历，纯装饰 */
+      var ico = mk('span', 'cd-ico');
+      ico.setAttribute('aria-hidden', 'true');
+      head.appendChild(ico);
 
       var clock = clockNode();
       li.appendChild(head);
@@ -200,9 +206,8 @@
       });
       var empty = list.length === 0;
       listEl.hidden = empty;
-      if (emptyBtn) emptyBtn.hidden = !empty;
-      if (addBtn) addBtn.hidden = empty;
-      if (countEl) countEl.textContent = empty ? '' : (list.length + ' 项');
+      /* 空态只留一张静物插画占位；添加入口恒为右上角「+」（2026-10-30 用户口径） */
+      if (emptyArt) emptyArt.hidden = !empty;
       tick();
     }
 
@@ -465,7 +470,6 @@
 
     /* ---------------- 接线 ---------------- */
 
-    if (emptyBtn) emptyBtn.addEventListener('click', function () { openForm(null); });
     if (addBtn) addBtn.addEventListener('click', function () { openForm(null); });
 
     timer = setInterval(tick, TICK_MS);

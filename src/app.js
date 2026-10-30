@@ -931,6 +931,8 @@
     function refreshSaveState() {
       if (!els.saveBtn) return;
       var uid = sessionUserId();
+      /* 2026-10-30（用户口径）：保存只在登录后出现 —— 游客既没有云端可存，也不该看到一颗死键 */
+      els.saveBtn.hidden = !uid;
       var unsaved = false;
       if (uid) {
         unsaved = CloudRecord.classify(readMarker(uid), localHash()) !== CloudRecord.KIND.CLEAN;
@@ -1049,7 +1051,7 @@
     }
 
     function cloudUnusableText(code) {
-      if (code === 'E_VERSION') return '云端数据来自更新版本的 DayPlan，请先更新应用再载入云端。';
+      if (code === 'E_VERSION') return '云端数据来自更新版本的 DayLight，请先更新应用再载入云端。';
       return '云端数据无法识别（' + (code || 'E_UNKNOWN') + '），已保留本机内容。';
     }
 
@@ -1442,7 +1444,7 @@
         var note = holidayGapNote();
         if (note) aboutBody.appendChild(M.el('p', { class: 'about-note', text: note }));
         M.open({
-          title: '关于 DayPlan',
+          title: '关于 DayLight',
           body: aboutBody,
           showSubmit: false,
           center: true
@@ -1482,13 +1484,30 @@
         var r = node.getBoundingClientRect();
         return (r && r.width > 0) ? r : null;   /* 垫片环境无布局 → null，退回纯点击 */
       }
+      /* 白块是绝对定位元素，坐标原点是轨道的 padding box；getBoundingClientRect 给的是
+         border box，两者差一个边框宽 → 不扣掉会把胶囊整体推低/推右 1px（选中档看起来不居中）。 */
+      function insetOffset() {
+        var x = 0;
+        var y = 0;
+        if (typeof root.getComputedStyle !== 'function') return { x: 0, y: 0 };
+        var cs = null;
+        try { cs = root.getComputedStyle(sw); } catch (e) { cs = null; }
+        if (!cs) return { x: 0, y: 0 };
+        var bx = parseFloat(cs.borderLeftWidth);
+        var by = parseFloat(cs.borderTopWidth);
+        if (isFinite(bx)) x = bx;
+        if (isFinite(by)) y = by;
+        return { x: x, y: y };
+      }
       function paint(btn) {
         var r = rectOf(btn);
         var sr = rectOf(sw);
         if (!r || !sr) return false;
+        var off = insetOffset();
         thumb.style.width = r.width + 'px';
         thumb.style.height = r.height + 'px';
-        thumb.style.transform = 'translate(' + (r.left - sr.left) + 'px,' + (r.top - sr.top) + 'px)';
+        thumb.style.transform = 'translate(' + (r.left - sr.left - off.x) + 'px,' +
+          (r.top - sr.top - off.y) + 'px)';
         sw.classList.add('has-thumb');
         return true;
       }
@@ -1510,12 +1529,17 @@
         var r = rectOf(list[idx]);
         var sr = rectOf(sw);
         if (!r || !sr) return;
+        var off = insetOffset();
+        var first = rectOf(list[0]);
+        var last = rectOf(list[list.length - 1]);
         drag = {
           pointerId: e.pointerId,
           startX: Number(e.clientX),
-          baseLeft: r.left - sr.left,
-          baseTop: r.top - sr.top,
+          baseLeft: r.left - sr.left - off.x,
+          baseTop: r.top - sr.top - off.y,
           width: r.width,
+          minLeft: first ? first.left - sr.left - off.x : 0,
+          maxLeft: last ? (last.left - sr.left - off.x + last.width - r.width) : (r.left - sr.left - off.x),
           from: idx,
           moved: false,
           captured: false
@@ -1539,9 +1563,7 @@
             try { sw.setPointerCapture(drag.pointerId); drag.captured = true; } catch (err) { /* 忽略 */ }
           }
         }
-        var sr = rectOf(sw);
-        var maxLeft = sr ? Math.max(0, sr.width - drag.width) : drag.baseLeft;
-        var left = Math.max(0, Math.min(maxLeft, drag.baseLeft + dx));
+        var left = Math.max(drag.minLeft, Math.min(drag.maxLeft, drag.baseLeft + dx));
         thumb.style.transform = 'translate(' + left + 'px,' + drag.baseTop + 'px)';
       });
 

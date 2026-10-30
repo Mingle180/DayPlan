@@ -115,13 +115,21 @@
     return (typeof value !== 'undefined' && value !== null && isFinite(n)) ? n : fallback;
   }
 
-  /** 首字（按码点取，避免把一个 emoji/代理对切成半个）：周视图胶囊只显示一个字。
-   *  迭代 10 批次 1 反馈：胶囊只保留首字，让标题与胶囊更紧凑、把宽度还给标题。 */
-  function firstChar(value) {
+  /** 前两个字（按码点取，避免把一个 emoji/代理对切成半个）：
+   *  日 / 周视图与完成台的类别胶囊都显示「紧急 / 长期 / 短期 / 临时」这样的两个字。
+   *  2026-10-30 用户口径：从一个字改成两个字，类型更好认。 */
+  function firstChars(value, n) {
     var s = text(value);
     if (!s) return '';
-    var cp = s.codePointAt(0);
-    return String.fromCodePoint(cp);
+    var take = Math.max(1, Number(n) || 2);
+    var out = '';
+    var i = 0;
+    while (out.length < take && i < s.length) {
+      var cp = s.codePointAt(i);
+      out += String.fromCodePoint(cp);
+      i += cp > 0xffff ? 2 : 1;
+    }
+    return out;
   }
 
   /** 类别：ctx.cats 缺失或未命中时退回「未分类」（不抛错，保持纯函数）。 */
@@ -138,6 +146,31 @@
   }
 
   function isUrgent(occ) { return !!occ && occ.categoryId === urgentCategoryId(); }
+
+  /**
+   * 类别色 -> 色板三件套（DM-25 / 2026-10-30）。
+   * 事项块的颜色完全跟随类别：background / accent / text 都取自 core/palette.js；
+   * 旧的高饱和类别色会先按色相归一到色板。palette 未加载时返回 null，
+   * CSS 退回 --cat / 默认纸色，不致白块。
+   */
+  function catTone(hex) {
+    var P = root && root.DayPlan && root.DayPlan.palette;
+    if (!P || typeof P.categoryTone !== 'function') return null;
+    return P.categoryTone(hex);
+  }
+
+  function toneVars(cat) {
+    var tone = catTone(cat && cat.color);
+    if (!tone) return null;
+    return {
+      '--cat': tone.accent,
+      '--cat-bg': tone.background,
+      '--cat-border': hexToRgba(tone.accent, 0.45),
+      '--event-bg': tone.background,
+      '--event-accent': tone.accent,
+      '--event-text': tone.text
+    };
+  }
 
   /** 紧急类别的当前名称：设置里改名后，按钮 / 提示 / 无障碍文案都要跟随。 */
   function urgentName(ctx) {
@@ -158,6 +191,19 @@
     try {
       return !!(root && typeof root.matchMedia === 'function'
         && root.matchMedia('(hover: none), (pointer: coarse)').matches);
+    } catch (e) { return false; }
+  }
+
+  /**
+   * 手机档（≤640px）：展开卡按视口放大、显示完整信息、四宫格固定四按钮。
+   * 与 touchMode 分开：窄窗口用鼠标时也要用大卡片，但不必强加「完成」以外的触屏逻辑——
+   * 展开卡一律给 4 颗按钮，所以这里也把「完成」当成必选。
+   */
+  function narrowScreen(ctx) {
+    if (ctx && typeof ctx.sheet === 'boolean') return ctx.sheet;
+    try {
+      return !!(root && typeof root.matchMedia === 'function'
+        && root.matchMedia('(max-width: 640px)').matches);
     } catch (e) { return false; }
   }
 
@@ -270,12 +316,16 @@
     function enter() {
       if (on || ctx.expanded) return;
       on = true;
-      var origW = rectWidth(node);        // 必须在加类**之前**量（加类后就被预览尺寸覆盖了）
+      /* 必须在加类**之前**量（加类后就被预览尺寸覆盖了）。 */
+      var origW = rectWidth(node);
+      var origH = rectHeight(node);
       node.classList.add('is-peek');
       /* 预览态下限（CSS 的 min-width：日 150 / 周 120）。原块更宽时才抬内联值，
          既能覆盖原块，又不会把 CSS 下限改小。 */
       var peekMin = minWidthOf(node);
       if (origW > peekMin) node.style.minWidth = Math.round(origW) + 'px';
+      /* 2026-10-30（用户口径）：预览必须**完整盖住原块**，高度也不许缩回去。 */
+      if (origH > 0) node.style.minHeight = Math.round(origH) + 'px';
       shiftIntoView(node, ctx);
     }
     function leave() {
@@ -284,6 +334,7 @@
       node.classList.remove('is-peek');
       node.style.marginLeft = '';
       node.style.minWidth = '';
+      node.style.minHeight = '';
     }
     node.addEventListener('mouseenter', enter);
     node.addEventListener('mouseleave', leave);
@@ -295,6 +346,15 @@
       if (typeof node.getBoundingClientRect !== 'function') return 0;
       var r = node.getBoundingClientRect();
       return (r && isFinite(r.width)) ? r.width : 0;
+    } catch (e) { return 0; }
+  }
+
+  /** 元素当前像素高（无布局能力的环境返回 0）。 */
+  function rectHeight(node) {
+    try {
+      if (typeof node.getBoundingClientRect !== 'function') return 0;
+      var r = node.getBoundingClientRect();
+      return (r && isFinite(r.height)) ? r.height : 0;
     } catch (e) { return 0; }
   }
 
@@ -352,6 +412,13 @@
    */
   function applyExpandLayout(node, occ, ctx, variant) {
     var isWeek = variant === 'week';
+    /* 2026-10-30（用户口径）：手机端展开卡不再迁就原块尺寸 —— 统一放大到可读宽度，
+       完整显示标题 / 时间 / 备注，按钮固定四宫格。类是 CSS 的唯一开关，排布全在样式里。 */
+    if (narrowScreen(ctx)) {
+      node.classList.add('is-mobile-expand');
+      node.classList.add('is-expanded-grow');
+      return;
+    }
     if (node.classList.contains('is-omitted') || node.classList.contains('is-tiny')) {
       node.classList.add('is-expanded-grow');
       node.classList.add('is-actions-column');
@@ -409,7 +476,9 @@
     var actions = el('div', { class: 'item-actions' });
     var urgent = isUrgent(occ);
     var urgentLabel = urgentName(ctx);
-    var touch = touchMode(ctx);
+    var mobile = narrowScreen(ctx);
+    /* 手机档展开卡固定四颗按钮（完成 / 紧急 / 修改 / 删除），「完成」必选。 */
+    var touch = touchMode(ctx) || mobile;
 
     /* 触屏没有右键：把完成做成展开区里看得见的第一颗按钮。 */
     if (touch) {
@@ -455,7 +524,8 @@
     }));
 
     // 4) 恢复默认：仅「该次改动不只是紧急/取消紧急」时渲染（迭代 7 / F-45 第 6 条 / R-23）
-    if (shouldOfferRestore(occ, ctx)) {
+    //    2026-10-30（用户口径）：手机端不提供「恢复默认」——固定四颗按钮（完成/紧急/修改/删除）。
+    if (!mobile && shouldOfferRestore(occ, ctx)) {
       actions.appendChild(actionButton({ text: '恢复默认' }, function () {
         if (typeof ctx.onRestoreDefault === 'function') ctx.onRestoreDefault(occ);
       }));
@@ -544,11 +614,7 @@
   function buildBlock(occ, ctx, cat, expanded) {
     var block = el('div', { class: 'tl-block' });
     applyFoldedState(block, occ, expanded, 'block');
-    setVars(block, {
-      '--cat': cat.color,
-      '--cat-bg': hexToRgba(cat.color, 0.14),
-      '--cat-border': hexToRgba(cat.color, 0.45)
-    });
+    setVars(block, toneVars(cat));
     var width = blockWidth(occ, ctx);
     var tooNarrow = (width !== null && isTooNarrow(occ, ctx, width));
     if (width !== null && width < narrowPx()) block.classList.add('is-narrow');
@@ -568,9 +634,11 @@
     var head = el('div', { class: 'tl-titlerow' });
     head.appendChild(el('span', { class: 'tl-dots', text: '…', 'aria-hidden': 'true' }));
     head.appendChild(el('div', { class: 'tl-title', text: text(occ.title) }));
+    /* 美化迭代 10 / 2026-10-30：日 / 周视图胶囊统一取类别**前两个字**（紧急 / 长期 / 短期 / 临时）。 */
+    var chipText = firstChars(cat.name, 2);
     head.appendChild(el('span', {
       class: 'tl-chip',
-      text: firstChar(cat.name),
+      text: chipText,
       title: '类别：' + cat.name,
       'aria-label': '类别：' + cat.name
     }));
@@ -592,7 +660,8 @@
   function buildCard(occ, ctx, cat, expanded) {
     var li = el('li', { class: 'untimed-item' });
     applyFoldedState(li, occ, expanded, 'card');
-    setVars(li, { '--cat': cat.color });
+    var tone = catTone(cat.color);
+    setVars(li, toneVars(cat));
 
     // 序号：ctx.index 为 0 基数组下标（对齐迭代 2 的 list.forEach((occ, idx) → idx + 1)）
     var seq = (typeof ctx.index === 'number' && isFinite(ctx.index)) ? ctx.index + 1 : 1;
@@ -602,16 +671,21 @@
       class: 'ui-main', type: 'button',
       'aria-label': '查看详情：' + text(occ.title)
     });
-    main.appendChild(el('span', { class: 'ui-title', text: text(occ.title) }));
-    /* 美化迭代 15：类别文字标签换成小色点（名称移入 title/aria-label） */
+    /* 2026-10-30（用户口径）：类别色点移到标题左侧只作颜色提示；
+       两位类别胶囊挂到这一条的最右侧（.ui-main 是 flex，胶囊靠 margin-left:auto 贴右）。 */
     main.appendChild(el('span', {
-      class: 'ui-cat', style: 'background:' + cat.color,
+      class: 'ui-cat', style: 'background:' + (tone ? tone.accent : cat.color),
       title: '类别：' + cat.name, 'aria-label': '类别：' + cat.name
     }));
+    main.appendChild(el('span', { class: 'ui-title', text: text(occ.title) }));
     /* 迭代 7（F-43）：card 变体不再渲染第二个 ui-cat「改」标签（与右上角角标同源，一并下线） */
     if (occ.showRepeat && occ.repeatLabel) main.appendChild(el('span', { class: 'muted', text: occ.repeatLabel }));
     var uiNote = noteNode(occ, 'card');
     if (uiNote) main.appendChild(uiNote);
+    main.appendChild(el('span', {
+      class: 'ui-chip', text: firstChars(cat.name, 2),
+      title: '类别：' + cat.name
+    }));
     li.appendChild(main);
 
     /* 迭代 10 条13：删掉折叠态的 ▲▼ 次序按钮 —— 次序改为**在列表里拖动**（视图层接线）。
@@ -624,22 +698,18 @@
   function buildWeek(occ, ctx, cat, expanded) {
     var item = el('div', { class: 'wk-item' });
     applyFoldedState(item, occ, expanded, 'week');
-    setVars(item, {
-      '--cat': cat.color,
-      '--cat-bg': hexToRgba(cat.color, 0.14),
-      '--cat-border': hexToRgba(cat.color, 0.45)
-    });
+    setVars(item, toneVars(cat));
 
     // 迭代 6（F-39）：完成勾选框整体下线，时间行不再为其让位
     /* 美化迭代 10 / 2026-10-20：
        标题行 = [省略号（仅省略态可见）] + 标题（左对齐）+ 类别胶囊；
-       胶囊取类别首字，由 CSS 固定在块右上角。 */
+       胶囊取类别前两个字（与日视图、完成台同口径），由 CSS 固定在块右上角。 */
     var head = el('div', { class: 'wk-titlerow' });
     head.appendChild(el('span', { class: 'wk-dots', text: '…', 'aria-hidden': 'true' }));
     head.appendChild(el('div', { class: 'wk-title', text: text(occ.title) }));
     head.appendChild(el('span', {
       class: 'wk-chip',
-      text: firstChar(cat.name),
+      text: firstChars(cat.name, 2),
       title: '类别：' + cat.name,
       'aria-label': '类别：' + cat.name
     }));
