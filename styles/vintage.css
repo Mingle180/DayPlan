@@ -408,6 +408,11 @@ html[data-theme='dark'] .panel-day { box-shadow: none; }
 }
 /* 新建：奶白圆钮 + 鼠尾草加号（唯一保留的圆形图标按钮，不上毛玻璃） */
 .btn-add-round {
+  /* 加号由两根细条几何居中绘制：换成霞鹜文楷后，文字「+」的墨迹不在按钮
+     光学中心（2026-10-31 用户反馈电脑端偏了）。手机端略大一号。 */
+  --add-cross: 14px;
+  position: relative;
+  font-size: 0;
   background: var(--surface);
   border: 1px solid var(--border);
   color: var(--primary);
@@ -415,6 +420,18 @@ html[data-theme='dark'] .panel-day { box-shadow: none; }
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
+.btn-add-round::before,
+.btn-add-round::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  background: currentColor;
+  border-radius: 1px;
+}
+.btn-add-round::before { width: var(--add-cross); height: 2px; }
+.btn-add-round::after { width: 2px; height: var(--add-cross); }
 @media (hover: hover) {
   .btn-add-round:hover { background: var(--surface); box-shadow: var(--shadow); }
 }
@@ -1419,12 +1436,15 @@ html[data-theme='dark'] .toast .btn { color: var(--primary); }
   .panel-day {
     display: flex;
     flex-direction: column;
-    /* 定高：两栏共用同一个高度，时间轴才有确定的富余高度可分配。
+    /* 2026-10-31（用户反馈）：未排时段一多，底行就把面板顶穿 —— 右栏只跟到 view-body
+       的底边，倒计时 / 今日记录停在半空，下沿和左栏对不齐。
+       这里把固定高度改成「下限」：内容装得下时仍按视口铺满（时间轴吃掉富余），
+       底行更高时面板跟着长高，整页滚动，右栏也随行高一起拉到底。
        676 = 320 时间轴 + 12 间距 + 310 底行 + 34 内边距，是观感下限；
        --day-floor 由 day.js 在「轨道装不下滚动区」时垫高（窄视口 / 页面放大），
        此时整页滚动，而不是把底部事项裁在横向滚动条下面。 */
-    height: max(calc(100vh - 82px - 30px), 676px, var(--day-floor, 0px));
-    min-height: 0;
+    height: auto;
+    min-height: max(calc(100vh - 82px - 30px), 676px, var(--day-floor, 0px));
     padding: 16px 18px 18px;
   }
   .view-body {
@@ -1511,24 +1531,18 @@ html[data-theme='dark'] .toast .btn { color: var(--primary); }
   }
   .header-right > .btn { padding: 0 10px; }
   .btn-plate { height: 44px; }
-  .panel-day { border-radius: 0; }
+  /* 2026-10-31（用户反馈「两侧空余比较多」）：手机端横向留白原来叠了三层 ——
+     app-body 10 + panel-main 16 + panel-day 14 = 40px。这里去掉 panel-main 的横向留白，
+     各视图自己留 10px，合计距屏幕 20px（周 / 月同口径，不再各宽一格）。 */
+  .panel-main { padding: 10px 0; }
+  .panel-day { padding: 10px; border-radius: 0; }
+  .week-view, .month-view { padding: 0 10px; }
   .day-title { font-size: 21px; letter-spacing: .4px; }
   /* 2026-10-30 用户口径：周标题与日标题同号同字距（日标题实际落到 20px / .5px），
      配合「2026年10月26日–11月1日」无空格格式即可在一行内排完。 */
   .week-title { font-size: 20px; letter-spacing: .5px; }
-  /* 2026-10-30 用户口径：手机端「+」不再依赖字体基线，改由两根 CSS 细条精确居中 */
-  .btn-add-round { position: relative; font-size: 0; }
-  .btn-add-round::before,
-  .btn-add-round::after {
-    content: "";
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    background: currentColor;
-    border-radius: 1px;
-  }
-  .btn-add-round::before { width: 16px; height: 2px; margin: -1px 0 0 -8px; }
-  .btn-add-round::after { width: 2px; height: 16px; margin: -8px 0 0 -1px; }
+  /* 手机端加号比电脑端大一号（几何居中由基础规则统一绘制） */
+  .btn-add-round { --add-cross: 16px; }
 
   /* 2026-10-30（用户口径）：手机端点开事项块 → 展开卡按视口放大，
      完整显示标题 / 时间 / 备注；固定四颗按钮（完成 / 紧急 / 修改 / 删除）四宫格排布。
@@ -1619,3 +1633,39 @@ html[data-theme='dark'] .toast .btn { color: var(--primary); }
   .btn-plate:hover,
   .btn-add-round:hover { transform: none; }
 }
+
+/* ------------------------------------------------------------------ *
+ * 手机端下拉刷新（src/ui/pull-refresh.js）
+ * ------------------------------------------------------------------ */
+
+/* 浏览器自带的顶部下拉刷新 / 回弹交给页面自己处理，避免与提示条同时出现 */
+@media (max-width: 1023px) {
+  html, body { overscroll-behavior-y: none; }
+}
+
+.pull-refresh {
+  position: fixed;
+  left: 50%;
+  top: env(safe-area-inset-top, 0px);
+  z-index: 70;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 84px;
+  height: 30px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-3);
+  font-size: 12.5px;
+  line-height: 1;
+  letter-spacing: .02em;
+  box-shadow: var(--shadow-block);
+  pointer-events: none;
+  opacity: var(--pull-alpha, 0);
+  transform: translate(-50%, calc(var(--pull, 0px) - 44px));
+  will-change: transform;
+}
+.pull-refresh.is-ready { color: var(--primary); }

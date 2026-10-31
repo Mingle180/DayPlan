@@ -657,7 +657,12 @@
     function fitPanelToContent(contentH) {
       var panel = els.panel;
       var sc = els.scroll;
-      if (!panel || !sc || !(contentH > 0)) return;
+      if (!panel) return;
+      /* 面板高度已随内容（vintage.css ≥1024 的 height:auto）：每轮先撤掉上一轮的垫高，
+         再按本轮自然布局判断。否则底行变矮 / 事项变少后旧 floor 会把面板钉在高处，
+         时间轴被空拉长、右栏在下面空一截，只有缩放视口才会恢复。 */
+      panel.style.removeProperty('--day-floor');
+      if (!sc || !(contentH > 0)) return;
       if (typeof root.innerWidth === 'number' && root.innerWidth < 1024) return;
       var rulerH = (els.ruler && els.ruler.offsetHeight) || 30;
       var avail = sc.clientHeight - rulerH;
@@ -667,8 +672,7 @@
       if (!(need > 6)) return;
       var base = panel.getBoundingClientRect().height || 0;
       var floor = Math.ceil(base + need + 2);
-      var cur = parseFloat(panel.style.getPropertyValue('--day-floor')) || 0;
-      if (floor > cur) panel.style.setProperty('--day-floor', floor + 'px');
+      panel.style.setProperty('--day-floor', floor + 'px');
     }
 
     function renderTimeline() {
