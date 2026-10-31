@@ -267,8 +267,6 @@
     var state = { monday: null, hideDone: false };
     var notesTimer = null;
     var lastRenderStamp = null;   /* 最近一次渲染时的文档指纹（见 setWeekStart 的过期判断） */
-    /* 2026-10-30 用户口径：切到本周时，窄屏下表要横向划到今天那一列 */
-    var pendingTodayScroll = false;
 
     /* ------------------------------------------------------------------ *
      * 1. 静态骨架（只建一次：记录栏不能在重渲染时被重建，否则会丢焦点）
@@ -713,9 +711,11 @@
         if (!item || !item.occ) return;
         var card = weekCard(item.occ, item, cats, item.tooNarrow, item.omit);
         node.appendChild(card);
-        /* US-24 / DM-25：展开卡 pin 到本列；pin 返回 false（无 rect 能力）→ 保持原位展开 */
+        /* US-24 / DM-25：展开卡 pin 到本列；pin 返回 false（无 rect 能力）→ 保持原位展开。
+           2026-10-31：把外层滚动容器交给浮层 —— iOS 会把 fixed 后代连同容器裁掉，
+           浮层据此在「真被裁」时把卡片收进可视区。 */
         if (pinner && isExpanded(item.occ)) {
-          try { pinner.pin(card, node); } catch (e) { /* 降级：原位展开 */ }
+          try { pinner.pin(card, node, { clip: gridScrollEl }); } catch (e) { /* 降级：原位展开 */ }
         }
       });
       /* S26 / US-22.2：单击列空白（不含事项块）→ 日视图 */
@@ -902,18 +902,14 @@
       return null;
     }
 
-    /** 把「今天」那一列滚到可视区中间（本周且窄到需要横滚时才生效） */
+    /** 把「今天」那一列滚到可视区中间（本周且窄到需要横滚时才生效）。
+        只由导航（进周视图 / 切到本周）当次调用：视图隐藏或不需要横滚时静默不滚，
+        绝不挂起等后续重绘 —— 否则展开事项触发的 render() 会把页面甩到今天列。 */
     function scrollToTodayColumn() {
       var today = D.todayISO();
-      if (!today) { pendingTodayScroll = false; return; }
+      if (!today) return;
       var sc = weekHScroller();
-      if (!sc) {
-        /* 容器还没布局（视图隐藏中）→ 留到下一次渲染；宽度够则不滚，标记可以撤 */
-        var laid = gridScrollEl && Number(gridScrollEl.clientWidth) > 0;
-        if (laid) pendingTodayScroll = false;
-        return;
-      }
-      pendingTodayScroll = false;
+      if (!sc) return;
       var head = gridEl && typeof gridEl.querySelector === 'function'
         ? gridEl.querySelector('.wk-head[data-date="' + today + '"]')
         : null;
@@ -936,7 +932,6 @@
       renderGrid(doc, monday);
       loadNotes();
       lastRenderStamp = dataStamp(doc);
-      if (pendingTodayScroll && monday === thisMonday) scrollToTodayColumn();
     }
 
     /** 轻量数据指纹：meta.updatedAt + 事项数（外部写入后据此判断视图是否过期） */
@@ -976,9 +971,8 @@
       if (notesTimer) flushNotes();
       var changed = next !== state.monday;
       state.monday = next;
-      /* 本周（含从别的周点「本周」/ 进入周视图落在本周）→ 窄屏要划到今天列 */
       var thisMonday = D.startOfWeek(D.todayISO());
-      if (thisMonday && next === thisMonday) pendingTodayScroll = true;
+      var enterThisWeek = !!(thisMonday && next === thisMonday);
       /* 除「周变化」外，文档在最近一次渲染之后被外部改写时也要重渲染：应用层没有 store.subscribe，
        * 直接调用 store.addItem / 导入 / 迁移不会通知视图，而 app.setViewMode('week') 每次都按同一周
        * 调 setDate —— 只看 changed 会留下过期 DOM（引导冒烟 SC-27 正是该调用序）。
@@ -986,6 +980,9 @@
       var doc = docOf();
       var stale = dataStamp(doc) !== lastRenderStamp;
       if (changed || o.force || stale) render();
+      /* 切到本周时把今天列划进可视区（窄屏才需要）。只在这次导航里做，
+         视图隐藏或无需横滚就当次放弃 —— 不留下待办，避免展开事项的重绘再触发。 */
+      if (enterThisWeek) scrollToTodayColumn();
       if (changed && o.slide) {
         var motion = root.DayPlan.motion;
         if (motion && typeof motion.slidePanel === 'function') motion.slidePanel(rootEl, o.slide);
@@ -1377,7 +1374,6 @@
 
     state.monday = D.startOfWeek(D.todayISO()) || D.todayISO();
     state.hideDone = readHideDone();
-    pendingTodayScroll = true;
     render();
 
     return {

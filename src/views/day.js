@@ -7,8 +7,9 @@
  * 迭代 4（07-delta US-19…US-25 / ADR-19 / ADR-20 / BR-35）：
  *   - 时间轴恒为**横向**：x = computeAxisGeometry().getX(minute)；刻度 / 网格线 / 空闲窄带 /
  *     事项块 / 当前时间线**全部**使用同一坐标映射（不再混用纵向压缩坐标）。
- *   - 纵向只表达类别行组与道号：行组 top 依次堆叠，块 top = 组 top + lane × 组 laneHeight。
- *   - 行高由纯函数 categoryLabelMetrics 推导：laneHeight = max(48, 名称文本高 + 内边距)。
+ *   - 纵向只表达类别行组与道号：行组 top 依次堆叠，块 top = 组 top + 该道道顶。
+ *   - 行组内**逐道定高**（2026-10-31）：道高 = max(48, 该道内最高块的内容需求 + BLOCK_GAP)，
+ *     道数 = 并发峰值（settings.maxLanes 只作下限，绝不把多条事项叠进同一道）。
  *   - 展开卡用 ui/overlay.js 临时 position:fixed 脱离裁切（US-24），失败则原位展开。
  *   - 时间轴区内不再出现任何「没有排定时间的事项」文案（BR-28 / AC-20.1）。
  *
@@ -117,13 +118,14 @@
     var notesTimer = null;
     var nowTimer = null;
     var axis = null;    // 当前渲染所用的轴线几何（单一几何源：computeAxisGeometry）
-    /* BR-35 首屏定位：只在「进入日视图 / 换日期」时把横轴滚到最早时段附近。
+    /* BR-35 首屏定位：只在「进入日视图 / 换日期」的那一次渲染里把横轴滚到最早时段附近。
+       标记由 setDate 播种、并在 setDate 收尾时无条件清掉 —— 当次量不到宽度就作废。
        互动引起的重绘（展开/收起、隐藏已完成、写入后刷新）**必须保留**用户当前的
-       横向位置 —— 否则轴较长时点右侧的事项，时间轴会立刻弹回头部、根本没法操作。 */
-    var pendingFirstScroll = true;
+       横向位置；否则轴较长时点右侧的事项，时间轴会立刻弹回最早时段，根本没法操作。 */
+    var pendingFirstScroll = false;
     /* 2026-10-30 用户口径：切到今天时，横轴要划到能看见「现在」指针的位置。
-       只在这个标记为真时移动；平时每分钟刷新指针不打扰用户已滚到的位置。 */
-    var pendingNowScroll = true;
+       同样只在 setDate 的那一次渲染里生效；每分钟刷新指针不打扰用户已滚到的位置。 */
+    var pendingNowScroll = false;
 
     /* 迭代 10 批次 5（条9）：拖放结束后浏览器可能补发一次 click，
        用短时间窗抑制，避免「拖进完成台」又顺手把卡片展开 */
@@ -313,13 +315,15 @@
     }
 
     /**
-     * 迭代 8（F-52）：该类别当天「内容完整显示」所需的道高。
-     * 口径（用户裁定）：以**整条类别道**为单位，取该类别里最高的那个事项所需的块高
+     * 迭代 8（F-52）：给定一批事项「内容完整显示」所需的道高。
+     * 口径（用户裁定）：以**一条道**为单位，取这条道里最高的那个事项所需的块高
      * （含备注按当前块宽自然换行）；与车道高下限取最大值。
+     * 2026-10-31：入参从「整个类别组」改成「该道内的事项」—— 逐道定高后，
+     * 一条长备注块只抬高它自己那道，不再把同组的短块一起拉开（DM-21.7）。
      * 美化迭代 10：标题右侧的类别胶囊占宽 → chipWidthFor(name) 参与度量。
      * @param {string} name 类别名
-     * @param {Array} items 该组的事项（occurrence 或 {occ}）
-     * @param {number} wrapWidth 该组事项中最宽的块宽（换行宽度；缺省回落到整天轴宽）
+     * @param {Array} items 该**道**内的事项（occurrence 或 {occ}）
+     * @param {number} wrapWidth 该道事项中最宽的块宽（换行宽度；缺省回落到整天轴宽）
      */
     function groupLaneHeightFor(name, items, wrapWidth, geometry) {
       var base = groupLaneHeight();
@@ -491,9 +495,11 @@
       return (next && next.height > laid.height + 1) ? next : null;
     }
 
-    /** 组纵向排布（DM-21.6 / BR-26）：laneHeight 由类别名推导；组间不相交。
+    /** 组纵向排布（DM-21.6 / BR-26）：组间不相交；组内**逐道定高**（DM-21.7）。
      *  2026-10-30：新增 stretch（{laneExtra, gapExtra}）—— 卡片有富余高度时把差值
-     *  均摊到道高与组间距，让时间轴成为页面主体，而不是缩成一条矮带。 */
+     *  均摊到道高与组间距，让时间轴成为页面主体，而不是缩成一条矮带。
+     *  2026-10-31：道数 = 并发峰值（maxLanes 只作下限），道高逐道按本道内容定，
+     *  块顶 = 道顶累加值（D... 见 DM-19.3 / DM-21.7 / DM-21.8）。 */
     function layoutGroups(geometry, groups, catNames, rate, lanesMax, stretch) {
       var ordered = groups.slice();
       var pin = urgentCategoryId();          /* v2 由 pinFirst 处理；v1 在此本地前置（幂等） */
@@ -512,10 +518,19 @@
       var gapExtra = Math.max(0, Number(extra.gapExtra) || 0);
       groupGap += gapExtra;
 
+      /* 2026-10-31（用户反馈）：同类并发事项变多时**不再压进同一道**。
+         旧口径把 settings.maxLanes（默认 3）当硬上限，第 4 条起并入最后一道、
+         每条只横向偏移 8px —— 实测 4 条同时段事项里有 3 条几乎完全叠在一起，
+         既看不清也点不准。现在把这个值降级为「道数下限」（与周视图 DM-22 同口径），
+         实际道数由该组并发峰值决定：每个事项都有自己的道，不会互相遮挡。 */
+      var peak = 0;
+      ordered.forEach(function (g) { peak = Math.max(peak, (g.items || []).length); });
+      var laneCap = Math.max(1, Math.floor(Number(lanesMax) || 1), peak);
+
       var laid = (Layout && typeof Layout.assignGroupedLanes === 'function')
         ? Layout.assignGroupedLanes(ordered, {
           pxPerHour: rate,
-          lanesMax: lanesMax,
+          lanesMax: laneCap,
           laneHeight: LANE_HEIGHT_MIN,
           /* 迭代 8（F-52）：道高 = max(类别名高度, 该类别内容完整显示所需高度)；
              换行宽度取该类别里最宽的块（不是整天轴宽，否则 30 分钟的块会按 24 小时宽算，明显偏高） */
@@ -536,40 +551,65 @@
 
       var list = (laid && laid.groups) || [];
 
-      /* layout.js v1 不认识 laneHeightFor（组对象无 laneHeight）→ 用同一公式本地重排 */
-      var needsVerticalFix = list.some(function (g) { return typeof g.laneHeight !== 'number'; });
+      /* 2026-10-31（用户反馈）：**逐道定高**，不再让整组共用一个 laneHeight。
+         旧口径的行组高 = 道数 × 一组统一道高，而道高取「该组最高块」的需求 ——
+         一条带长备注的块（实测 148px）会把同组的 46px 短块也拉开 148px，
+         多条并发时整片空白，看起来像排布错乱。
+         现在每道单独按**本道内**事项的需求定高，逐道向下堆叠：
+         带长内容的道自己高，短内容的道贴着块高走，间距只留 BLOCK_GAP。 */
       var y = 0;
       list.forEach(function (g) {
         var catName = catNames[g.categoryId] || '未分类';
-        var laneHeight = needsVerticalFix
-          ? groupLaneHeightFor(catName, g.items || [], groupWrapWidth(geometry, g.items, minBlockWidth), geometry) + laneExtra
-          : Math.max(LANE_HEIGHT_MIN, Number(g.laneHeight) || LANE_HEIGHT_MIN) + laneExtra;
+        var items = g.items || [];
         var laneCount = Math.max(1, Number(g.laneCount) || 1);
-        if (needsVerticalFix) {
-          if (y > 0) y += groupGap;
-          g.top = y;
-          g.laneHeight = laneHeight;
-          g.height = laneCount * laneHeight;
-          y += g.height;
+        items.forEach(function (item) {
+          laneCount = Math.max(laneCount, (Number(item.lane) || 0) + 1);
+        });
+
+        if (y > 0) y += groupGap;
+        var groupTop = y;
+        var laneTops = [];
+        var laneHeights = [];
+        for (var L = 0; L < laneCount; L += 1) {
+          var laneItems = [];
+          items.forEach(function (item) {
+            if ((Number(item.lane) || 0) === L) laneItems.push(item);
+          });
+          /* 该道需求仍走 groupLaneHeightFor（内部 = Layout.maxBlockHeightNeed），
+             内容度量与块高同源；注入 F-73 时同样会退化成 48，断言口径不变。 */
+          var laneH = groupLaneHeightFor(catName, laneItems,
+            groupWrapWidth(geometry, laneItems, minBlockWidth), geometry);
+          laneH = Math.max(LANE_HEIGHT_MIN, Number(laneH) || LANE_HEIGHT_MIN) + laneExtra;
+          laneTops[L] = y - groupTop;   /* 组内坐标（渲染层按 group.top 绝对定位） */
+          laneHeights[L] = laneH;
+          y += laneH;
         }
-        (g.items || []).forEach(function (item) {
+
+        items.forEach(function (item) {
           var start = D.minutesOf(item.occ.time.start);
           var end = D.minutesOf(item.occ.time.end);
           /* 横向坐标统一取自 computeAxisGeometry（ADR-20 / BR-35）；v2 的 projectX 结果与此一致 */
           item.left = axisX(geometry, start);
           item.width = Math.max(axisX(geometry, end) - item.left, minBlockWidth);
-          /* 纵向 = 组内道号 × 该组 laneHeight，与开始时间无关（US-25.2） */
-          item.top = (item.lane || 0) * laneHeight;
+          /* 纵向 = 道顶（逐道累加），与开始时间无关（US-25.2） */
+          var lane = Math.max(0, Math.min(laneCount - 1, Number(item.lane) || 0));
+          item.lane = lane;
+          item.top = laneTops[lane];
+          /* 该道的块高上限：渲染层按它收紧块高（每道可能不同） */
+          item.laneBlockH = Math.max(BLOCK_HEIGHT_MIN, laneHeights[lane] - BLOCK_GAP);
         });
+
+        g.top = groupTop;
+        g.laneHeight = laneHeights[0];
+        g.laneCount = laneCount;
+        g.height = y - groupTop;
       });
 
       /* 迭代 5（F-32 / 规范 08）：总高必须两条通路都算对。
-         v2 下 needsVerticalFix === false，上面的 y 不再累加，若直接返回 y 会让
-         #timeline-track/#timeline-labels 恒为 LANE_HEIGHT_MIN(48)，行组与事项块底部
-         被 `.timeline-scroll{overflow-y:hidden}` 裁掉（用户条目 1 的真根因）。
-         这里取「layout.js 返回的高度」与「各组 top+height 的最大值」的较大者。 */
-      var height = Number(laid && laid.height);
-      if (!isFinite(height) || height < 0) height = 0;
+         2026-10-31：逐道定高后本函数的 y 才是权威值 —— layout.js 返回的 height 仍是
+         「统一道高 × 道数」（有长备注块时虚高一整截），不能再取较大者，否则轨道底部
+         会多出一段没有内容的空白。这里以逐道累加高度为准，并用各组 top+height 兜底。 */
+      var height = 0;
       if (y > height) height = y;
       list.forEach(function (g) {
         var bottom = (Number(g.top) || 0) + Math.max(0, Number(g.height) || 0);
@@ -662,17 +702,87 @@
          再按本轮自然布局判断。否则底行变矮 / 事项变少后旧 floor 会把面板钉在高处，
          时间轴被空拉长、右栏在下面空一截，只有缩放视口才会恢复。 */
       panel.style.removeProperty('--day-floor');
+      fitPadRounds = 0;
       if (!sc || !(contentH > 0)) return;
-      if (typeof root.innerWidth === 'number' && root.innerWidth < 1024) return;
+      /* 2026-10-31：不再按视口宽度一刀切（原来 <1024 直接放弃）。
+         --day-floor 只在 ≥1024 的 .panel-day 上生效，宽屏外的写入是无害的；
+         而「窗口正好卡在断点附近 / 页面缩放」时那一条守卫会让兜底完全失效。 */
       var rulerH = (els.ruler && els.ruler.offsetHeight) || 30;
       var avail = sc.clientHeight - rulerH;
       if (!(avail > 0)) return;
       var need = contentH - avail;
-      /* 滚动区底部的 padding 固定吃掉几个像素，低于它不算裁切 */
-      if (!(need > 6)) return;
+      /* 滚动区底部 padding（4px）+ 边框会固定吃掉几像素，留 2px 余量不算裁切 */
+      if (!(need > 2)) return;
       var base = panel.getBoundingClientRect().height || 0;
       var floor = Math.ceil(base + need + 2);
       panel.style.setProperty('--day-floor', floor + 'px');
+    }
+
+    /**
+     * 2026-10-31（用户反馈）：桌面端「并发事项被卡片下沿切掉」。
+     * `.timeline-scroll` 是 `flex:1 1 0` 的**定高**滚动区，且 `overflow-y: hidden` ——
+     * 只要轨道比可视区高一点（并发道数变多 / 块变高 / 视口变矮 / 页面缩放），
+     * 底部整条道就会**静默消失**，列表里也滚不到。fitPanelToContent 只在面板能长高时有效，
+     * 面板被别的规则钉住时它救不了。
+     *
+     * 这里渲染后做一次实测兜底（顺序不可颠倒）：
+     *   ① 先按**量出来的**差值再垫高面板（真实差值，含舍入误差）；
+     *   ② 仍然装不下（视口太矮 / 面板长不动）→ 给滚动区挂 .is-vscroll，
+     *      时间轴改为纵向可滚动：宁可多一根滚动条，也不许事项凭空消失。
+     * 能装下时立刻摘掉这个类，回到「不滚动、整卡铺满」的原样。
+     */
+    function timelineOverflow() {
+      var sc = els.scroll;
+      if (!sc || !els.track) return 0;
+      var rulerH = (els.ruler && els.ruler.offsetHeight) || 0;
+      var trackH = els.track.offsetHeight || 0;
+      if (!(trackH > 0)) return 0;
+      var over = (rulerH + trackH) - (sc.clientHeight || 0);
+      /* 2026-10-31（用户反馈「刷新之后还是会被遮挡」）：
+         事项块是 position:absolute，撑不动轨道高度 —— 块比所在道高时，
+         轨道 offsetHeight 完全反映不出真实内容，只按它算会得到 over=0 的假安好。
+         这里再按块的**实际矩形**兜一遍，取两者较大值。 */
+      try {
+        var sr = sc.getBoundingClientRect();
+        var bottom = sr.top + rulerH + trackH;
+        var nodes = els.track.querySelectorAll('.tl-block');
+        for (var i = 0; i < nodes.length; i++) {
+          var r = nodes[i].getBoundingClientRect();
+          if (r.height > 0 && r.bottom > bottom) bottom = r.bottom;
+        }
+        var byBlock = bottom - sr.bottom;
+        if (byBlock > over) over = byBlock;
+      } catch (e) { /* 无布局能力 → 退回只按轨道高度 */ }
+      return over;
+    }
+
+    /* 连续垫高次数。ResizeObserver 会在每次垫高后再回调一次，
+       面板被外部规则钉死（长不动）时不能让这里无限叠加，超过 3 轮就只留纵向滚动。 */
+    var fitPadRounds = 0;
+
+    function ensureTimelineFits() {
+      var sc = els.scroll;
+      if (!sc || !sc.classList) return;
+      var over = timelineOverflow();
+      if (over <= 1) {
+        fitPadRounds = 0;
+        sc.classList.remove('is-vscroll');
+        return;
+      }
+      if (fitPadRounds < 3 && els.panel) {
+        fitPadRounds += 1;
+        var cur = parseFloat(els.panel.style.getPropertyValue('--day-floor')) || 0;
+        var base = els.panel.getBoundingClientRect().height || 0;
+        els.panel.style.setProperty('--day-floor', Math.ceil(Math.max(base, cur) + over + 2) + 'px');
+        over = timelineOverflow();
+        if (over <= 1) {
+          fitPadRounds = 0;
+          sc.classList.remove('is-vscroll');
+          return;
+        }
+      }
+      /* 垫高也装不下（面板长不动 / 视口太矮）→ 让时间轴自己纵向滚动，绝不静默裁掉 */
+      sc.classList.add('is-vscroll');
     }
 
     function renderTimeline() {
@@ -745,6 +855,7 @@
         contentHeight = LANE_HEIGHT_MIN;
         els.track.style.height = contentHeight + 'px';
         renderGridlines(null, rate);
+        ensureTimelineFits();
         updateNowLine();
         return;
       }
@@ -779,8 +890,11 @@
         group.items.forEach(function (item) {
           var occ = item.occ;
           var expanded = isExpanded(occ.key);
-          /* 2026-10-20（用户反馈）：块高按自身内容走，道高只是上限 */
-          var blockHeight = blockHeightFor(item, laneBlockH);
+          /* 2026-10-20（用户反馈）：块高按自身内容走，道高只是上限；
+             2026-10-31：上限改为**本道自己的**高度（逐道定高后每道不同）。 */
+          var laneCap = Number(item.laneBlockH);
+          if (!isFinite(laneCap) || laneCap <= 0) laneCap = laneBlockH;
+          var blockHeight = blockHeightFor(item, laneCap);
           var node = buildCard(occ, {
             variant: 'block',
             cats: cats,
@@ -831,9 +945,11 @@
         els.scroll.scrollLeft = keepScrollLeft;
       }
 
-      /* US-24 / DM-25：展开卡脱离裁切上下文；pin 返回 false 时保持上面的原位展开 */
+      /* US-24 / DM-25：展开卡脱离裁切上下文；pin 返回 false 时保持上面的原位展开。
+         2026-10-31：把滚动容器一并交给浮层 —— iOS 会把 fixed 后代连同容器裁掉，
+         浮层据此在「真被裁」时把卡片收进可视区（overlay.fitIntoClip）。 */
       if (pinner) {
-        toPin.forEach(function (node) { pinner.pin(node, els.track); });
+        toPin.forEach(function (node) { pinner.pin(node, els.track, { clip: els.scroll }); });
       }
 
       // 首屏自动横向滚动到最早时段附近（BR-35：x 坐标）
@@ -846,6 +962,8 @@
         }
       }
 
+      /* 兜底：轨道比可视区高时先垫高面板，仍装不下就让时间轴纵向可滚 —— 不许裁掉底部事项 */
+      ensureTimelineFits();
       updateNowLine();
     }
 
@@ -1566,6 +1684,10 @@
       if (opts2.notify !== false && opts.onSelectDate) opts.onSelectDate(iso);
       compute();
       renderAll();
+      /* 首屏定位只属于这一次导航：收尾即清，
+         绝不让后续点击引起的重绘（展开 / 收起）把时间轴拽到最早时段或现在指针。 */
+      pendingFirstScroll = false;
+      pendingNowScroll = false;
       /* 三十九轮（用户口径）：前移 / 后移也要左右滑入，与切档同一套观感。 */
       if (opts2.slide) {
         var motion = root.DayPlan.motion;
@@ -1902,6 +2024,43 @@
     if (typeof root.addEventListener === 'function') root.addEventListener('resize', scheduleReflow);
     var viewportPoll = setInterval(scheduleReflow, 400);
     if (viewportPoll && typeof viewportPoll.unref === 'function') viewportPoll.unref();
+
+    /* 2026-10-31（用户反馈「刷新之后还是会被遮挡」）：
+       上面那条只认 window 的宽高变化。可是刷新后容器会**自己**变矮 ——
+       底行（未排时段 / 完成台）异步渲染变高、顶部演示提示挂出、右栏图片加载完成，
+       任何一条都会把时间轴挤矮，而 window 尺寸一点没变，于是没人复检：
+       轨道按渲染那一刻的富余高度拉伸过，容器变矮后底部事项就被下沿切掉。
+       这里直接盯住滚动区与面板本身，尺寸一变就在下一帧复检（幂等，装得下就什么都不做）。 */
+    var fitRaf = 0;
+    var fitObserver = null;
+    function scheduleFitCheck() {
+      if (fitRaf) return;
+      var raf = (typeof root.requestAnimationFrame === 'function')
+        ? function (fn) { return root.requestAnimationFrame(fn); }
+        : function (fn) { return setTimeout(fn, 16); };
+      fitRaf = raf(function () {
+        fitRaf = 0;
+        if (els.panel && els.panel.hidden) return;
+        if (els.panel && !els.panel.isConnected) return;
+        ensureTimelineFits();
+      });
+    }
+    if (typeof root.ResizeObserver === 'function') {
+      try {
+        fitObserver = new root.ResizeObserver(scheduleFitCheck);
+        if (els.scroll) fitObserver.observe(els.scroll);
+        if (els.panel) fitObserver.observe(els.panel);
+      } catch (e) { fitObserver = null; }
+    }
+    /* 字体 / 图片加载完会再挪一次版，补两枪（不依赖 ResizeObserver 也能兜住） */
+    if (typeof root.addEventListener === 'function') {
+      root.addEventListener('load', scheduleFitCheck);
+    }
+    if (document && document.fonts && typeof document.fonts.ready === 'object') {
+      try {
+        document.fonts.ready.then(scheduleFitCheck, function () {});
+      } catch (e) { /* 老引擎没有 fonts.ready */ }
+    }
 
     syncHideDone();
 

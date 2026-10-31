@@ -870,6 +870,14 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
   background: var(--surface-2);
   padding-bottom: 4px;
 }
+/* 2026-10-31（用户反馈）：并发事项多到装不下时，底部的整条道曾被 overflow-y:hidden
+   静默裁掉（看也看不见、滚也滚不到）。day.js 量出「轨道 > 可视区」且面板已经垫不动时
+   挂上这个类，让时间轴自己纵向滚动 —— 宁可多一根滚动条，也不许事项消失。 */
+.timeline-scroll.is-vscroll {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
 .timeline-inner {
   position: relative;
   /* 迭代 4（ADR-19）：宽度由 JS 设为 CAT_LABEL_WIDTH + geometry.axisLength（不再用 --px-per-hour × 24） */
