@@ -364,12 +364,16 @@
 
 /* 翻转 / 切档期间页头改纯色底：半透明玻璃要实时采样下方正在 transform、滚动的巨大内容，
    Chromium 会逐帧重算导致页头闪；过渡结束后移除类自动恢复。
-   三十八轮（用户反馈）：不只年 ↔ 月 FLIP，月 / 周 / 日左右滑入期间同样要关。 */
+   三十八轮（用户反馈）：不只年 ↔ 月 FLIP，月 / 周 / 日左右滑入期间同样要关。
+   2026-10-31（用户反馈第五版）：这里**只能用 background-color**。
+   用 `background` 简写会把顶栏的纸纹（background-image）一起重置成 none，
+   切档一瞬间纸纹消失、切完又出现 —— 用户看到的就是「顶栏纸纹闪一下」。
+   与 NP-2（记录栏 :focus 不得写 background 简写）是同一个坑。 */
 body.is-year-flipping .app-header,
 body.is-view-switching .app-header {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
-  background: var(--surface);
+  background-color: var(--surface);
 }
 
 @media (max-width: 900px) {

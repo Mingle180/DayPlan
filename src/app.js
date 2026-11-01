@@ -59,7 +59,6 @@
     var els = {
       app: document.getElementById('app'),
       banners: document.getElementById('banners'),
-      todayChip: document.getElementById('today-chip'),
       settingsBtn: document.getElementById('btn-settings'),
       saveBtn: document.getElementById('btn-cloud-save'),
       viewSwitch: document.getElementById('view-switch'),
@@ -245,7 +244,6 @@
         var v = instances[k];
         if (v && typeof v.refresh === 'function') v.refresh();
       });
-      refreshTodayChip();
     }
 
     /** 切换共享视图日期（三视图同步）。 */
@@ -1406,28 +1404,8 @@
 
     /* ---------------- 顶栏 ---------------- */
 
-    function refreshTodayChip() {
-      if (!els.todayChip) return;
-      var txt = D.formatDateCN(D.todayISO());
-      var holidayName = '';
-      var H = root.DayPlan.holidays;
-      if (H && H.holidayOf) {
-        var h = H.holidayOf(D.todayISO());
-        if (h) holidayName = ' · ' + (h.type === 'workday' ? '班 ' : '休 ') + h.name;
-      }
-      els.todayChip.textContent = txt + holidayName;
-    }
-
-    /* 2026-10-22 二十六轮（用户反馈）：节假日数据缺口的说明不再顶在页面顶端，
-       改为放进「关于」；口径仍是 BR-23 —— 不推算、只诚实说明。 */
-    function holidayGapNote() {
-      var H = root.DayPlan.holidays;
-      if (!H || !H.missingYears) return '';
-      var years;
-      try { years = H.missingYears('2008-01-01', '2027-12-31'); } catch (e) { return ''; }
-      if (!years || !years.length) return '';
-      return '未收录 ' + years.join('、') + ' 年节假日数据（国务院尚未公布），这些年份不做标注、也不推算。';
-    }
+    /* 2026-10-31（用户口径）：日期条与品牌按钮已被样图字标（.brand-mark）替换，
+       refreshTodayChip / 品牌关于弹窗 / holidayGapNote 一并移除。 */
 
     if (els.settingsBtn) {
       els.settingsBtn.addEventListener('click', function () {
@@ -1435,22 +1413,8 @@
       });
     }
 
-    /* 2026-10-22 二十三轮（用户反馈）：DayPlan 品牌块点击 → 居中「关于」；
-       二十六轮起把节假日数据缺口说明放进正文（内容仍待用户补充）。 */
-    var brandBtn = document.getElementById('brand-about');
-    if (brandBtn) {
-      brandBtn.addEventListener('click', function () {
-        var aboutBody = M.el('div', { class: 'about-body', id: 'about-content' });
-        var note = holidayGapNote();
-        if (note) aboutBody.appendChild(M.el('p', { class: 'about-note', text: note }));
-        M.open({
-          title: '关于 DayLight',
-          body: aboutBody,
-          showSubmit: false,
-          center: true
-        });
-      });
-    }
+    /* 2026-10-31（用户口径）：原 logo 按钮（#brand-about → 关于弹窗）已删除，
+       顶栏左上是纯展示的字标图片。设置入口见 els.settingsBtn。 */
 
     /* 迭代 10 批次 2（条6）：分段控件白块拖动。
        - 白块（.view-switch-thumb）跟手移动，拖动中不高亮目标档；
@@ -1804,7 +1768,6 @@
 
     /* ---------------- 初始化渲染 ---------------- */
 
-    refreshTodayChip();
     setViewMode(state.viewMode, { persist: false });
 
     /* ---------------- 调试入口 ---------------- */

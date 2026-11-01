@@ -288,6 +288,8 @@
     /* 迭代 8（F-52）：列宽由内容决定 → 整周总宽可能超过容器，故加一层横向滚动 */
     var gridScrollEl = el('div', { class: 'week-grid-scroll', id: 'week-grid-scroll' }, [gridEl]);
     var notesStatus = el('span', { class: 'muted', id: 'week-notes-status' });
+    /* 2026-10-31：字数从标题行挪到纸面右下角，与日视图同一位置（记录栏一体化） */
+    var notesCount = el('span', { class: 'notes-count', id: 'week-notes-count', text: '0字' });
     var notesInput = el('textarea', {
       class: 'notes-input', id: 'week-notes-input', rows: '4',
       'aria-label': '当周记录'
@@ -302,7 +304,8 @@
           el('h2', { text: '当周记录' }),
           notesStatus
         ]),
-        notesInput
+        notesInput,
+        el('div', { class: 'notes-foot' }, [notesCount])
       ])
     ]);
     /* 悬停预览的边界参照（.week-scroll 会横向滚动，展开后需按它的视口让位） */
@@ -369,7 +372,8 @@
      * ------------------------------------------------------------------ */
 
     function updateNotesStatus(saving) {
-      notesStatus.textContent = (saving ? '保存中… ' : '') + notesInput.value.length + ' 字';
+      notesStatus.textContent = saving ? '保存中…' : '';
+      if (notesCount) notesCount.textContent = notesInput.value.length + '字';
     }
 
     /** 从 store 载入当前周的记录；有未落盘的输入时不覆盖。 */

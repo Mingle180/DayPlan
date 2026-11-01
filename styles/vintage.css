@@ -23,11 +23,11 @@
 :root {
   /* 2026-10-30：颜色按 美化.md 的色表逐项对齐（暖调纸张，不用纯白、不用冷灰） */
   --bg: #f1e7d6;              /* 页面背景 */
-  --header-bg: #f8f2e8;       /* 顶部导航 */
+  --header-bg: #fbf3e6;       /* 顶部导航（2026-10-31：对齐 logo 样图的纸底，四角取样中位数） */
   --surface: #f4eee3;         /* 主卡片（图9 取样：比页面略深的米纸） */
   --surface-2: #efe7d9;       /* 次级卡片 */
   --surface-3: #e7dbc7;       /* 纸张纹理 */
-  --glass: rgba(248, 242, 232, .9);
+  --glass: rgba(251, 243, 230, .9);
   --border: #e4d8c5;          /* 分割线 */
   --border-strong: #d2c2ab;
 
@@ -164,56 +164,54 @@ html[data-theme='dark'] ::selection { background: rgba(156, 174, 135, .3); }
  * 顶栏
  * ------------------------------------------------------------------ */
 
-/* 顶栏 = 一整幅暖奶油纸（不再浮成一张卡片）：单行、底部一条极淡发丝线 */
+/* 顶栏 = 一整幅米白手工纸（2026-10-31 用户口径：用参考图那张纸，可以直接横向取长）。
+   纸带 assets/textures/header-paper.webp 由 tools/gen_header_paper.py 生成：
+   只抠色卡内部一条横带、左右交替镜像接长，接缝天然连续，纸张不拉伸。 */
+/* 顶栏右缘不留滚动条槽（2026-10-31 / 11-01 用户连续两轮反馈“不要给滚动条留空”）：
+   旧版 scrollbar-gutter: stable 会给根滚动条预留 10px 槽位，槽位里透出画布底色，
+   顶栏右端就像被削掉一角；实验（tools/gutter_probe.cjs）证实槽位里不画背景图，
+   所以“把纸铺进槽位”不可行，只能把根滚动条的布局宽度归零（overlay 化）。
+   三内核各走一条：
+   ① Chromium / Safari → ::-webkit-scrollbar 宽度归零并 display:none；
+   ② Firefox 不认 webkit 伪元素 → 标准 scrollbar-width:none；
+   ③ Chromium 121+ 一旦看到 scrollbar-width 就忽略 webkit 伪元素，两条并存互不冲突。
+   只管根滚动条：右栏、时间轴等内部滚动条仍有自己的 10px 样式；
+   页面滚动由滚轮/触摸板承担，日/周视图的顶栏纸面都顶满右缘。 */
+html::-webkit-scrollbar { width: 0; height: 0; display: none; }
+html { scrollbar-width: none; }
+
 .app-header {
   gap: 18px;
   min-height: 82px;
   padding: 10px 26px;
-  background: var(--header-bg);
+  background-color: var(--header-bg);
+  background-image: url("../assets/textures/header-paper.webp");
+  background-repeat: repeat-x;
+  background-position: left center;
+  background-size: auto 100%;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
   box-shadow: none;
   overflow: hidden;
 }
 html[data-theme='dark'] .app-header {
+  background-image: url("../assets/textures/header-paper-dark.webp");
   box-shadow: none;
 }
 
-/* 品牌块：米白小方，内嵌网页 logo（logo 本身不动） */
-.brand {
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-block);
-}
-@media (hover: hover) {
-  .brand:hover { box-shadow: var(--shadow); transform: translateY(-1px); }
-}
+/* 顶栏字标（2026-10-31 用户口径）：样图第一幅水彩 DayLight 字标直接落在顶栏纸上。
+   字标自带同款纸底（#fbf2e6），顶栏底色已对齐到样图取样值，肉眼无缝。
+   原方形 logo 按钮块与日期条（.today-chip）样式一并删除——
+   顶栏左上是纯图片，没有按钮、没有「关于」入口（尺寸基准在 app.css：桌面 58 / 手机 34）。 */
 
-/* 日期：衬线标题式排版（不再当灰色胶囊） */
-.today-chip {
-  padding: 0;
-  border-radius: 0;
-  background: none;
-  color: var(--text);
-  font-family: var(--font-serif);
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: .4px;
-  line-height: 1.2;
-  white-space: nowrap;
-}
-
-/* 顶栏枝条：2026-10-30 用户口径删除诗句，枝条从居中装饰挪到日期右侧的原诗句位置 */
+/* 顶栏枝条：2026-11-01 用户口径右对齐到控制区之前（字标仍在最左）。 */
 .header-branch {
   display: block;
   flex: none;
   width: 150px;
   height: 56px;
-  margin-left: 6px;
+  margin-left: auto;
   pointer-events: none;
   opacity: .84;
   background: url("../assets/illustrations/header-botanical-branch.png") center / contain no-repeat;
@@ -882,15 +880,26 @@ html[data-theme='dark'] .finish-dock-body:empty::before {
   border: 0;
   border-radius: 0;
   box-shadow: none;
-  padding: 0;
+  /* 右栏是滚动容器（overflow-y: auto），投影会被容器边缘一刀切掉 ——
+     那就是「边缘像被什么东西框住」。这里用负外边距把盒子向两侧各撑开 16px，
+     再用同样的内边距把卡片推回原位：卡片宽度不变，投影有了落地的余地。 */
+  /* 下边 -18px 抵消下面的 padding-bottom：
+     否则卡片底边会比左栏高出 18px，两栏下缘对不齐（用户反馈）。 */
+  /* 顶部不留内边距：留了就把右栏整体压低 6px，
+     与左栏首卡顶边错开（用户反馈「上面没对齐」）。
+     投影都是向下的（--shadow-paper y=+3），顶部不需要留位。 */
+  margin: 0 -16px -18px;
+  padding: 0 16px 18px;
   gap: 16px;
 }
 html[data-theme='dark'] .side-rail { background: transparent; }
+/* 滚动容器顶部/底部的投影仍会被裁，但纸面那 18px 净边已经把它推到看不见的地方 */
 
-/* 右栏顶部：一张水彩明信片（山间小屋压在右侧，手写句走左边的浅坡） */
+/* 右栏顶部：一张水彩明信片（山间小屋压在右侧）。
+   2026-11-01（用户口径）：手机端的「DayLight」不再用系统手写字体渲染，
+   直接叠同款字标里的手写字母（brand-wordmark-text）；桌面端明信片只留插画。 */
 .side-rail::before {
-  content: "DayLight";
-  white-space: pre;
+  content: "";
   flex: 0 0 auto;
   display: block;
   min-height: 112px;
@@ -899,11 +908,6 @@ html[data-theme='dark'] .side-rail { background: transparent; }
   border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   box-shadow: var(--shadow-paper);
-  font-family: var(--font-script);
-  font-size: 34px;
-  line-height: 1.12;
-  color: #4a3f2d;
-  letter-spacing: .2px;
   background-color: var(--surface);
   background-image: url("../assets/illustrations/rail-cottage.jpg");
   background-repeat: no-repeat;
@@ -913,11 +917,9 @@ html[data-theme='dark'] .side-rail { background: transparent; }
   overflow: hidden;
 }
 html[data-theme='dark'] .side-rail::before {
-  color: #2e2618;
   background-color: var(--surface);
   background-image: url("../assets/illustrations/rail-cottage.jpg");
-  /* 去掉渐变后，滤镜对文字与底图同等缩放 —— 亮天空与米色字会一起落到同一亮度，
-     所以暗色下改成深字，只把整张明信片压暗一档。 */
+  /* 去掉渐变后，滤镜对底图与字标同等缩放，整张明信片压暗一档。 */
   filter: brightness(.62) saturate(.82);
 }
 
@@ -933,19 +935,53 @@ html[data-theme='dark'] .side-rail::before {
 }
 html[data-theme='dark'] .countdown-section { background: var(--surface); }
 
+/* 今日记录：一整张纸（2026-10-31 第五版，用户口径：纸纹更细腻、像精致的笔记本）。
+   · 纸纹 = assets/textures/notes-paper.webp（tools/gen_notes_paper.py 生成）：
+     抠「米白手工纸」色卡内部（与顶栏同一张纸），>8px 的云斑压到 12% 只留纤维，
+     1:1 不放大，只轻轻反锐化；4 向镜像拼成 404×584 的纸块，纵向续下去看不出接缝；
+   · 纸的边界不画 border，只由三层窄投影给出 —— 纸是「搁」在页面上的；
+   · 纸底留一条净边：横线到这儿为止，字数落在净边里，底下不压横线；
+   · 输入时纸面零变化（没有边框高亮、没有 focus ring）。 */
 .notes-section {
   position: relative;
-  padding: 14px 16px 16px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-paper);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* 纸底净边（也是字数那条带）：横线不顶到底 */
+  padding: 0 0 22px;
+  overflow: hidden;
+  /* 正文左缩进 = 横线左右留白，同一个变量给三处用（标题 / 正文 / 字数） */
+  --notes-pad-x: 22px;
+  background-color: #f7f2e8;            /* 兜底纸色＝纸纹自身的均值，图片没铺到也看不出接缝 */
+  background-image: url("../assets/textures/notes-paper.webp");
+  background-repeat: repeat-y;          /* 纸纹 404×584 与卡同宽，纵向按镜像周期续下去 */
+  background-position: left top;
+  background-size: 100% auto;
+  border: 0;
+  border-radius: 10px;
+  /* 三层窄投影：贴着纸边 1–2px 的接触影 + 8px 的过渡 + 20px 的扩散。
+     最外层的扩散半径压在 20px 内，右栏那 16/18px 的内边距刚好容得下，不会被裁。 */
+  box-shadow:
+    0 1px 2px rgba(96, 74, 44, .09),
+    0 3px 9px -3px rgba(96, 74, 44, .10),
+    0 12px 22px -14px rgba(96, 74, 44, .16);
 }
-html[data-theme='dark'] .notes-section { background: var(--surface); }
+html[data-theme='dark'] .notes-section {
+  background-color: #382f22;
+  background-image: url("../assets/textures/notes-paper-dark.webp");
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, .30),
+    0 3px 8px -3px rgba(0, 0, 0, .30),
+    0 10px 20px -12px rgba(0, 0, 0, .38);
+}
 
-/* 周视图右栏只有「当周记录」这一节（:first-child 会把上内边距抹成 0），标题行会贴住
-   卡片上缘。补一段与下方 8px 行距等量的上留白，让笔图标 + 标题落在顶端空白带的正中。 */
-.week-view .side-rail .notes-section { padding-top: 8px; }
+/* 标题行落在纸头：左右内边距与正文同一根竖线 */
+.notes-section .section-head {
+  padding: 14px var(--notes-pad-x) 8px;
+  align-items: center;
+}
+.notes-section .section-head h2 { font-size: 16px; letter-spacing: .8px; }
+.notes-section .section-head h2::before { width: 17px; height: 17px; }
 
 /* 倒计时卡片：三张同款奶油纸卡，圆角比容器小一档，靠轻扩散投影落纸 */
 .cd-item {
@@ -1024,52 +1060,62 @@ html[data-theme='dark'] .cd-empty-art::before {
 }
 
 /* 今日记录：横线纸（2026-10-30 用户口径：水仙花下线，正文用霞鹜文楷、字号略大，
-   底部落在下方横线上；横线整体上移，与文字基线之间只留一点缝）。
-   纸纹取自事项块同一张 paper-event（multiply 压在底色上），横线画在纸纹之上。 */
+   底部落在下方横线上；横线整体上移，与文字基线之间只留一点缝）。 */
+/* 正文：透明底 + 横线。横线画在 textarea 自己的背景上并 `attachment: local`，
+   内容滚动时线与字一起走，永远不会错位；纸纹由 .notes-section 提供，
+   所以点进去输入时看到的就是纸面本身，不会再冒出一个输入框。
+   2026-10-31：`repeat-y` 而不是 `repeat` —— 横线块比纸窄一截，用 repeat 会往左再补
+   一节，横线又顶满全宽（用户口径「横线不要顶满，留一点空间」）。 */
 .notes-input {
-  background-color: color-mix(in srgb, var(--surface) 55%, var(--surface-2));
-  /* 与 .tl-block 同构：半透明纸色压住纸纹，纹理只透出三成，不会把记录区压成牛皮纸 */
-  background-image:
-    repeating-linear-gradient(180deg, transparent 0 27px, rgba(150, 128, 96, .21) 27px 28px),
-    linear-gradient(color-mix(in srgb, var(--surface) 68%, transparent),
-      color-mix(in srgb, var(--surface) 68%, transparent)),
-    url("../assets/textures/paper-event.jpg");
-  background-repeat: repeat, no-repeat, no-repeat;
-  background-position: 0 7px, center, center;
-  background-size: 100% 28px, cover, cover;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 90px;
+  /* 顶部内边距 4px：配合下面横线的 27px 相位，
+     让第一行字刚好坐在第一根横线上面（线在字底下 2~3px）。 */
+  padding: 4px var(--notes-pad-x) 10px;
+  border: 0;
+  border-radius: 0;
+  background-color: transparent;
+  background-image: repeating-linear-gradient(180deg,
+    transparent 0 27px,
+    rgba(150, 118, 74, .20) 27px 28px);
+  background-repeat: repeat-y;
+  /* 相位推导：repeating 平铺向上也生效，线的集合 = {(P+27) mod 28} + 28k，
+     P=27 → 最低一根在 26px，上方再无线；之前 P=9 会在 8px 处多出一根压在字上面的线。 */
+  background-position: var(--notes-pad-x) 27px;
+  background-size: calc(100% - var(--notes-pad-x) * 2) 28px;
+  background-attachment: local;
   line-height: 28px;
-  padding: 10px 14px;
   color: var(--text);
   font-family: var(--font-serif);
   font-size: 15px;
+  caret-color: var(--text);
+  box-shadow: none;
 }
 html[data-theme='dark'] .notes-input {
-  background-color: #2a231b;
-  /* 深色：纸纹先与深色层相乘再叠横线 —— 与 .tl-block 的深色纸纹同一口径 */
-  background-image:
-    repeating-linear-gradient(180deg, transparent 0 27px, rgba(238, 226, 203, .09) 27px 28px),
-    url("../assets/textures/paper-event.jpg"),
-    linear-gradient(#332a20, #332a20);
-  background-repeat: repeat, no-repeat, no-repeat;
-  background-position: 0 7px, center, 0 0;
-  background-size: 100% 28px, cover, 100% 100%;
-  background-blend-mode: normal, multiply, normal;
+  background-color: transparent;
+  background-image: repeating-linear-gradient(180deg,
+    transparent 0 27px,
+    rgba(238, 226, 203, .12) 27px 28px);
+  background-attachment: local;
 }
 .notes-input::placeholder { color: var(--text-3); opacity: 1; }
+/* 焦点：只去掉浏览器默认框，纸面本身一点都不动（不加边框高亮、不加 ring） */
 .notes-input:focus {
-  border-color: var(--primary);
-  background-color: var(--surface);
-  box-shadow: 0 0 0 4px var(--primary-weak);
+  outline: none;
+  border: 0;
+  background-color: transparent;
+  box-shadow: none;
 }
 .notes-section .muted { font-variant-numeric: tabular-nums; }
 
-/* 字数计数：软目标 500，只提示不截断 */
+/* 字数：压在纸底那条净边里（不占纸外空间、不拦鼠标），底下没有横线 */
 .notes-foot {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 6px;
+  position: absolute;
+  right: var(--notes-pad-x);
+  bottom: 6px;
+  margin: 0;
+  pointer-events: none;
 }
 .notes-count {
   font-size: 11.5px;
@@ -1609,15 +1655,32 @@ html[data-theme='dark'] .toast .btn { color: var(--primary); }
   .untimed-section,
   .finish-dock,
   .countdown-section,
-  .notes-section,
   .side-rail::before { border-radius: var(--radius); }
   .timeline-section { padding: 10px; }
   .week-card { padding: 12px; }
   .untimed-section,
   .finish-dock,
-  .countdown-section,
-  .notes-section { padding: 14px; }
+  .countdown-section { padding: 14px; }
+  /* 记录栏是一张纸：卡片本身不吃内边距，改由标题行 / 正文各自持有（与桌面同构） */
+  /* 手机端右栏不再滚动（页面整体滚），关掉裁剪让纸的投影完整露出来 */
+  .side-rail { margin: 0; padding: 0 2px 14px; overflow: visible; gap: 14px; }
+  /* 2026-11-01（用户口径）：手机端明信片保留「DayLight」，且必须与顶栏字标同字体——
+     直接用字标里裁出的手写字母，不再走系统手写字体。 */
+  .side-rail::before {
+    background-image: url("../assets/illustrations/brand-wordmark-text.png"),
+      url("../assets/illustrations/rail-cottage.jpg");
+    background-repeat: no-repeat, no-repeat;
+    background-position: 15px 50%, 50% 50%;
+    background-size: auto 34px, cover;
+  }
+  html[data-theme='dark'] .side-rail::before {
+    background-image: url("../assets/illustrations/brand-wordmark-text-dark.png"),
+      url("../assets/illustrations/rail-cottage.jpg");
+  }
+  .notes-section { --notes-pad-x: 18px; padding: 0 0 20px; }
+  .notes-section .section-head { padding: 13px var(--notes-pad-x) 2px; }
   .notes-input { font-size: 16px; line-height: 28px; }
+  .notes-foot { right: var(--notes-pad-x); bottom: 5px; }
   /* 衬线比无衬线略宽，手机档副标题会多掉一个「3）」；收一点字距与字号让它回到两行 */
   .day-sub { font-size: 11.5px; letter-spacing: 0; text-wrap: pretty; }
 }

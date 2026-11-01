@@ -102,9 +102,12 @@ html, body {
   height: 100%;
 }
 
-/* 2026-10-22 二十一轮：月视图隐藏页面滚动条，日周视图有滚动条，
-   不预留槽位会让右侧「月/周/日」分段控件横向跳动；稳定槽位后各档几何一致。 */
-html { scrollbar-gutter: stable; }
+/* 2026-10-22 二十一轮曾用 scrollbar-gutter: stable 稳定月/周/日切换时的几何。
+   2026-10-31（用户反馈）：槽位直接取消 —— vintage.css 把根滚动条宽度归零
+   （overlay 化），滚动条出现与否都不再占布局宽度，分段控件天然不跳，
+   页面纸面顶满右缘（实测 gutter stable 会按默认滚动条宽度预留、无视 0 宽，
+   所以这里必须一并去掉）。 */
+html { scrollbar-gutter: auto; }
 
 /* 2026-10-23 三十五轮（用户反馈）：触屏点按按钮不再闪出系统灰色高亮块。
    三十八轮补：高亮色不向伪元素继承，且按钮原生外观在部分内核里仍会画出按下灰底，
@@ -166,49 +169,28 @@ button { font: inherit; color: inherit; text-align: center; }
   z-index: 20;
 }
 
-/* 2026-10-22 二十三轮（用户反馈）：去掉蓝点与「日程安排」副标题；
-   品牌块为白底带阴影的按钮，悬停与事项块同款抬升，点击打开「关于」。
-   四十二轮：块内只放网页 logo，按钮改正方形、图标居中。 */
-.brand {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border: 0;
-  border-radius: 10px;
-  background: var(--surface);
-  box-shadow: var(--shadow-block);
-  cursor: pointer;
-  transition: box-shadow var(--ease), transform var(--ease);
-}
-/* 悬停只在真正支持 hover 的设备生效：触屏点按后 :hover 会黏住，整块缩放不还原 */
-@media (hover: hover) {
-  .brand:hover { box-shadow: var(--shadow); transform: scale(1.02); }
-}
-.brand:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
-/* 四十二轮（用户口径）：左上角只保留网页 logo（与 favicon 同一标记的高清版）。 */
-.brand-logo {
+/* 2026-10-31（用户口径）：顶栏左上是样图第一幅水彩字标（.brand-mark），
+   原 32×32 logo 按钮块、日期条（.today-chip）与其「关于」弹窗入口一并删除。
+   字标是纯图片（pointer-events: none），不承担任何交互。 */
+.brand-mark {
   display: block;
   flex: none;
-  width: 22px;
-  height: 22px;
+  width: auto;
+  height: 58px;
   pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
 }
-html[data-theme='dark'] .brand-logo { filter: invert(1); }
+/* 2026-11-01（用户口径）：深色顶栏用奶油墨线字标，浅色用加深版；
+   两张同尺寸叠放，data-theme 一切换就换图，不经过 JS、不闪。 */
+.brand-mark-dark { display: none; }
+html[data-theme='dark'] .brand-mark-light { display: none; }
+html[data-theme='dark'] .brand-mark-dark { display: block; }
 
-/* 2026-10-29（用户反馈）：日期灰条移到 logo 右侧、左对齐；保存 / 设置留在右端成组。 */
-.header-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+/* 2026-10-29（用户反馈）：保存 / 设置留在右端成组。 */
+/* 2026-11-01（用户口径）：顶栏枝条右对齐到控制区之前（字标仍在最左）。 */
+.header-left { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1 1 auto; }
 .header-right { display: flex; align-items: center; gap: 10px; }
-.today-chip {
-  color: var(--text-2);
-  font-size: 12px;
-  background: var(--surface-2);
-  border-radius: 999px;
-  padding: 4px 12px;
-  font-variant-numeric: tabular-nums;
-}
 
 /* 三十七轮（用户口径）：「年」并入手机端分段控件、位于「月」左侧；
    桌面端不再提供年视图入口（顶栏独立按钮已删除）。 */
@@ -1280,21 +1262,21 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
 
 /* 记录栏 */
 /* 迭代 10 批次 4（条8）：去掉区域级横向灰线（原 border-top），改由侧栏自身的白底与留白分区 */
-.notes-section { padding-top: 14px; }
-.notes-section:first-child { padding-top: 0; }
+/* 2026-10-31（用户口径）：记录栏改成一整张纸 —— 卡内不再套第二个带边框的输入框，
+   内边距交给标题行与 textarea 各自持有，卡片本身不再有 padding。 */
+.notes-section { padding: 0; }
 .notes-input {
   width: 100%;
-  resize: vertical;
+  resize: none;
   min-height: 78px;
-  padding: 10px 14px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
+  padding: 8px 16px 22px;
+  border: 0;
+  border-radius: 0;
+  background-color: transparent;
   font: inherit;
   color: var(--text);
-  transition: background var(--ease), box-shadow var(--ease);
 }
-.notes-input:focus { outline: none; border-color: var(--primary); background: var(--surface); box-shadow: 0 0 0 4px rgba(0, 122, 255, .15); }
+.notes-input:focus { outline: none; border-color: transparent; background-color: transparent; box-shadow: none; }
 
 /* ------------------------------------------------------------------ *
  * 弹窗
@@ -1365,8 +1347,6 @@ html.has-modal body {
 .modal-title { font-size: 16px; font-weight: 600; margin: 0; }
 .modal-body { padding: 18px 20px; }
 /* 关于（2026-10-22 二十六轮）：节假日数据缺口的说明从顶部蓝条移到这里 */
-.about-body { display: flex; flex-direction: column; gap: 12px; }
-.about-note { margin: 0; color: var(--text-2); font-size: 13px; line-height: 1.7; }
 .modal-foot {
   display: flex;
   align-items: center;
@@ -1897,11 +1877,9 @@ html.has-modal body {
     /* 四十一轮（用户口径）：手机端顶栏恢复毛玻璃。切档 / 翻转期间的临时纯色
        仍由 body.is-view-switching / .is-year-flipping 那一条规则负责。 */
   }
-  /* 四十二轮：手机档品牌块保持正方形，logo 按比例放大。 */
-  .brand { width: 44px; height: 44px; padding: 0; }
-  .brand-logo { width: 28px; height: 28px; }
+  /* 2026-10-31：手机档字标收小一号（44px 高在窄顶栏里太挤）。 */
+  .brand-mark { height: 34px; }
   .header-right { gap: 8px; min-width: 0; }
-  .today-chip { display: none; }
   .view-switch-btn { min-width: 44px; min-height: 44px; padding: 0 10px; font-size: 14px; }
   .header-right > .btn { min-height: 44px; padding: 0 12px; }
 
