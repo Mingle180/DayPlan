@@ -602,7 +602,7 @@
     /** 移除某次发生的例外（恢复为规则默认） */
     /**
      * 迭代 7（F-45 第 6 条 / 用户裁定 R-23）：该次发生的改动是否**不只是**「紧急 / 取消紧急」。
-     * 只有「仅此次」的紧急切换（例外里除 categoryId 外没有任何覆盖）时不提供「恢复默认」。
+     * 只有「仅此次」的紧急切换（例外里除 categoryId 外没有任何覆盖）时不提供「复原」。
      * 读纯函数：不修改任何状态。
      * @param {object} occ 发生（DM-5）
      * @returns {boolean}
@@ -1398,6 +1398,75 @@
       if (!dt.isValidDate(mondayISO)) return null;
       var w = state.weekNotes ? state.weekNotes[mondayISO] : null;
       return w ? { text: w.text, updatedAt: w.updatedAt } : null;
+    }
+
+    // ---------------- 右栏图片（2026-11-01） ----------------
+
+    /** 宽高比（高/宽）夹到数据层允许范围；上限 1:1 由用户裁定。 */
+    function clampCoverRatio(value) {
+      var r = Number(value);
+      if (!isFinite(r)) r = schema.COVER_RATIO_MAX;
+      return Math.max(schema.COVER_RATIO_MIN, Math.min(schema.COVER_RATIO_MAX, r));
+    }
+
+    /**
+     * 写入一份右栏图片；cover 为 null 表示恢复默认（删除该键）。
+     * 图片必须已是 data URL（裁剪端导出后传入），内容没变时不刷新时间戳。
+     */
+    function setCoverAt(field, key, cover) {
+      var existing = schema.isPlainObject(state[field]) ? state[field][key] : null;
+      var next = null;
+      if (cover !== null && cover !== undefined) {
+        var src = typeof cover.src === 'string' ? cover.src.trim() : '';
+        if (!/^data:image\/[a-z0-9.+-]+;base64,/i.test(src)) {
+          throw StoreError('E_VALIDATION', '图片数据必须是图片 data URL');
+        }
+        if (src.length > schema.COVER_SRC_MAX) {
+          throw StoreError('E_VALIDATION', '图片过大（' + src.length + ' 字符，上限 ' + schema.COVER_SRC_MAX + '）');
+        }
+        next = { src: src, ratio: clampCoverRatio(cover.ratio) };
+      }
+      if (!next) {
+        if (!existing) return true;
+        mutate(function (draft) {
+          if (schema.isPlainObject(draft[field])) delete draft[field][key];
+        });
+        return true;
+      }
+      if (existing && existing.src === next.src &&
+          Math.abs(existing.ratio - next.ratio) < 0.0005) return true;
+      mutate(function (draft) {
+        if (!schema.isPlainObject(draft[field])) draft[field] = {};
+        draft[field][key] = { src: next.src, ratio: next.ratio, updatedAt: now() };
+      });
+      return true;
+    }
+
+    /** 写入某日右栏图片（键 = 日期）；null 删除 */
+    function setCover(dateISO, cover) {
+      if (!dt.isValidDate(dateISO)) throw StoreError('E_INVALID_DATE', '非法日期：' + dateISO);
+      return setCoverAt('covers', dateISO, cover);
+    }
+
+    /** 读取某日右栏图片；无则 null */
+    function getCover(dateISO) {
+      if (!dt.isValidDate(dateISO)) return null;
+      var c = schema.isPlainObject(state.covers) ? state.covers[dateISO] : null;
+      return c ? { src: c.src, ratio: c.ratio, updatedAt: c.updatedAt } : null;
+    }
+
+    /** 写入某周右栏图片（键 = 该周周一）；null 删除 */
+    function setWeekCover(mondayISO, cover) {
+      if (!dt.isValidDate(mondayISO)) throw StoreError('E_INVALID_DATE', '非法日期：' + mondayISO);
+      if (!isMonday(mondayISO)) throw StoreError('E_NOT_MONDAY', '周图片的键必须是周一：' + mondayISO);
+      return setCoverAt('weekCovers', mondayISO, cover);
+    }
+
+    /** 读取某周右栏图片；无则 null */
+    function getWeekCover(mondayISO) {
+      if (!dt.isValidDate(mondayISO)) return null;
+      var c = schema.isPlainObject(state.weekCovers) ? state.weekCovers[mondayISO] : null;
+      return c ? { src: c.src, ratio: c.ratio, updatedAt: c.updatedAt } : null;
     }
 
     // ---------------- 本月计划（2026-10-20 六轮 / F-05.2） ----------------
@@ -2250,6 +2319,11 @@
       setNote: setNote,
       setWeekNote: setWeekNote,
       getWeekNote: getWeekNote,
+      // 右栏图片（2026-11-01）
+      getCover: getCover,
+      setCover: setCover,
+      getWeekCover: getWeekCover,
+      setWeekCover: setWeekCover,
       // 本月计划（2026-10-20 六轮）
       getMonthPlan: getMonthPlan,
       addMonthPlanItem: addMonthPlanItem,

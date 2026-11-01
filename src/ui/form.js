@@ -10,7 +10,6 @@
 
   var D = root.DayPlan.datetime;
   var S = root.DayPlan.schema;
-  var R = root.DayPlan.recurrence;
   var M = root.DayPlan.modal;
   var el = M.el;
 
@@ -381,7 +380,7 @@
         if (closer) closer.unbind();
       }
     });
-    /* 值被程序改写（校验回填 / 预览链路）时按钮文案跟随 */
+    /* 值被程序改写（校验回填）时按钮文案跟随 */
     select.addEventListener('change', syncButton);
 
     wrap.appendChild(button);
@@ -586,7 +585,6 @@
       }
       cb.addEventListener('change', function () {
         chip.classList.toggle('is-on', cb.checked);
-        updatePreview();
       });
       chip.classList.toggle('is-on', cb.checked);
       weekdayInputs[pair[0]] = cb;
@@ -661,8 +659,6 @@
       endDateCtl.wrap
     ]);
 
-    var previewBox = el('div', { class: 'hint repeat-preview' });
-
     function currentRepeatType() { return repeatTypeSelect.value; }
 
     function syncRepeatVisibility() {
@@ -672,7 +668,7 @@
       repeatLegend.textContent = '';
       repeatLegend.hidden = true;
       dateField.querySelector('.field-label').textContent = t === 'none' ? '日期' : '开始日期';
-      if (t === 'none') { previewBox.textContent = ''; return; }
+      if (t === 'none') return;
       if (t === 'daily') {
         intervalSuffix.textContent = '天';
         repeatParams.appendChild(rowInterval);
@@ -694,8 +690,6 @@
       repeatParams.appendChild(rowEndDate);
       /* 四十五轮：显示开关排在结束日期之后，缺省勾选 */
       repeatParams.appendChild(rowShowLabel);
-      repeatParams.appendChild(previewBox);
-      updatePreview();
     }
 
     /** 取值（不含校验） */
@@ -735,7 +729,7 @@
         categoryId: urgentNow ? URGENT_ID : catSelect.value,
         date: normalizeDateText(dateInput.value),
         time: timeToggle.checked ? { start: startInput.value, end: endInput.value } : null,
-        // noteInput 在重复区之后才创建；collect() 可能被预览提前调用
+        // noteInput 在重复区之后才创建；collect() 可能被提前调用
         note: noteInput ? noteInput.value : initial.note,
         /* 迭代 7（F-49）：表单不再提供「已完成」入口 → 保留既有完成态，不得改回未完成 */
         done: initial.done === true,
@@ -747,45 +741,7 @@
       return payload;
     }
 
-    function updatePreview() {
-      if (currentRepeatType() === 'none') { previewBox.textContent = ''; return; }
-      var v = collect();
-      if (!D.isValidDate(v.date)) {
-        previewBox.textContent = v.date ? '开始日期格式应为 YYYY-MM-DD（如 2026-09-01）' : '';
-        return;
-      }
-      var range = { from: v.date, to: D.addDays(v.date, 366 * 2), max: 50 };
-      if (v.repeat.endDate) {
-        if (!D.isValidDate(v.repeat.endDate)) {
-          previewBox.textContent = '结束日期格式应为 YYYY-MM-DD（留空表示长期重复）';
-          return;
-        }
-        if (D.diffDays(v.repeat.endDate, range.to) > 0) range.to = v.repeat.endDate;
-      }
-      try {
-        var res = R.expandSeries({ id: '__preview__', kind: 'series', repeat: v.repeat, exceptions: {}, time: v.time, title: v.title }, range);
-        var dates = res.occurrences.map(function (o) { return o.date; });
-        if (!dates.length) {
-          previewBox.textContent = '在未来两年内没有命中的日期，请检查规则。';
-          return;
-        }
-        var head = dates.slice(0, 6).join('、');
-        var more = dates.length > 6 ? ' … 共 ' + dates.length + ' 次' : '（共 ' + dates.length + ' 次）';
-        previewBox.textContent = '预览：' + head + more + '｜' + R.repeatLabel(v.repeat);
-      } catch (e) {
-        previewBox.textContent = '无法预览：' + e.message;
-      }
-    }
-
     repeatTypeSelect.addEventListener('change', syncRepeatVisibility);
-    [dateInput, endDateInput, intervalInput, monthDayInput, yearMonthInput, yearDayInput,
-      lunarMonthInput, lunarDayInput, titleInput]
-      .forEach(function (n) {
-        n.addEventListener('change', updatePreview);
-        n.addEventListener('input', updatePreview);
-      });
-    leapCheck.addEventListener('change', updatePreview);
-    holidaySkipCheck.addEventListener('change', updatePreview);
 
     repeatBlock.appendChild(el('div', { class: 'field' }, [
       el('label', { class: 'field-label', text: '重复方式' }), selectFieldControl(repeatTypeSelect).wrap

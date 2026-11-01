@@ -103,6 +103,7 @@
       countdownList: document.getElementById('countdown-list'),
       countdownEmpty: document.getElementById('countdown-empty'),
       countdownAdd: document.getElementById('btn-new-countdown'),
+      railCover: document.getElementById('day-rail-cover'),
       notesInput: document.getElementById('notes-input'),
       notesStatus: document.getElementById('notes-status'),
       notesCount: document.getElementById('notes-count')
@@ -134,6 +135,31 @@
     var dock = null;
     /** 五十一轮：倒计时实例（模块缺失时为 null → 右栏只留记录区） */
     var countdown = null;
+    /** 2026-11-01：右栏图片实例（模块缺失时为 null → 保留静态明信片） */
+    var railCover = null;
+
+    /* 2026-11-01：拖放排时 / 拉边调整。idleDragExpanded 只在拖动期间为 true ——
+       指针进入首尾折叠带时整条轴临时展开为真实比例，结束即收拢。 */
+    var idleDragExpanded = false;
+    /** 展开时记住「被折叠那半段的中心时刻」：收拢时以它为轴反向卷回，视线不漂 */
+    var idleBandAnchor = null;
+    /* 展开 / 收拢的 FLIP 期间冻结自动滚动：滚动位移已由视口坐标的 FLIP 补齐，
+       此时再改 scrollLeft 会让动画终点持续漂移 */
+    var axisAnimatingUntil = 0;
+    /* 2026-11-01 用户反馈：卷轴展开再慢一点；刻度文字自带的 translateX(-50%) 居中
+       必须与 FLIP 的位移叠加，动画只能改独立的 translate 属性，不能覆盖 transform。 */
+    var AXIS_FLIP_MS = 480;
+    var AXIS_FADE_MS = 320;
+    var AXIS_FLIP_EASING = 'cubic-bezier(.22,.61,.36,1)';
+    var dragGhost = null;         // 时间轴上的 1 小时落位幽灵块
+    var dragPill = null;          // 跟随指针的鼠尾草时间胶囊
+    var dragPointer = null;       // {x, y, mode:'drag'|'resize'}，自动滚动用
+    var autoScrollRaf = 0;
+    var resizeState = null;
+    /* 2026-11-01：两端手柄各占 10px；过窄的块（省略态 / 微块）不放，免得整块都成拉边区、点不开 */
+    var RESIZE_HANDLE_MIN_W = 40;
+    var touchDrag = null;
+    var touchGhost = null;
 
     /* US-24 / DM-25：展开卡临时脱离裁切上下文（模块缺失或无 rect 时降级为原位展开） */
     var pinner = (Overlay && typeof Overlay.createExpandPinner === 'function')
@@ -793,7 +819,7 @@
       var rate = pxPerHour();
       var lanesMax = Number((doc.settings && doc.settings.maxLanes) || 3);
       if (!isFinite(lanesMax) || lanesMax < 1) lanesMax = 3;
-      var compressible = !doc.settings || doc.settings.idleCompressEnabled !== false;
+      var compressible = (!doc.settings || doc.settings.idleCompressEnabled !== false) && !idleDragExpanded;
       var labelWidth = catLabelWidth();
 
       if (els.panel) {
@@ -802,8 +828,9 @@
         els.panel.style.setProperty('--cat-label-width', labelWidth + 'px');
       }
 
-      /* 上一轮已固定的展开卡：节点即将被替换，先清账（真实滚动/缩放由 overlay 自行 sync） */
-      if (pinner) pinner.sync();
+      /* 上一轮已固定的展开卡：整条轨道即将重建，先收回（手机档卡片被搬到了视图根，
+        不收回就会留在页面上成为孤儿；真实滚动/缩放仍由 overlay 自行 sync）。 */
+      if (pinner) pinner.releaseAll();
 
       /* 重建期间会先移除全部 .tl-block / .tl-typegroup，真实浏览器在这一刻可能把
          scrollLeft 夹取到 0（垫片只存值、不会夹取，所以冒烟测不到）。先把位置记下来，
@@ -851,8 +878,17 @@
       var contentHeight = Math.max(laid.height, LANE_HEIGHT_MIN);
 
       if (!hasTimed) {
-        /* 空态（BR-28 / AC-20.1）：时间轴区内不出现任何占位文案，只保留整日刻度与网格线 */
+        /* 空态（BR-28 / AC-20.1）：时间轴区内不出现任何占位文案，只保留整日刻度与网格线。
+           2026-11-01（用户反馈）：桌面档 .timeline-section / .timeline-scroll 由 flex 撑满，
+           轨道若只按一行高排版，整点竖线与「现在」线会停在半空、卡片下半截只剩纸色。
+           这里让空轨道铺满滚动区可视高度；窄屏滚动区由内容撑高，仍保持一行高
+           （否则「量自身 → 写回自身」会一轮轮长高）。 */
+        var emptyRulerH = (els.ruler && els.ruler.offsetHeight) || 0;
+        var visibleH = (els.scroll && els.scroll.clientHeight) || 0;
         contentHeight = LANE_HEIGHT_MIN;
+        if ((Number(root.innerWidth) || 0) >= 1024 && visibleH > emptyRulerH) {
+          contentHeight = Math.max(contentHeight, visibleH - emptyRulerH);
+        }
         els.track.style.height = contentHeight + 'px';
         renderGridlines(null, rate);
         ensureTimelineFits();
@@ -934,6 +970,17 @@
             toPin.push(node);
           }
           box.appendChild(node);
+          /* 2026-11-01：两端拉边改时间（展开卡收起后再出现，避免与 pin 冲突）。
+             几何要等内联 left / top / width / height 写完再传，触屏加长判定区按它落位。 */
+          if (!expanded && occ.time && Number(item.width) >= RESIZE_HANDLE_MIN_W) {
+            attachResizeHandles(node, occ, {
+              parent: box,
+              left: Math.round(item.left + (item.overflowOffsetX || 0)),
+              top: Math.round(item.top),
+              width: Math.max(1, Math.round(item.width)),
+              height: blockHeight
+            });
+          }
         });
 
         els.track.appendChild(box);
@@ -965,6 +1012,8 @@
       /* 兜底：轨道比可视区高时先垫高面板，仍装不下就让时间轴纵向可滚 —— 不许裁掉底部事项 */
       ensureTimelineFits();
       updateNowLine();
+      /* 垫面板 / 加滚动条都可能改写容器的矩形：收进容器的展开卡再量一次 */
+      if (pinner) pinner.sync();
     }
 
     /**
@@ -994,6 +1043,7 @@
             class: cls,
             text: (t.minute < 600 ? '0' : '') + Math.floor(t.minute / 60) + ':00'
           });
+          tick.setAttribute('data-minute', String(t.minute));
           setPx(tick, 'left', labelWidth + x);
           setPx(tick, 'top', RULER_TICK_TOP);
           return tick;
@@ -1078,6 +1128,8 @@
         /* 迭代 10 条13：列表内拖动排序的锚点（seriesId 才是 store 的排序单位） */
         node.setAttribute('data-series-id', occ.seriesId);
         node.setAttribute('draggable', 'true');
+        /* 2026-11-01：触屏长按后拖到时间轴（HTML5 DnD 在触屏不生效） */
+        attachTouchDrag(node, occ);
         els.untimedList.appendChild(node);
       });
     }
@@ -1167,6 +1219,718 @@
       return 0;
     }
 
+    /* ================= 2026-11-01：拖放排时 / 拉边调整 ================= */
+
+    function dragStep() {
+      var s = Number(Layout.SNAP_STEP_DEFAULT);
+      return (isFinite(s) && s > 0) ? Math.floor(s) : 5;
+    }
+
+    function dragMinDuration() {
+      var m = Number(Layout.MIN_DURATION_DEFAULT);
+      return (isFinite(m) && m > 0) ? Math.floor(m) : 15;
+    }
+
+    /** 指针 clientX → 时间轴内坐标（相对 .timeline-track 左缘，含滚动偏移）。 */
+    function trackX(clientX) {
+      if (!els.track) return 0;
+      return clientX - els.track.getBoundingClientRect().left;
+    }
+
+    /** 指针 clientX → 当前轴上的分钟（压缩带按几何反算）。 */
+    function minuteAtClientX(clientX) {
+      return Layout.axisMinuteAt(axis, trackX(clientX), { pxPerHour: pxPerHour() });
+    }
+
+    /** 指针是否落在首 / 尾折叠窄带里（需要临时展开）。 */
+    function inCompressedZone(clientX) {
+      if (!axis || !els.track) return false;
+      var x = trackX(clientX);
+      var lead = Number(axis.leadLength) || 0;
+      var real = Number(axis.realLength) || 0;
+      var trail = Number(axis.trailLength) || 0;
+      if (lead > 0 && x < lead) return true;
+      if (trail > 0 && x > lead + real) return true;
+      return false;
+    }
+
+    /** 指针所在折叠带：种类、该带中心时刻、展开前中心在视口里的 x（卷轴展开的轴心）。 */
+    function compressedBandInfo(clientX) {
+      if (!axis || !els.track || !els.scroll) return null;
+      var x = trackX(clientX);
+      var lead = Number(axis.leadLength) || 0;
+      var real = Number(axis.realLength) || 0;
+      var trail = Number(axis.trailLength) || 0;
+      var trackLeft = els.track.getBoundingClientRect().left;
+      if (lead > 0 && x < lead) {
+        return {
+          kind: 'lead',
+          minute: Number(axis.firstStart) / 2,
+          screenX: trackLeft + lead / 2
+        };
+      }
+      if (trail > 0 && x > lead + real) {
+        var lastEnd = Number(axis.lastEnd);
+        return {
+          kind: 'trail',
+          minute: lastEnd + (1440 - lastEnd) / 2,
+          screenX: trackLeft + lead + real + trail / 2
+        };
+      }
+      return null;
+    }
+
+    /** 当前轴上某分钟在视口里的 x（含滚动偏移），用于展开 / 收拢前记录轴心位置。 */
+    function screenXForMinute(minute) {
+      if (!els.track || minute === null || minute === undefined) return null;
+      return els.track.getBoundingClientRect().left + axisX(axis, minute);
+    }
+
+    function pointerOverScroll(clientX, clientY, pad) {
+      if (!els.scroll) return false;
+      var r = els.scroll.getBoundingClientRect();
+      var p = Number(pad) || 0;
+      return clientX >= r.left - p && clientX <= r.right + p &&
+        clientY >= r.top - p && clientY <= r.bottom + p;
+    }
+
+    function blockNodeFor(key) {
+      if (!els.track) return null;
+      var nodes = els.track.querySelectorAll('.tl-block');
+      for (var i = 0; i < nodes.length; i += 1) {
+        if (nodes[i].getAttribute && nodes[i].getAttribute('data-occ-key') === key) return nodes[i];
+      }
+      return null;
+    }
+
+    /* ---- 跟随指针的时间胶囊（与「现在」胶囊同一套鼠尾草配色） ---- */
+
+    function ensurePill() {
+      if (!dragPill) {
+        dragPill = el('div', { class: 'tl-drag-pill', 'aria-hidden': 'true' });
+      }
+      if (document && document.body && dragPill.parentNode !== document.body) {
+        document.body.appendChild(dragPill);
+      }
+      return dragPill;
+    }
+
+    function showPill(clientX, clientY, text) {
+      var pill = ensurePill();
+      if (pill.textContent !== text) pill.textContent = text;
+      pill.hidden = false;
+      var vw = Number(root.innerWidth) || 0;
+      var x = clientX;
+      if (vw > 0) x = Math.max(30, Math.min(vw - 30, clientX));
+      /* 2026-11-01（用户反馈）：触屏手指会盖住胶囊，抬高到指腹之上；
+         细指针保持原来的 12px，贴近落点。 */
+      var gap = coarsePointer() ? 46 : 12;
+      pill.style.left = Math.round(x) + 'px';
+      pill.style.top = Math.max(26, Math.round(clientY - gap)) + 'px';
+    }
+
+    function hidePill() {
+      if (dragPill) dragPill.hidden = true;
+    }
+
+    /* ---- 时间轴上的 1 小时落位幽灵块 ---- */
+
+    function showDropGhost(startMinute, endMinute) {
+      if (!els.track) return;
+      if (!dragGhost) {
+        dragGhost = el('div', { class: 'tl-drop-ghost', 'aria-hidden': 'true' });
+      }
+      if (dragGhost.parentNode !== els.track) els.track.appendChild(dragGhost);
+      var x0 = axisX(axis, startMinute);
+      var x1 = axisX(axis, endMinute);
+      dragGhost.style.left = Math.round(x0) + 'px';
+      dragGhost.style.width = Math.max(2, Math.round(x1 - x0)) + 'px';
+      dragGhost.style.top = '0px';
+      dragGhost.style.bottom = '0px';
+      dragGhost.hidden = false;
+    }
+
+    function hideDropGhost() {
+      if (!dragGhost) return;
+      if (dragGhost.parentNode) dragGhost.parentNode.removeChild(dragGhost);
+    }
+
+    /* ---- 横向自动滚动（近左右边缘才启动，速度 1–6px/帧） ---- */
+
+    function rafCall(fn) {
+      if (typeof root.requestAnimationFrame === 'function') return root.requestAnimationFrame(fn);
+      return setTimeout(fn, 16);
+    }
+
+    function rafCancel(id) {
+      if (!id) return;
+      if (typeof root.cancelAnimationFrame === 'function') root.cancelAnimationFrame(id);
+      else clearTimeout(id);
+    }
+
+    function startAutoScroll() {
+      if (autoScrollRaf) return;
+      autoScrollRaf = rafCall(autoScrollTick);
+    }
+
+    function stopAutoScroll() {
+      if (autoScrollRaf) rafCancel(autoScrollRaf);
+      autoScrollRaf = 0;
+    }
+
+    function autoScrollTick() {
+      autoScrollRaf = 0;
+      if (!dragPointer || !els.scroll) return;
+      if (Date.now() < axisAnimatingUntil) {
+        autoScrollRaf = rafCall(autoScrollTick);
+        return;
+      }
+      var r = els.scroll.getBoundingClientRect();
+      var edge = 36;
+      /* 上限 4px/帧（60Hz ≈ 240px/s）：贴着边缘时不至于「一冲到底」 */
+      var speed = 0;
+      if (dragPointer.x < r.left + edge) {
+        speed = -Math.max(1, Math.ceil((r.left + edge - dragPointer.x) / edge * 4));
+      } else if (dragPointer.x > r.right - edge) {
+        speed = Math.max(1, Math.ceil((dragPointer.x - (r.right - edge)) / edge * 4));
+      }
+      if (speed && els.scroll.scrollWidth > els.scroll.clientWidth + 1) {
+        var before = els.scroll.scrollLeft;
+        els.scroll.scrollLeft = before + speed;
+        if (els.scroll.scrollLeft !== before) {
+          if (resizeState) updateResizeAt(dragPointer.x, dragPointer.y);
+          else updateDragAt(dragPointer.x, dragPointer.y);
+        }
+      }
+      if (dragPointer) autoScrollRaf = rafCall(autoScrollTick);
+    }
+
+    /* ---- 折叠区临时展开 + FLIP 平滑位移 ---- */
+
+    function axisSnapshot() {
+      var snap = { nodes: {}, geometry: axis, trackLeft: 0 };
+      if (!els.track) return snap;
+      snap.trackLeft = els.track.getBoundingClientRect().left;
+      /* 一律记**视口坐标**（track 的 rect 已含滚动位移）：展开时锚定会同步改滚动位置，
+         只有把滚动位移一起算进 FLIP 起点，未折叠区域才不会瞬移。 */
+      var map = snap.nodes;
+      var i;
+      var nodes = els.track.querySelectorAll('.tl-block');
+      for (i = 0; i < nodes.length; i += 1) {
+        var key = nodes[i].getAttribute('data-occ-key');
+        if (key) map['b:' + key] = nodes[i].getBoundingClientRect().left;
+      }
+      nodes = els.track.querySelectorAll('.tl-gridline');
+      for (i = 0; i < nodes.length; i += 1) {
+        var minute = nodes[i].getAttribute('data-minute');
+        if (minute !== null) map['g:' + minute] = nodes[i].getBoundingClientRect().left;
+      }
+      if (els.ruler) {
+        nodes = els.ruler.querySelectorAll('.ruler-tick');
+        for (i = 0; i < nodes.length; i += 1) {
+          var tMinute = nodes[i].getAttribute('data-minute');
+          if (tMinute !== null) map['t:' + tMinute] = nodes[i].getBoundingClientRect().left;
+        }
+      }
+      var nowLine = els.inner ? els.inner.querySelector('.timeline-now') : null;
+      if (nowLine && !nowLine.hidden) snap.nowLeft = nowLine.getBoundingClientRect().left;
+      return snap;
+    }
+
+    function axisMotionAllowed() {
+      if (typeof root.matchMedia !== 'function') return true;
+      try {
+        return !root.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      } catch (e) { return true; }
+    }
+
+    function canAnimateTranslate() {
+      try {
+        return !!(root.CSS && root.CSS.supports && root.CSS.supports('translate', '1px'));
+      } catch (e) { return false; }
+    }
+
+    /** FLIP 位移帧：优先用独立 translate（与 CSS transform 叠加），老内核退回 transform。 */
+    function slideFrames(dx, fresh, useTranslate) {
+      var opacity = fresh ? 0 : 1;
+      if (useTranslate) {
+        return [
+          { translate: dx + 'px 0px', opacity: opacity },
+          { translate: '0px 0px', opacity: 1 }
+        ];
+      }
+      return [
+        { transform: 'translateX(' + dx + 'px)', opacity: opacity },
+        { transform: 'translateX(0)', opacity: 1 }
+      ];
+    }
+
+    function animateAxisFrom(snapshot) {
+      if (!snapshot || !els.track || !axisMotionAllowed()) return;
+      var old = snapshot.nodes || {};
+      var oldGeometry = snapshot.geometry || null;
+      var oldTrackLeft = Number(snapshot.trackLeft) || 0;
+      var useTranslate = canAnimateTranslate();
+      /** 旧节点取实测视口位置；折叠带里新出现的刻度按旧几何反推「本来会在哪」 */
+      function oldLeftOf(key, minute) {
+        if (typeof old[key] === 'number') return old[key];
+        if (minute === null || minute === undefined || !oldGeometry) return null;
+        return oldTrackLeft + axisX(oldGeometry, minute);
+      }
+      function move(node, key, minute) {
+        if (typeof node.animate !== 'function') return;
+        var oldLeft = oldLeftOf(key, minute);
+        if (typeof oldLeft !== 'number') {
+          try {
+            node.animate([{ opacity: 0 }, { opacity: 1 }], { duration: AXIS_FADE_MS, easing: 'ease-out' });
+          } catch (e) { /* 无动画能力 */ }
+          return;
+        }
+        var fresh = typeof old[key] !== 'number';
+        var dx = oldLeft - node.getBoundingClientRect().left;
+        if (!fresh && Math.abs(dx) < 0.5) return;
+        try {
+          node.animate(slideFrames(dx, fresh, useTranslate),
+            { duration: AXIS_FLIP_MS, easing: AXIS_FLIP_EASING });
+        } catch (e) { /* 无动画能力 */ }
+      }
+      var i;
+      var nodes = els.track.querySelectorAll('.tl-block');
+      for (i = 0; i < nodes.length; i += 1) {
+        var key = nodes[i].getAttribute('data-occ-key');
+        if (key) move(nodes[i], 'b:' + key, null);
+      }
+      nodes = els.track.querySelectorAll('.tl-gridline');
+      for (i = 0; i < nodes.length; i += 1) {
+        var m = nodes[i].getAttribute('data-minute');
+        if (m !== null) move(nodes[i], 'g:' + m, Number(m));
+      }
+      if (els.ruler) {
+        nodes = els.ruler.querySelectorAll('.ruler-tick');
+        for (i = 0; i < nodes.length; i += 1) {
+          var tm = nodes[i].getAttribute('data-minute');
+          if (tm !== null) move(nodes[i], 't:' + tm, Number(tm));
+        }
+      }
+      /* 当前时间线不随 renderTimeline 重建，也要吃掉滚动锚定的位移 */
+      var nowLine = els.inner ? els.inner.querySelector('.timeline-now') : null;
+      if (nowLine && !nowLine.hidden && typeof snapshot.nowLeft === 'number' &&
+        typeof nowLine.animate === 'function') {
+        var nowDx = snapshot.nowLeft - nowLine.getBoundingClientRect().left;
+        if (Math.abs(nowDx) >= 0.5) {
+          try {
+            nowLine.animate(slideFrames(nowDx, false, useTranslate),
+              { duration: AXIS_FLIP_MS, easing: AXIS_FLIP_EASING });
+          } catch (e) { /* 无动画能力 */ }
+        }
+      }
+      /* FLIP 期间暂停自动滚动：滚动位移已经在 dx 里补过一次，
+         继续滚会让动画终点和真实布局错开 */
+      axisAnimatingUntil = Date.now() + AXIS_FLIP_MS + 40;
+    }
+
+    /** 把某个分钟锚定在同一个视口 x 上（展开 / 提交后轴宽变化，但视线不跳）。 */
+    function anchorScrollTo(minute, clientX) {
+      if (!els.scroll || !els.track || minute === null || minute === undefined ||
+        clientX === null || clientX === undefined) return;
+      var sr = els.scroll.getBoundingClientRect();
+      var tr = els.track.getBoundingClientRect();
+      var contentStart = tr.left - sr.left + els.scroll.scrollLeft;
+      var target = contentStart + axisX(axis, minute) - (clientX - sr.left);
+      els.scroll.scrollLeft = Math.max(0, Math.round(target));
+    }
+
+    function rerenderAnchored(anchorMinute, clientX, render) {
+      var snap = axisSnapshot();
+      render();
+      anchorScrollTo(anchorMinute, clientX);
+      animateAxisFrom(snap);
+    }
+
+    /**
+     * 临时展开 / 收拢整条轴。
+     * mode='band'（拖放默认）：以被折叠那半段的中心为轴，像卷轴一样向两边展开；
+     * mode='pointer'（拉边）：让指针下的时刻保持不动，手柄不能离开指针。
+     */
+    function setDragIdleExpanded(on, clientX, mode) {
+      if (idleDragExpanded === on) return;
+      var bandMode = mode !== 'pointer';
+      var anchorMinute = null;
+      var anchorX = null;
+      if (on) {
+        if (bandMode) {
+          var info = compressedBandInfo(clientX);
+          if (!info) return;
+          idleBandAnchor = { minute: info.minute };
+          anchorMinute = info.minute;
+          anchorX = info.screenX;
+        } else if (clientX !== null && clientX !== undefined) {
+          anchorMinute = minuteAtClientX(clientX);
+          anchorX = clientX;
+        }
+      } else if (bandMode && idleBandAnchor) {
+        anchorMinute = idleBandAnchor.minute;
+        anchorX = screenXForMinute(anchorMinute);
+      } else if (clientX !== null && clientX !== undefined) {
+        anchorMinute = minuteAtClientX(clientX);
+        anchorX = clientX;
+      }
+      var snap = axisSnapshot();
+      idleDragExpanded = on;
+      renderTimeline();
+      anchorScrollTo(anchorMinute, anchorX);
+      animateAxisFrom(snap);
+      if (!on) idleBandAnchor = null;
+      if (resizeState) {
+        var next = blockNodeFor(resizeState.occ.key);
+        if (next) {
+          resizeState.block = next;
+          if (next.classList) next.classList.add('is-resizing');
+          if (next.setAttribute) next.setAttribute('draggable', 'false');
+          /* 重排后新节点带的是**已保存**的起止时间；把拖动中的时间立刻画回去 */
+          applyResizeVisual(next, resizeState.startMinute, resizeState.endMinute);
+        }
+      }
+    }
+
+    /* ---- 未排事项拖到时间轴 ---- */
+
+    function updateDragAt(clientX, clientY) {
+      if (!els.scroll) return false;
+      if (!pointerOverScroll(clientX, clientY, 12)) {
+        hideDropGhost();
+        hidePill();
+        return false;
+      }
+      if (inCompressedZone(clientX)) setDragIdleExpanded(true, clientX, 'band');
+      var minute = minuteAtClientX(clientX);
+      var t = Layout.scheduleTime(minute, 60, { step: dragStep() });
+      showDropGhost(t.startMinute, t.endMinute);
+      showPill(clientX, clientY, D.formatMinutes(Layout.snapMinute(minute, dragStep())));
+      return true;
+    }
+
+    function clearDropPreview() {
+      hideDropGhost();
+      hidePill();
+      stopAutoScroll();
+      dragPointer = null;
+    }
+
+    function scheduleOccurrence(key, minute, clientX) {
+      var occ = null;
+      (state.occurrences || []).forEach(function (o) { if (o.key === key) occ = o; });
+      if (!occ) return;
+      var doc = currentDoc();
+      var item = doc.items.filter(function (i) { return i.id === occ.seriesId; })[0];
+      if (!item) return;
+      var t = Layout.scheduleTime(minute, 60, { step: dragStep() });
+      var time = { start: t.start, end: t.end };
+      try {
+        if (item.kind === 'series') {
+          store.addSeriesException(item.id, occ.date, { time: time });
+        } else {
+          store.updateItem(item.id, { time: time });
+        }
+      } catch (e) {
+        banner('danger', '排定失败：' + e.message);
+        return;
+      }
+      var anchor = Layout.snapMinute(minute, dragStep());
+      rerenderAnchored(anchor, clientX, afterWrite);
+      M.toast('已排到 ' + t.start + '–' + t.end);
+    }
+
+    function suppressNextClick() {
+      dragSuppressUntil = Date.now() + 700;
+      if (!document || typeof document.addEventListener !== 'function') return;
+      function block(e) {
+        if (e && e.stopPropagation) e.stopPropagation();
+        if (e && e.preventDefault) e.preventDefault();
+        document.removeEventListener('click', block, true);
+      }
+      document.addEventListener('click', block, true);
+      setTimeout(function () { document.removeEventListener('click', block, true); }, 600);
+    }
+
+    /* ---- 事项块两端拉边调整 ---- */
+
+    /* 触屏（粗指针）：手柄只在拉动时点亮，判定区向上下各探出 RESIZE_PAD。 */
+    var RESIZE_PAD = 8;
+    var RESIZE_PAD_W = 16;
+
+    function coarsePointer() {
+      try {
+        if (root && typeof root.matchMedia === 'function') {
+          return !!root.matchMedia('(pointer: coarse)').matches;
+        }
+      } catch (e) { /* 老引擎：当作细指针 */ }
+      return false;
+    }
+
+    function attachResizeHandles(node, occ, geom) {
+      if (!node || !occ || !occ.time) return;
+      var left = el('span', { class: 'tl-resize tl-resize-start', 'aria-hidden': 'true' });
+      var right = el('span', { class: 'tl-resize tl-resize-end', 'aria-hidden': 'true' });
+      left.addEventListener('pointerdown', function (e) { onResizeStart(e, occ, 'start', left, node); });
+      right.addEventListener('pointerdown', function (e) { onResizeStart(e, occ, 'end', right, node); });
+      /* 手柄在 draggable 块内：再挡一层 dragstart，确保拉边不会被当成拖去完成台 */
+      left.addEventListener('dragstart', function (e) { if (e.preventDefault) e.preventDefault(); });
+      right.addEventListener('dragstart', function (e) { if (e.preventDefault) e.preventDefault(); });
+      node.appendChild(left);
+      node.appendChild(right);
+      if (!geom || !geom.parent || !coarsePointer()) return;
+      /* 块的 overflow:hidden 把内层手柄框在块高里；触屏另发一层兄弟节点向上下探出，
+         手指上下差几像素也按得到（只占左右各 16px 的竖条，不吃块中间的点击）。 */
+      var padH = Math.max(1, Math.round(geom.height + RESIZE_PAD * 2));
+      var padTop = Math.max(0, Math.round(geom.top - RESIZE_PAD)) + 'px';
+      var padL = el('span', { class: 'tl-resize-pad tl-resize-pad-start', 'aria-hidden': 'true' });
+      var padR = el('span', { class: 'tl-resize-pad tl-resize-pad-end', 'aria-hidden': 'true' });
+      var startLeft = Math.round(geom.left);
+      var endLeft = Math.round(geom.left + geom.width - RESIZE_PAD_W);
+      padL.style.left = startLeft + 'px';
+      padR.style.left = endLeft + 'px';
+      padL.style.top = padTop;
+      padR.style.top = padTop;
+      padL.style.height = padH + 'px';
+      padR.style.height = padH + 'px';
+      padL.addEventListener('pointerdown', function (e) { onResizeStart(e, occ, 'start', padL, node); });
+      padR.addEventListener('pointerdown', function (e) { onResizeStart(e, occ, 'end', padR, node); });
+      geom.parent.appendChild(padL);
+      geom.parent.appendChild(padR);
+    }
+
+    function onResizeStart(e, occ, edge, handle, block) {
+      if (e.button !== undefined && e.button !== 0) return;
+      if (!occ.time || !block || resizeState) return;
+      var startMin = D.minutesOf(occ.time.start);
+      var endMin = D.minutesOf(occ.time.end);
+      if (startMin === null || endMin === null) return;
+      e.preventDefault();
+      e.stopPropagation();
+      resizeState = {
+        occ: occ, edge: edge, block: block, handle: handle,
+        pointerId: e.pointerId,
+        orig: { start: occ.time.start, end: occ.time.end },
+        origStart: startMin,
+        origEnd: endMin,
+        current: { start: occ.time.start, end: occ.time.end, startMinute: startMin, endMinute: endMin },
+        startMinute: startMin,
+        endMinute: endMin,
+        lastX: e.clientX,
+        lastY: e.clientY,
+        moved: false
+      };
+      dragPointer = { x: e.clientX, y: e.clientY, mode: 'resize' };
+      if (block.classList) block.classList.add('is-resizing');
+      if (block.setAttribute) block.setAttribute('draggable', 'false');
+      if (document.documentElement && document.documentElement.classList) {
+        document.documentElement.classList.add('is-timeline-resizing');
+      }
+      dragSuppressUntil = Date.now() + 800;
+      showPill(e.clientX, e.clientY,
+        D.formatMinutes(edge === 'start' ? startMin : endMin));
+      startAutoScroll();
+      document.addEventListener('pointermove', onResizeMove, true);
+      document.addEventListener('pointerup', onResizeEnd, true);
+      document.addEventListener('pointercancel', onResizeCancel, true);
+      try { if (handle.setPointerCapture) handle.setPointerCapture(e.pointerId); } catch (err) { /* 忽略 */ }
+    }
+
+    function onResizeMove(e) {
+      if (!resizeState) return;
+      if (resizeState.pointerId !== undefined && e.pointerId !== undefined &&
+        e.pointerId !== resizeState.pointerId) return;
+      e.preventDefault();
+      dragPointer = { x: e.clientX, y: e.clientY, mode: 'resize' };
+      updateResizeAt(e.clientX, e.clientY);
+    }
+
+    function applyResizeVisual(block, s, e) {
+      if (!block || !block.style) return;
+      var x0 = axisX(axis, s);
+      var x1 = axisX(axis, e);
+      block.style.left = Math.round(x0) + 'px';
+      block.style.width = Math.max(1, Math.round(x1 - x0)) + 'px';
+      var te = block.querySelector ? block.querySelector('.tl-time') : null;
+      if (te) te.textContent = D.formatMinutes(s) + '–' + D.formatMinutes(e);
+    }
+
+    function updateResizeAt(clientX, clientY) {
+      if (!resizeState || !els.scroll) return;
+      resizeState.lastX = clientX;
+      resizeState.lastY = clientY;
+      var sr = els.scroll.getBoundingClientRect();
+      var cx = Math.max(sr.left + 1, Math.min(sr.right - 1, clientX));
+      if (inCompressedZone(cx)) setDragIdleExpanded(true, cx, 'pointer');
+      var minute = minuteAtClientX(cx);
+      var t = Layout.resizeTime(resizeState.orig, resizeState.edge, minute, {
+        step: dragStep(), minDuration: dragMinDuration()
+      });
+      if (!t) return;
+      showPill(clientX, clientY, D.formatMinutes(Layout.snapMinute(minute, dragStep())));
+      if (t.startMinute === resizeState.startMinute && t.endMinute === resizeState.endMinute) return;
+      resizeState.current = t;
+      resizeState.startMinute = t.startMinute;
+      resizeState.endMinute = t.endMinute;
+      resizeState.moved = (t.startMinute !== resizeState.origStart || t.endMinute !== resizeState.origEnd);
+      applyResizeVisual(resizeState.block, t.startMinute, t.endMinute);
+    }
+
+    function stopResize(commit) {
+      var st = resizeState;
+      if (!st) return;
+      resizeState = null;
+      document.removeEventListener('pointermove', onResizeMove, true);
+      document.removeEventListener('pointerup', onResizeEnd, true);
+      document.removeEventListener('pointercancel', onResizeCancel, true);
+      stopAutoScroll();
+      hidePill();
+      dragPointer = null;
+      if (document.documentElement && document.documentElement.classList) {
+        document.documentElement.classList.remove('is-timeline-resizing');
+      }
+      if (st.block && st.block.classList) st.block.classList.remove('is-resizing');
+      /* 手柄上的按下 / 松开不应被块的 click 当成「打开编辑」 */
+      suppressNextClick();
+      if (!commit || !st.moved) {
+        if (st.block && st.block.setAttribute && !commit) st.block.setAttribute('draggable', 'true');
+        if (idleDragExpanded) {
+          idleDragExpanded = false;
+          rerenderAnchored(st.edge === 'start' ? st.startMinute : st.endMinute, st.lastX, renderTimeline);
+        }
+        return;
+      }
+      var doc = currentDoc();
+      var item = doc.items.filter(function (i) { return i.id === st.occ.seriesId; })[0];
+      if (!item) {
+        if (idleDragExpanded) {
+          idleDragExpanded = false;
+          rerenderAnchored(st.edge === 'start' ? st.startMinute : st.endMinute, st.lastX, renderTimeline);
+        }
+        return;
+      }
+      var time = { start: st.current.start, end: st.current.end };
+      try {
+        if (item.kind === 'series') {
+          store.addSeriesException(item.id, st.occ.date, { time: time });
+        } else {
+          store.updateItem(item.id, { time: time });
+        }
+      } catch (e) {
+        banner('danger', '调整时间失败：' + e.message);
+        if (idleDragExpanded) {
+          idleDragExpanded = false;
+          rerenderAnchored(st.edge === 'start' ? st.startMinute : st.endMinute, st.lastX, renderTimeline);
+        }
+        return;
+      }
+      idleDragExpanded = false;
+      rerenderAnchored(st.edge === 'start' ? st.startMinute : st.endMinute, st.lastX, afterWrite);
+      M.toast('时间已改为 ' + time.start + '–' + time.end);
+    }
+
+    function onResizeEnd(e) {
+      if (!resizeState) return;
+      if (resizeState.pointerId !== undefined && e.pointerId !== undefined &&
+        e.pointerId !== resizeState.pointerId) return;
+      stopResize(true);
+    }
+
+    function onResizeCancel(e) {
+      if (!resizeState) return;
+      if (resizeState.pointerId !== undefined && e && e.pointerId !== undefined &&
+        e.pointerId !== resizeState.pointerId) return;
+      stopResize(false);
+    }
+
+    /* ---- 触屏：长按未排卡片后拖动（HTML5 拖放在触屏不可用） ---- */
+
+    function attachTouchDrag(node, occ) {
+      if (!node || !occ) return;
+      node.addEventListener('touchstart', function (e) {
+        if (resizeState || touchDrag) return;
+        if (!e.touches || e.touches.length !== 1) return;
+        var t = e.touches[0];
+        var td = {
+          occ: occ, node: node,
+          startX: t.clientX, startY: t.clientY,
+          x: t.clientX, y: t.clientY,
+          active: false, cancelled: false, timer: 0
+        };
+        touchDrag = td;
+        td.timer = setTimeout(function () {
+          if (!touchDrag || touchDrag !== td || td.cancelled) return;
+          td.active = true;
+          if (!touchGhost) touchGhost = el('div', { class: 'untimed-drag-ghost', 'aria-hidden': 'true' });
+          touchGhost.textContent = String(occ.title || '未命名事项');
+          if (document.body && touchGhost.parentNode !== document.body) document.body.appendChild(touchGhost);
+          positionTouchGhost(td.x, td.y);
+          if (document.documentElement && document.documentElement.classList) {
+            document.documentElement.classList.add('is-touch-dragging');
+          }
+          dragSuppressUntil = Date.now() + 900;
+        }, 280);
+      }, { passive: true });
+
+      node.addEventListener('touchmove', function (e) {
+        if (!touchDrag || touchDrag.node !== node) return;
+        var t = e.touches && e.touches[0];
+        if (!t) return;
+        if (!touchDrag.active) {
+          if (Math.abs(t.clientX - touchDrag.startX) > 8 || Math.abs(t.clientY - touchDrag.startY) > 8) {
+            touchDrag.cancelled = true;
+            clearTimeout(touchDrag.timer);
+            touchDrag = null;
+          }
+          return;
+        }
+        if (e.preventDefault) e.preventDefault();
+        touchDrag.x = t.clientX;
+        touchDrag.y = t.clientY;
+        positionTouchGhost(t.clientX, t.clientY);
+        dragPointer = { x: t.clientX, y: t.clientY, mode: 'drag' };
+        if (updateDragAt(t.clientX, t.clientY)) startAutoScroll();
+        else stopAutoScroll();
+      }, { passive: false });
+
+      function finishTouch(commit) {
+        if (!touchDrag || touchDrag.node !== node) return;
+        var td = touchDrag;
+        touchDrag = null;
+        clearTimeout(td.timer);
+        if (touchGhost && touchGhost.parentNode) touchGhost.parentNode.removeChild(touchGhost);
+        if (document.documentElement && document.documentElement.classList) {
+          document.documentElement.classList.remove('is-touch-dragging');
+        }
+        if (!td.active) return;
+        var x = td.x;
+        var y = td.y;
+        var minute = minuteAtClientX(x);
+        var onTimeline = commit && pointerOverScroll(x, y, 24);
+        clearDropPreview();
+        if (onTimeline) {
+          idleDragExpanded = false;
+          scheduleOccurrence(td.occ.key, minute, x);
+        } else if (idleDragExpanded) {
+          setDragIdleExpanded(false, null, 'band');
+        }
+        suppressNextClick();
+      }
+
+      node.addEventListener('touchend', function () { finishTouch(true); });
+      node.addEventListener('touchcancel', function () { finishTouch(false); });
+    }
+
+    function positionTouchGhost(x, y) {
+      if (!touchGhost) return;
+      var vw = Number(root.innerWidth) || 0;
+      var cx = vw > 0 ? Math.max(70, Math.min(vw - 70, x)) : x;
+      touchGhost.style.left = Math.round(cx) + 'px';
+      touchGhost.style.top = Math.round(y - 16) + 'px';
+      touchGhost.hidden = false;
+    }
+
     /* ---------------- 折叠卡接线 ---------------- */
 
     function buildCard(occ, ctx) {
@@ -1199,7 +1963,7 @@
         onEdit: function (o) { openEdit(o); },
         onRemove: function (o) { removeOccurrence(o); },
         onRestoreDefault: function (o) { restoreDefault(o); },
-        /* 迭代 7（F-45 第 6 条 / R-23）：只设紧急未做其他改动 → 不渲染「恢复默认」 */
+        /* 迭代 7（F-45 第 6 条 / R-23）：只设紧急未做其他改动 → 不渲染「复原」 */
         hasNonUrgentOverride: function (o) {
           return (typeof store.hasNonUrgentOverride === 'function') ? store.hasNonUrgentOverride(o) : false;
         },
@@ -1795,9 +2559,9 @@
     function setupDrag() {
       var body = document.getElementById('finish-dock-body');
       var dockEl = document.getElementById('day-finish-dock');
-      if (!body || !els.panel) return;
       var dragKey = null;
-      var dragFromList = false;   /* 源是否来自未排列表（只有它能参与列表内排序） */
+      var dragFromList = false;   /* 源是否来自未排列表（只有它能参与列表内排序 / 落到时间轴） */
+      if (!els.panel) return;
 
       function sourceOf(target) {
         var n = target;
@@ -1895,9 +2659,67 @@
         if (src && src.classList) src.classList.remove('is-dragging');
         clearTarget();
         hideSortLine();
+        clearDropPreview();
+        collapseIdleAfterDrag();
         dragKey = null;
         dragFromList = false;
       });
+
+      /* ---- 未排事项拖到时间轴：落点 = 时段中点，默认 1 小时（2026-11-01） ---- */
+
+      function collapseIdleAfterDrag() {
+        if (!idleDragExpanded) return;
+        setDragIdleExpanded(false, null, 'band');
+      }
+
+      function timelineDragAllowed() { return !!(dragKey && dragFromList); }
+
+      if (els.scroll) {
+        els.scroll.addEventListener('dragover', function (e) {
+          if (!timelineDragAllowed()) return;
+          /* 必须 preventDefault，否则浏览器不认这里是合法放置区 */
+          e.preventDefault();
+          try { if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'; } catch (err) { /* 忽略 */ }
+          hideSortLine();
+          dragPointer = { x: e.clientX, y: e.clientY, mode: 'drag' };
+          if (updateDragAt(e.clientX, e.clientY)) startAutoScroll();
+          else stopAutoScroll();
+        });
+
+        els.scroll.addEventListener('dragleave', function (e) {
+          if (!timelineDragAllowed()) return;
+          /* 子元素之间移动不算离开；指针仍在滚动区内也不算 —— 否则折叠区刚展开就收拢，来回闪 */
+          var to = e.relatedTarget;
+          if (to && els.scroll.contains && els.scroll.contains(to)) return;
+          if (typeof e.clientX === 'number' && pointerOverScroll(e.clientX, e.clientY, 16)) return;
+          clearDropPreview();
+          collapseIdleAfterDrag();
+        });
+
+        els.scroll.addEventListener('drop', function (e) {
+          if (!timelineDragAllowed()) return;
+          e.preventDefault();
+          if (e.stopPropagation) e.stopPropagation();
+          var key = dragKey;
+          var x = e.clientX;
+          /* 先按「展开态」的轴反算分钟，再收拢，否则落点会被压缩带改写 */
+          var minute = minuteAtClientX(x);
+          dragKey = null;
+          dragFromList = false;
+          clearDropPreview();
+          idleDragExpanded = false;
+          scheduleOccurrence(key, minute, x);
+        });
+      }
+
+      /* 触屏长按拖动的系统菜单（contextmenu / 长按菜单）一律压掉，否则会触发卡片的右键操作 */
+      if (document && typeof document.addEventListener === 'function') {
+        document.addEventListener('contextmenu', function (e) {
+          if (!touchDrag || !touchDrag.active) return;
+          if (e && e.preventDefault) e.preventDefault();
+          if (e && e.stopPropagation) e.stopPropagation();
+        }, true);
+      }
 
       /* 列表内拖动排序：dragover 按指针几何标落点（卡片空隙 / 列表空白也能落），
          drop 重排并落盘。落点线是全列表唯一一条，避免移动过程中的闪烁。 */
@@ -1932,29 +2754,31 @@
         });
       }
 
-      body.addEventListener('dragover', function (e) {
-        if (!dragKey) return;
-        e.preventDefault();
-        try { if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'; } catch (err) { /* 忽略 */ }
-        if (dockEl && dockEl.classList) dockEl.classList.add('is-drop-target');
-      });
+      if (body) {
+        body.addEventListener('dragover', function (e) {
+          if (!dragKey) return;
+          e.preventDefault();
+          try { if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'; } catch (err) { /* 忽略 */ }
+          if (dockEl && dockEl.classList) dockEl.classList.add('is-drop-target');
+        });
 
-      body.addEventListener('dragleave', clearTarget);
+        body.addEventListener('dragleave', clearTarget);
 
-      body.addEventListener('drop', function (e) {
-        e.preventDefault();
-        clearTarget();
-        var key = dragKey;
-        if (!key && e.dataTransfer && e.dataTransfer.getData) {
-          try { key = e.dataTransfer.getData('text/plain'); } catch (err) { key = null; }
-        }
-        dragKey = null;
-        if (!key || !dock) return;
-        var occ = null;
-        (state.occurrences || []).forEach(function (o) { if (o.key === key) occ = o; });
-        if (!occ) return;
-        if (!dock.add(occ)) M.toast(occ.done ? '已完成的事项不需要再计时' : '这件已经在完成台里了');
-      });
+        body.addEventListener('drop', function (e) {
+          e.preventDefault();
+          clearTarget();
+          var key = dragKey;
+          if (!key && e.dataTransfer && e.dataTransfer.getData) {
+            try { key = e.dataTransfer.getData('text/plain'); } catch (err) { key = null; }
+          }
+          dragKey = null;
+          if (!key || !dock) return;
+          var occ = null;
+          (state.occurrences || []).forEach(function (o) { if (o.key === key) occ = o; });
+          if (!occ) return;
+          if (!dock.add(occ)) M.toast(occ.done ? '已完成的事项不需要再计时' : '这件已经在完成台里了');
+        });
+      }
     }
 
     /* ---------------- 五十一轮：倒计时 ---------------- */
@@ -1977,12 +2801,32 @@
       if (countdown) countdown.render();
     }
 
+    /* ---------------- 右栏图片（2026-11-01） ---------------- */
+
+    function setupRailCover() {
+      var RC = root.DayPlan.railCover;
+      if (!RC || typeof RC.create !== 'function' || !els.railCover) return;
+      railCover = RC.create({
+        store: store,
+        scope: 'day',
+        label: '今日',
+        element: els.railCover,
+        getKey: function () { return state.date; }
+      });
+      railCover.render();
+    }
+
+    function renderRailCover() {
+      if (railCover) railCover.render();
+    }
+
     /* ---------------- 渲染总入口 ---------------- */
 
     function renderAll() {
       renderHead();
       renderTimeline();
       renderUntimed();
+      renderRailCover();
       renderCountdowns();
       renderNotes();
     }
@@ -1996,6 +2840,7 @@
     /* 迭代 10 批次 5（条9）：完成台必须在首次渲染前就位（visible() 依赖它判断「已空出」） */
     setupFinishDock();
     setupDrag();
+    setupRailCover();
     setupCountdown();
 
     nowTimer = setInterval(updateNowLine, 60000);

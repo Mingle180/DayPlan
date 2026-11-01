@@ -2000,3 +2000,137 @@ html.has-modal body {
   color: var(--text-weak, #888);
 }
 .sync-meta-value { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+
+/* ------------------------------------------------------------------ *
+ * 日视图拖放排时 / 拉边调整（2026-11-01）
+ * ------------------------------------------------------------------ */
+
+/* 时间胶囊：与「现在」胶囊同一套鼠尾草配色，跟随指针（fixed，避开滚动容器裁切） */
+.tl-drag-pill {
+  position: fixed;
+  z-index: 90;
+  transform: translate(-50%, -100%);
+  height: 19px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: #5d674f;
+  color: #f8f1e4;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 19px;
+  letter-spacing: .3px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 3px 10px rgba(74, 56, 34, .18);
+}
+.tl-drag-pill[hidden] { display: none; }
+html[data-theme='dark'] .tl-drag-pill { background: #6c785c; color: #f4eddf; }
+
+/* 落位幽灵块：1 小时预览带，压在线与块之上但不吃指针 */
+.tl-drop-ghost {
+  position: absolute;
+  z-index: 5;
+  border-radius: 8px;
+  background: rgba(113, 128, 101, .16);
+  border: 1px dashed rgba(93, 103, 79, .55);
+  pointer-events: none;
+}
+.tl-drop-ghost[hidden] { display: none; }
+html[data-theme='dark'] .tl-drop-ghost {
+  background: rgba(156, 174, 135, .18);
+  border-color: rgba(156, 174, 135, .55);
+}
+
+/* 触屏拖动时的卡片影子 */
+.untimed-drag-ghost {
+  position: fixed;
+  z-index: 90;
+  transform: translate(-50%, -100%);
+  max-width: 200px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  box-shadow: 0 6px 18px rgba(74, 56, 34, .22);
+}
+.untimed-drag-ghost[hidden] { display: none; }
+html.is-touch-dragging,
+html.is-touch-dragging * {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* 块两端拉边手柄：常驻占位，悬停才显示细条；触屏只在**拉动时**显示（2026-11-01 用户口径） */
+.tl-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: ew-resize;
+  touch-action: none;
+}
+.tl-resize-start { left: 0; }
+.tl-resize-end { right: 0; }
+.tl-resize::after {
+  content: "";
+  width: 2px;
+  height: 18px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+@media (hover: hover) {
+  .tl-block:hover .tl-resize::after { opacity: .35; }
+  .tl-block .tl-resize:hover::after { opacity: .75; }
+}
+/* 2026-11-01（用户反馈）：触屏不再常显两根小竖线 —— 只在正在拉动（.is-resizing）时点亮。
+   transition 必须归零：WebKit（iPhone Safari）里给这个绝对定位手柄的 ::after 加透明度过渡会卡在 0，
+   真机上整场拖动都看不见竖线；归零后即刻点亮，松手回到 hover 过渡。 */
+.tl-block.is-resizing .tl-resize::after { opacity: .8; transition: none; }
+@media (pointer: coarse) {
+  .tl-resize { width: 14px; }
+  .tl-block.is-resizing .tl-resize::after { opacity: .85; }
+}
+
+/* 触屏加长版拉边判定区（2026-11-01 用户反馈「判定区纵向更长一点」）：
+   块自身 overflow:hidden 把内层手柄限在块高以内，所以窄屏另发一层兄弟节点，
+   挂在 .tl-typegroup（overflow:visible）上，向上下各探出 --resize-pad 像素。
+   只吃自己那 16px 宽的竖条，不挡块中间的点击。 */
+.tl-resize-pad {
+  position: absolute;
+  width: 16px;
+  z-index: 5;
+  touch-action: none;
+  cursor: ew-resize;
+}
+
+/* 正在拉边：块抬升层级、取消 hover 变换，页面光标锁成左右箭头 */
+.tl-block.is-resizing {
+  z-index: 9;
+  transition: none;
+  box-shadow: 0 6px 18px rgba(74, 56, 34, .22);
+}
+@media (hover: hover) {
+  .tl-block.is-resizing:hover { transform: none; }
+}
+html.is-timeline-resizing,
+html.is-timeline-resizing * {
+  cursor: ew-resize !important;
+  -webkit-user-select: none;
+  user-select: none;
+}
+

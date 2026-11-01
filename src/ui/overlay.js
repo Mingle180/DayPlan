@@ -6,7 +6,15 @@
  * 而 CSS 规定一轴为 auto 时另一轴无法为 visible → 展开卡会被纵向裁切（用户条目 6）。
  * 做法：展开时把**同一个节点**临时切到 `position:fixed`（fixed 不受祖先 overflow 裁切），
  * 位置由「锚点相对参照容器（轨道）的偏移」+「参照容器当前视口矩形」推导，滚动/缩放时重算。
- * 不做节点克隆、不新增浮层宿主，收起时恢复原始内联样式。
+ * 不做节点克隆，收起时恢复原始内联样式。
+ *
+ * 2026-11-01（用户第二次反馈手机端仍被挡住）：手机档额外把卡片**搬出**滚动容器，
+ * 挂到视图根（.view-root）。原因有两层：
+ *   ① iOS WebKit 会把滚动容器里的 fixed 后代一起裁掉，几何正常、画面被切；
+ *   ② 手机时间轴常被空闲压缩压得比展开卡还矮（单条 5 小时事项时容器只有约 150px），
+ *      「收进容器」只能封顶成一条内部小滚动，按钮注定落在可视区外。
+ * 搬到视图根后卡片不再受容器裁切，只按视口夹取；收起时搬回原父节点原位。
+ * 视图根随 [hidden] 一起隐藏，切到别的视图不会留下浮卡。
  *
  * 降级：环境缺 getBoundingClientRect（如 Node DOM 垫片）→ pin() 返回 false，调用方保持原位展开。
  *
@@ -26,6 +34,17 @@
   var RETRY_LIMIT = 20;   /* 未布局（矩形退化）时的最大重试帧数，超过则释放并降级为原位展开 */
   /* 卡片收进滚动容器时四周留的空隙（像素）。改这里要同步 docs/spec 的 DM-25 口径。 */
   var CLIP_PAD = 6;
+  /* 窄屏断点：与 styles/vintage.css 的手机档、itemcard.narrowScreen 同值。
+     这一档不再等命中测试结果，一律把展开卡收进滚动容器（见 fitIntoClip）。 */
+  var NARROW_MAX = 640;
+  /* 手机档展开卡的宿主选择器：视图根节点（日 = #day-panel，周 = #view-week-root）。
+     视图根不裁切内容，且会随视图切换的 [hidden] 一起隐藏 —— 挂到 body 反而会让
+     日视图的展开卡留在周视图上。 */
+  var PORTAL_SEL = '.view-root';
+  /* 卡片 pin 之后还会长高（CJK 字体换入、备注重新折行），只在 pin 那一帧量一次会漏。
+     有 ResizeObserver 就盯着卡片与容器；没有就退回到 pin 后补几次 sync（见 SETTLE_MS）。 */
+  var RO_CTOR = (typeof ResizeObserver !== 'undefined') ? ResizeObserver : null;
+  var SETTLE_MS = [160, 600];
 
   function num(v, fallback) {
     return (typeof v === 'number' && isFinite(v)) ? v : fallback;
@@ -33,6 +52,89 @@
 
   function hasRect(node) {
     return !!(node && typeof node.getBoundingClientRect === 'function');
+  }
+
+  /** 兼容不带 nextSibling 的 DOM 垫片：按父节点的子节点顺序取下一个兄弟。 */
+  function nextSiblingOf(node) {
+    var p = node && node.parentNode;
+    if (!p) return null;
+    if (node.nextSibling !== undefined) return node.nextSibling;
+    var list = p.childNodes;
+    if (!list || typeof list.indexOf !== 'function') return null;
+    var i = list.indexOf(node);
+    return (i >= 0 && i + 1 < list.length) ? list[i + 1] : null;
+  }
+
+  function portalHostOf(clip) {
+    if (!clip) return null;
+    var host = null;
+    try {
+      if (typeof clip.closest === 'function') host = clip.closest(PORTAL_SEL);
+    } catch (e) { host = null; }
+    if (!host || host === clip) return null;
+    if (host.isConnected === false) return null;
+    return host;
+  }
+
+  /**
+   * 手机档：把展开卡从滚动容器里搬出来（见文件头 2026-11-01 说明）。
+   * 只在节点已挂载时搬 —— 周视图首帧的卡片还没进文档，等 sync() 再搬。
+   * @returns {boolean} true = 当前处于已搬出状态
+   */
+  function portalOut(entry) {
+    if (entry.ported) return true;
+    if (!entry.clip || !isNarrowViewport()) return false;
+    var node = entry.node;
+    var parent = node.parentNode;
+    if (!parent) return false;
+    var host = portalHostOf(entry.clip);
+    if (!host || host === parent) return false;
+    var sibling = nextSiblingOf(node);
+    try { host.appendChild(node); } catch (e) { return false; }
+    entry.ported = true;
+    entry.parent = parent;
+    entry.sibling = sibling;
+    return true;
+  }
+
+  /** 收起时搬回原父节点原位；原容器已作废就摘掉浮动节点，不留幽灵。 */
+  function portalBack(entry) {
+    if (!entry.ported) return;
+    entry.ported = false;
+    var node = entry.node;
+    var parent = entry.parent;
+    var sibling = entry.sibling;
+    entry.parent = null;
+    entry.sibling = null;
+    if (!parent) return;
+    if (node.isConnected === false) return;      /* 渲染层已丢弃这块，不要再复活 */
+    if (parent.isConnected === false) {
+      if (node.parentNode) {
+        try { node.parentNode.removeChild(node); } catch (e) { /* 已移除 */ }
+      }
+      return;
+    }
+    try {
+      parent.insertBefore(node, (sibling && sibling.parentNode === parent) ? sibling : null);
+    } catch (e) {
+      try { parent.appendChild(node); } catch (e2) { /* 放弃归位 */ }
+    }
+  }
+
+  /**
+   * 是否手机档（≤640px）。媒体查询优先（与 CSS 断点一致），再退回布局宽度 ——
+   * 部分垫片 / 老引擎的 matchMedia 不解析宽度查询，只看查询会误判成桌面。
+   */
+  function isNarrowViewport() {
+    if (typeof window === 'undefined') return false;
+    var narrow = false;
+    try {
+      if (typeof window.matchMedia === 'function') {
+        narrow = !!window.matchMedia('(max-width: ' + NARROW_MAX + 'px)').matches;
+      }
+    } catch (e) { /* 老引擎：退回宽度判断 */ }
+    var w = num(window.innerWidth, 0);
+    return narrow || (w > 0 && w <= NARROW_MAX);
   }
 
   /**
@@ -72,33 +174,6 @@
   }
 
   /**
-   * @param {Object} [options] {zIndex=60, minWidth=220}
-   * @returns {{pin, release, releaseAll, sync, isPinned, destroy, count}}
-   */
-  function createExpandPinner(options) {
-    var opts = options || {};
-    var zIndex = num(opts.zIndex, DEFAULT_Z_INDEX);
-    var minWidth = num(opts.minWidth, DEFAULT_MIN_WIDTH);
-    var raf = nowRaf();
-
-    var entries = [];        // {node, ref, dx, dy, width, prev}
-    var frame = null;
-    var listening = false;
-
-    function rememberInline(node) {
-      return {
-        position: node.style.position || '',
-        left: node.style.left || '',
-        top: node.style.top || '',
-        width: node.style.width || '',
-        zIndex: node.style.zIndex || '',
-        maxWidth: node.style.maxWidth || '',
-        maxHeight: node.style.maxHeight || '',
-        overflowY: node.style.overflowY || ''
-      };
-    }
-
-  /**
    * 卡片底部此刻是否真的能被点到。
    *
    * 为什么需要它：`position: fixed` 按规范不受祖先 overflow 裁切，桌面 Chromium 与
@@ -122,18 +197,20 @@
   }
 
   /**
-   * 把展开卡收进滚动容器的可视区 —— 只在「确实被容器裁掉」时动手。
-   * 判定顺序：先看矩形有没有越过容器下沿，再做一次命中测试确认引擎真的裁了它。
-   * 正常引擎里 fixed 卡片命中测试落在自己身上 → 原样保留（可以盖到下面的卡片上）。
+   * 把展开卡收进滚动容器的可视区 —— 只在「确实越界」时动手。
+   * 正常引擎里 fixed 卡片可以盖到容器外，只有命中测试发现底部点不到才收缩；
+   * force=true（手机档）时跳过命中测试直接收缩：iOS WebKit 会裁掉滚动容器里的
+   * fixed 后代，但命中测试仍能命中卡片 —— 靠实测发现不了，只能按几何一律收回。
+   * @param {boolean} [force] 跳过命中测试
    * @returns {boolean} true = 做了收缩
    */
-  function fitIntoClip(node, clip) {
+  function fitIntoClip(node, clip, force) {
     if (!hasRect(clip)) return false;
     var cr = clip.getBoundingClientRect();
     var box = node.getBoundingClientRect();
     var plan = planClipFit(box, cr, CLIP_PAD);
     if (!plan) return false;
-    if (bottomReachable(node, box)) return false;             /* 引擎没裁 → 保持浮层 */
+    if (!force && bottomReachable(node, box)) return false;             /* 引擎没裁 → 保持浮层 */
     node.style.top = plan.top + 'px';
     /* 卡片比容器还高：按容器高度封顶，内容在卡片内部滚动，绝不把按钮切掉 */
     if (plan.maxHeight > 0) {
@@ -144,14 +221,44 @@
     return true;
   }
 
-  function applyFixed(node, ref, dx, dy, width, clip) {
+  /**
+   * @param {Object} [options] {zIndex=60, minWidth=220}
+   * @returns {{pin, release, releaseAll, sync, isPinned, destroy, count}}
+   */
+  function createExpandPinner(options) {
+    var opts = options || {};
+    var zIndex = num(opts.zIndex, DEFAULT_Z_INDEX);
+    var minWidth = num(opts.minWidth, DEFAULT_MIN_WIDTH);
+    var raf = nowRaf();
+
+    var entries = [];        // {node, ref, clip, dx, dy, width, prev, ro}
+    var frame = null;
+    var listening = false;
+    var settleTimers = [];
+    var fontsHooked = false;
+
+    function rememberInline(node) {
+      return {
+        position: node.style.position || '',
+        left: node.style.left || '',
+        top: node.style.top || '',
+        width: node.style.width || '',
+        zIndex: node.style.zIndex || '',
+        maxWidth: node.style.maxWidth || '',
+        maxHeight: node.style.maxHeight || '',
+        overflowY: node.style.overflowY || ''
+      };
+    }
+
+  function applyFixed(node, ref, dx, dy, width, clip, ported) {
     var r = ref.getBoundingClientRect();
     /* 2026-10-21（用户裁定）：展开卡默认与原块**完全重叠**（宽、左、顶都取原几何）。
        只有会放大/超出原块的面板才需要夹回视口：
          · is-expanded-grow —— 折叠时太小而省略 / 只剩色块；
          · is-expanded-fit  —— 日视图较窄的块（竖排按钮，允许适当超出原块）。
-       普通块夹取反而会破坏重叠。 */
-    var grow = !!(node.classList &&
+       普通块夹取反而会破坏重叠。手机档搬出容器的卡片一律按放大面板处理：
+       它已不在时间轴里，按原块左边缘落位会顶出屏幕。 */
+    var grow = !!ported || !!(node.classList &&
       (node.classList.contains('is-expanded-grow') || node.classList.contains('is-expanded-fit')));
     node.style.position = 'fixed';
     node.style.width = Math.round(width) + 'px';
@@ -193,8 +300,12 @@
     }
     /* 2026-10-31（用户反馈「日视图点下排事项，展开块被挡住」）：
        某些引擎（iOS WebKit）会把滚动容器里的 fixed 后代一起裁掉 —— 几何正常、
-       画面被切、按钮点不到。这里做最后一次实测：真被裁了就把卡片收进容器可视区。 */
-    if (clip) fitIntoClip(node, clip);
+       画面被切、按钮点不到。这里做最后一次实测：真被裁了就把卡片收进容器可视区。
+       2026-11-01（同一现象再次反馈）：真机上命中测试会「点得到但看不见」，
+       实测不可信 —— 手机档（≤640）跳过实测，几何越界就直接收进容器。
+       2026-11-01（第二次反馈）：收进容器仍会切按钮 —— 手机档的卡片已被 portalOut
+       搬出滚动容器，这里不再收容器，只按视口夹取（见上面的 grow 分支）。 */
+    if (clip && !ported) fitIntoClip(node, clip, isNarrowViewport());
   }
 
     /**
@@ -215,7 +326,9 @@
         entry.width = Math.max(num(nr.width, 0), minWidth);
         entry.measured = true;
       }
-      applyFixed(entry.node, entry.ref, entry.dx, entry.dy, entry.width, entry.clip);
+      /* 量完 dx/dy 再搬：搬走后卡片直接子于视图根，锚点仍按轨道矩形算 */
+      portalOut(entry);
+      applyFixed(entry.node, entry.ref, entry.dx, entry.dy, entry.width, entry.clip, entry.ported);
       return true;
     }
 
@@ -229,6 +342,52 @@
     }
 
     function onScrollResize() { schedule(); }
+
+    /* pin 之后的补算：字体换入 / 备注重新折行会让卡片在下一两帧才长到最终高度
+       （iOS 上大体积 CJK 字体 swap 尤其明显）。有 ResizeObserver 时由它盯着；
+       没有时靠这两拍兜底，避免「pin 那一帧还装得下，之后长高被容器切掉」。 */
+    function clearSettle() {
+      var i;
+      for (i = 0; i < settleTimers.length; i += 1) {
+        if (typeof clearTimeout === 'function') clearTimeout(settleTimers[i]);
+      }
+      settleTimers = [];
+    }
+
+    function scheduleSettle() {
+      clearSettle();
+      for (var i = 0; i < SETTLE_MS.length; i += 1) {
+        settleTimers.push(setTimeout(schedule, SETTLE_MS[i]));
+      }
+    }
+
+    function hookFonts() {
+      if (fontsHooked) return;
+      var fonts = (typeof document !== 'undefined') ? document.fonts : null;
+      if (!fonts || !fonts.ready || typeof fonts.ready.then !== 'function') return;
+      fontsHooked = true;
+      try {
+        fonts.ready.then(function () { schedule(); });
+      } catch (e) { fontsHooked = false; }
+    }
+
+    /* 尺寸一变就重算。fitIntoClip 是幂等的：写回的 top / maxHeight 与上一次相同，
+       不会再触发尺寸回调，所以 RO → sync → applyFixed 不会来回震荡。 */
+    function watchSize(entry) {
+      if (!entry || entry.ro || !RO_CTOR || !hasRect(entry.node)) return;
+      try {
+        entry.ro = new RO_CTOR(function () { schedule(); });
+        entry.ro.observe(entry.node);
+        if (hasRect(entry.clip)) entry.ro.observe(entry.clip);
+      } catch (e) { entry.ro = null; }
+    }
+
+    function unwatchSize(entry) {
+      if (entry && entry.ro && typeof entry.ro.disconnect === 'function') {
+        try { entry.ro.disconnect(); } catch (e) { /* 已断开 */ }
+      }
+      if (entry) entry.ro = null;
+    }
 
     function listen() {
       if (listening) return;
@@ -281,6 +440,9 @@
         width: 0,
         retries: 0,
         measured: false,
+        ported: false,
+        parent: null,
+        sibling: null,
         prev: rememberInline(node)
       };
       if (!isDegenerate(rr) && !isDegenerate(nr)) {
@@ -291,6 +453,9 @@
       }
       entries.push(entry);
       listen();
+      hookFonts();
+      if (entry.clip) scheduleSettle();
+      watchSize(entry);
       if (entry.measured) position(entry); else schedule();
       return true;
     }
@@ -313,6 +478,8 @@
           entry.node.classList.remove(PIN_CLASS);
           entry.node.classList.remove(FIT_CLASS);
         }
+        unwatchSize(entry);
+        portalBack(entry);
         entries.splice(i, 1);
       }
       if (!entries.length) unlisten();
@@ -320,6 +487,7 @@
 
     function releaseAll() {
       for (var i = entries.length - 1; i >= 0; i -= 1) release(entries[i].node);
+      clearSettle();
     }
 
     /** 重算所有已固定节点的位置（滚动 / 缩放 / 数据重排 / 挂载完成后调用）。 */
@@ -348,6 +516,7 @@
 
     function destroy() {
       releaseAll();
+      clearSettle();
       unlisten();
       if (frame !== null && typeof cancelAnimationFrame === 'function') {
         cancelAnimationFrame(frame);
@@ -370,9 +539,12 @@
     PIN_CLASS: PIN_CLASS,
     FIT_CLASS: FIT_CLASS,
     CLIP_PAD: CLIP_PAD,
+    NARROW_MAX: NARROW_MAX,
     DEFAULT_Z_INDEX: DEFAULT_Z_INDEX,
     DEFAULT_MIN_WIDTH: DEFAULT_MIN_WIDTH,
     planClipFit: planClipFit,
+    fitIntoClip: fitIntoClip,
+    isNarrowViewport: isNarrowViewport,
     createExpandPinner: createExpandPinner
   };
 });

@@ -50,6 +50,16 @@
   var COUNTDOWN_AT_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;
   var COUNTDOWN_MAX = 1000;         /* 条目上限（防御异常数据撑爆栏） */
 
+  /* 2026-11-01：右栏图片（用户点右栏插画替换本地图片）。
+     · 按日键 / 按周一键各一张，随文档同步；src 是裁剪后压好的 data URL。
+     · ratio = 高度 / 宽度，最小由界面按「当前显示比例」动态夹取，数据层只兜底到
+       COVER_RATIO_MIN，上限固定 1:1（用户裁定）。
+     · 单张长度上限防异常数据撑爆 localStorage（导出端已压到 ~1024px / q0.82，
+       正常 100–400KB base64，这里留 1.5MB 余量）。 */
+  var COVER_SRC_MAX = 1500000;
+  var COVER_RATIO_MIN = 0.1;
+  var COVER_RATIO_MAX = 1;
+
   /* 2026-10-27（D9）：事项完成台快照（迭代 10 批次 5）。
      · 数组顺序 = 台内显示顺序；条目是 finishdock.snapshotItem() 的形状。
      · occ 是发生（occurrence）的**嵌入副本**（recurrence.js buildOccurrence /
@@ -551,6 +561,10 @@
       }
     }
 
+    // 2026-11-01：右栏图片（存在时校验；旧数据没有该字段同样合法）
+    validateCovers(doc.covers, '$.covers', false).forEach(function (e) { errors.push(e); });
+    validateCovers(doc.weekCovers, '$.weekCovers', true).forEach(function (e) { errors.push(e); });
+
     // DM-10：设置（存在时校验；缺失键由 sanitizeSettings 补默认）
     if (doc.settings !== undefined && doc.settings !== null) {
       validateSettings(doc.settings, '$.settings').forEach(function (e) { errors.push(e); });
@@ -806,6 +820,10 @@
       warnings.push(err('$.weekNotes', '必须是对象，已重置为空'));
     }
 
+    // 右栏图片（2026-11-01）：按日键 / 按周一键各一张，与 notes / weekNotes 并列
+    var covers = sanitizeCovers(doc.covers, '$.covers', false, warnings);
+    var weekCovers = sanitizeCovers(doc.weekCovers, '$.weekCovers', true, warnings);
+
     out.schemaVersion = SCHEMA_VERSION;
     out.app = APP_NAME;
     out.meta = isPlainObject(doc.meta) ? doc.meta : {};
@@ -816,6 +834,8 @@
     out.items = items;
     out.notes = notes;
     out.weekNotes = weekNotes;
+    out.covers = covers;
+    out.weekCovers = weekCovers;
     out.monthPlans = sanitizeMonthPlans(doc.monthPlans, warnings);
     out.countdowns = sanitizeCountdowns(doc.countdowns, {
       categoryIds: categoryIds,
@@ -1086,6 +1106,87 @@
     return out;
   }
 
+  function sanitizeCovers(src, pathLabel, requireMonday, warnings) {
+    var out = {};
+    if (src === undefined || src === null) return out;
+    if (!isPlainObject(src)) {
+      if (warnings) warnings.push(err(pathLabel, '必须是对象，已重置为空'));
+      return out;
+    }
+    Object.keys(src).forEach(function (k) {
+      var path = pathLabel + '["' + k + '"]';
+      var c = src[k];
+      if (!dt.isValidDate(k)) {
+        if (warnings) warnings.push(err(path, '键必须是合法日期，已丢弃'));
+        return;
+      }
+      if (requireMonday && !isMondayISO(k)) {
+        if (warnings) warnings.push(err(path, '按周的图片键必须是周一，已丢弃：' + k));
+        return;
+      }
+      if (!isPlainObject(c) || !isCoverSrc(c.src)) {
+        if (warnings) warnings.push(err(path, '无效图片，已丢弃'));
+        return;
+      }
+      var ratio = Number(c.ratio);
+      if (!isFinite(ratio)) {
+        if (warnings) warnings.push(err(path + '.ratio', '比例非法，已丢弃'));
+        return;
+      }
+      if (ratio < COVER_RATIO_MIN || ratio > COVER_RATIO_MAX) {
+        if (warnings) warnings.push(err(path + '.ratio', '比例超出范围，已夹取到 ' + COVER_RATIO_MIN + '–' + COVER_RATIO_MAX));
+        ratio = Math.max(COVER_RATIO_MIN, Math.min(COVER_RATIO_MAX, ratio));
+      }
+      out[k] = {
+        src: String(c.src),
+        ratio: ratio,
+        updatedAt: isNonEmptyString(c.updatedAt) ? c.updatedAt : new Date().toISOString()
+      };
+    });
+    return out;
+  }
+
+  /** 2026-11-01：右栏图片 src 只接受图片 data URL（导出端总是 data:image/jpeg）。 */
+  function isCoverSrc(src) {
+    return isNonEmptyString(src) && src.length <= COVER_SRC_MAX &&
+      /^data:image\/[a-z0-9.+-]+;base64,/i.test(src);
+  }
+
+  /**
+   * 2026-11-01：右栏图片校验（缺失合法 —— 旧数据没有该字段）。
+   * requireMonday 为真时键必须是周一（周视图键）。
+   */
+  function validateCovers(src, path, requireMonday) {
+    var errors = [];
+    if (src === undefined || src === null) return errors;
+    if (!isPlainObject(src)) return [err(path, '必须是对象')];
+    Object.keys(src).forEach(function (k) {
+      var p = path + '["' + k + '"]';
+      if (!dt.isValidDate(k)) {
+        errors.push(err(p, '键必须是合法日期'));
+        return;
+      }
+      if (requireMonday && !isMondayISO(k)) {
+        errors.push(err(p, '按周的图片键必须是周一'));
+        return;
+      }
+      var c = src[k];
+      if (!isPlainObject(c)) {
+        errors.push(err(p, '必须是对象'));
+        return;
+      }
+      if (!isCoverSrc(c.src)) {
+        errors.push(err(p + '.src', '必须是图片 data URL 且不超过 ' + COVER_SRC_MAX + ' 字符'));
+      }
+      if (!isFiniteNumber(c.ratio)) {
+        errors.push(err(p + '.ratio', 'ratio 必须是数字'));
+      } else if (c.ratio < COVER_RATIO_MIN || c.ratio > COVER_RATIO_MAX) {
+        errors.push(err(p + '.ratio', 'ratio 需在 ' + COVER_RATIO_MIN + '–' + COVER_RATIO_MAX + ' 之间'));
+      }
+    });
+    return errors;
+  }
+
   /**
    * D9（2026-10-27）：完成台条目校验。远端严格口径（数组不可缺失）+ 条目级形状检查。
    * occ 只验「回查所需的最小集」（key/seriesId/date/kind/categoryId），
@@ -1238,6 +1339,8 @@
       items: [],
       notes: {},
       weekNotes: {},
+      covers: {},
+      weekCovers: {},
       monthPlans: {},
       countdowns: [],
       finishDock: [],
@@ -1777,6 +1880,13 @@
       if (newer(incomingClean.weekNotes[k], cur)) weekNotes[k] = incomingClean.weekNotes[k];
     });
 
+    /* 右栏图片：与 notes 同口径 — 键即合并键，同键取 updatedAt 较新者；
+       prev 有、远端没有 = 远端清空 → 跟随删除；本机清空过的不复活。 */
+    var covers = mergeCoverMap(out.covers, incomingClean.covers,
+      prevClean && isPlainObject(prevClean.covers) ? prevClean.covers : null);
+    var weekCovers = mergeCoverMap(out.weekCovers, incomingClean.weekCovers,
+      prevClean && isPlainObject(prevClean.weekCovers) ? prevClean.weekCovers : null);
+
     /* 本月计划：外层按月键（整个月的增删），内层按 id 三向合并。
        本机次序为权威，远端新条目追加到月末。 */
     var prevMP = prevClean && isPlainObject(prevClean.monthPlans) ? prevClean.monthPlans : null;
@@ -1822,12 +1932,35 @@
     out.items = items;
     out.notes = notes;
     out.weekNotes = weekNotes;
+    out.covers = covers;
+    out.weekCovers = weekCovers;
     out.monthPlans = monthPlans;
     out.countdowns = countdowns;
     out.finishDock = dock;
     out.meta.updatedAt = new Date().toISOString();
     var v = validateDocument(out);
     return { doc: out, ok: v.ok, errors: v.errors, warnings: warnings };
+  }
+
+  function mergeCoverMap(local, remote, prev) {
+    var out = {};
+    var l = isPlainObject(local) ? local : {};
+    var r = isPlainObject(remote) ? remote : {};
+    var p = isPlainObject(prev) ? prev : null;
+    Object.keys(l).forEach(function (k) {
+      if (p && p[k] && !r[k]) return; // 远端清空了这天 → 跟随删除
+      out[k] = l[k];
+    });
+    Object.keys(r).forEach(function (k) {
+      var cur = out[k];
+      if (!cur) {
+        if (p && p[k]) return; // 本机清空过 → 不复活
+        out[k] = r[k];
+        return;
+      }
+      if (newer(r[k], cur)) out[k] = r[k];
+    });
+    return out;
   }
 
   function newer(a, b) {
@@ -1957,6 +2090,9 @@
     MONTH_PLAN_MAX: MONTH_PLAN_MAX,
     COUNTDOWN_MAX: COUNTDOWN_MAX,
     FINISH_DOCK_MAX: FINISH_DOCK_MAX,
+    COVER_SRC_MAX: COVER_SRC_MAX,
+    COVER_RATIO_MIN: COVER_RATIO_MIN,
+    COVER_RATIO_MAX: COVER_RATIO_MAX,
     NAMED_MONTHS: NAMED_MONTHS,
     COLOR_RE: COLOR_RE,
     URGENT_CATEGORY_ID: URGENT_CATEGORY_ID,
@@ -1997,6 +2133,8 @@
     sanitizeCountdowns: sanitizeCountdowns,
     validateFinishDock: validateFinishDock,
     sanitizeFinishDock: sanitizeFinishDock,
+    validateCovers: validateCovers,
+    sanitizeCovers: sanitizeCovers,
     sanitizeSettings: sanitizeSettings,
     mergeSettings: mergeSettings,
     migrateDocument: migrateDocument,

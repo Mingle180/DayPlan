@@ -31,6 +31,8 @@
   var Layout = root.DayPlan.layout;      /* 迭代 6（F-38）：复用日视图的折叠轴纯函数 */
   var M = root.DayPlan.modal;
   var el = M.el;
+  /* 2026-11-01：右栏图片（按周一存，随文档同步） */
+  var RailCover = root.DayPlan.railCover;
   /* 2026-10-30：类别色统一走色板（20 色）；旧高饱和色由 categoryTone 就近归一 */
   var Palette = root.DayPlan.palette;
   var toneOf = (Palette && Palette.categoryTone) ? Palette.categoryTone : null;
@@ -297,8 +299,18 @@
 
     /* 迭代 10 批次 4（条8）：white-card = .panel-day —— 与日视图同一张白卡、同样的圆角/投影 */
     var rootEl = el('div', { class: 'week-view panel-day', id: 'week-view' });
+    /* 2026-11-01：右栏顶部图片（按周一保存；模块缺失时只剩记录区） */
+    var railCover = (RailCover && typeof RailCover.create === 'function')
+      ? RailCover.create({
+        store: store,
+        scope: 'week',
+        label: '本周',
+        getKey: function () { return state.monday; }
+      })
+      : null;
     /* 迭代 10 批次 4（条8）：左侧周表 + 右侧「当周记录」（独立白底、与周表等高相对静止） */
     var railEl = el('aside', { class: 'side-rail', id: 'week-rail', 'aria-label': '当周记录' }, [
+      railCover ? railCover.element : null,
       el('section', { class: 'notes-section', 'aria-label': '当周记录' }, [
         el('div', { class: 'section-head' }, [
           el('h2', { text: '当周记录' }),
@@ -664,7 +676,7 @@
             onEdit: function (o) { openEdit(o); },
             onRemove: function (o) { removeOccurrence(o); },
             onRestoreDefault: function (o) { restoreDefault(o); },
-            /* 迭代 7（F-45 第 6 条 / R-23）：只设紧急未做其他改动 → 不渲染「恢复默认」 */
+            /* 迭代 7（F-45 第 6 条 / R-23）：只设紧急未做其他改动 → 不渲染「复原」 */
             hasNonUrgentOverride: function (o) {
               return (typeof store.hasNonUrgentOverride === 'function') ? store.hasNonUrgentOverride(o) : false;
             },
@@ -934,6 +946,7 @@
       var thisMonday = D.startOfWeek(D.todayISO());
       if (btnThis) btnThis.hidden = !!(thisMonday && monday === thisMonday);
       renderGrid(doc, monday);
+      if (railCover) railCover.render();
       loadNotes();
       lastRenderStamp = dataStamp(doc);
     }

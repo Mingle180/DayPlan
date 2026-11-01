@@ -13,8 +13,8 @@
  *   "week"  → div.wk-item      内含 div.wk-time / div.wk-title
  *
  * 展开态（ctx.expanded === true）：在根元素内追加 div.item-detail，依序为
- *   div.item-note → div.item-actions（紧急 / 修改 / 删除 / [恢复默认] / 收起）。
- *   恢复默认仅 occ.dirty === true 时渲染。
+ *   div.item-note → div.item-actions（紧急 / 修改 / 删除 / [复原] / 收起）。
+ *   复原仅 occ.dirty === true 时渲染。
  *
  * 迭代 4（AC-27.5）：不再渲染 ★/☆ 与 .item-star；紧急项在折叠态显示
  *   `<span class="item-urgent-tag">紧急</span>`；切换回调优先取 `ctx.onToggleUrgent(occ)`
@@ -34,12 +34,12 @@
  *   - F-44：折叠态追加备注节点（`.tl-note` / `.wk-note` / `.ui-note`）；
  *     备注溢出时 `wheel` 只滚备注自身，展开态隐藏时间/标题/折叠备注且不再渲染 `.item-note`。
  *   - F-45：展开区**不再有「收起」按钮**；点展开区空白处或卡片外部即收起（R-25）。
- *   - F-45 第 6 条：`ctx.hasNonUrgentOverride` 返回 false 时不渲染「恢复默认」（R-23）。
+ *   - F-45 第 6 条：`ctx.hasNonUrgentOverride` 返回 false 时不渲染「复原」（R-23）。
  *
  * 纯 DOM 工厂：不访问 store、不读全局状态、不发网络请求；所有行为经 ctx 回调。
  * 可选扩展（非契约字段）：
  *   ctx.width / ctx.pxPerHour 仅用于时段块的 is-narrow 判定；
- *   ctx.hasNonUrgentOverride(occ) -> boolean 由视图注入（读纯函数），用于「恢复默认」按钮判定。
+ *   ctx.hasNonUrgentOverride(occ) -> boolean 由视图注入（读纯函数），用于「复原」按钮判定。
  */
 (function (root, factory) {
   var api = factory(root);
@@ -208,7 +208,7 @@
   }
 
   /**
-   * 「恢复默认」是否可渲染（迭代 7 / F-45 第 6 条，用户裁定 R-23）。
+   * 「复原」是否可渲染（迭代 7 / F-45 第 6 条，用户裁定 R-23）。
    * 优先用视图注入的读纯函数 `ctx.hasNonUrgentOverride(occ)`；未注入时退回 `occ.dirty === true`，
    * 保持本组件可脱离视图独立使用（既有用例不依赖该回调）。
    */
@@ -523,10 +523,10 @@
       if (typeof ctx.onRemove === 'function') ctx.onRemove(occ);
     }));
 
-    // 4) 恢复默认：仅「该次改动不只是紧急/取消紧急」时渲染（迭代 7 / F-45 第 6 条 / R-23）
-    //    2026-10-30（用户口径）：手机端不提供「恢复默认」——固定四颗按钮（完成/紧急/修改/删除）。
+    // 4) 复原：仅「该次改动不只是紧急/取消紧急」时渲染（迭代 7 / F-45 第 6 条 / R-23）
+    //    2026-10-30（用户口径）：手机端不提供「复原」——固定四颗按钮（完成/紧急/修改/删除）。
     if (!mobile && shouldOfferRestore(occ, ctx)) {
-      actions.appendChild(actionButton({ text: '恢复默认' }, function () {
+      actions.appendChild(actionButton({ text: '复原' }, function () {
         if (typeof ctx.onRestoreDefault === 'function') ctx.onRestoreDefault(occ);
       }));
     }

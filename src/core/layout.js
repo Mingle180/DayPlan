@@ -530,6 +530,135 @@
     return out;
   }
 
+  /* ===================== 2026-11-01：拖放排时 / 拉边调整 ===================== */
+
+  /** 拖放与拉边的默认吸附粒度（与事项表单时间滚轮的 5 分钟刻度同源）。 */
+  var SNAP_STEP_DEFAULT = 5;
+  /** 拉边时允许的最短事项时长（分钟）。 */
+  var MIN_DURATION_DEFAULT = 15;
+
+  function clampNumber(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function pad2(n) { return n < 10 ? '0' + n : String(n); }
+
+  /** 分钟数 → "HH:mm"（0..1439；1440 不写入文档）。 */
+  function clockText(minute) {
+    var m = clampNumber(Math.round(minute), 0, TOTAL_MINUTES - 1);
+    return pad2(Math.floor(m / 60)) + ':' + pad2(m % 60);
+  }
+
+  /**
+   * 轴向像素 x（相对轴起点，可含压缩区）→ 当日分钟数（浮点，未吸附）。
+   * 与 computeAxisGeometry().getX 互为反函数；几何缺失时按 pxPerHour 的实比例直算。
+   *
+   * @param {Object|null} geometry computeAxisGeometry 的返回值
+   * @param {number} x 相对轴起点的横向像素
+   * @param {{pxPerHour?:number}} [options]
+   * @returns {number} 0..1440
+   */
+  function axisMinuteAt(geometry, x, options) {
+    var opts = options || {};
+    var rate = numberOption(opts.pxPerHour, DEFAULT_PX_PER_HOUR) / 60;
+    var px = Number(x);
+    if (!isFinite(px)) { return 0; }
+    if (rate <= 0) { rate = 1; }
+    if (!geometry || typeof geometry.getY !== 'function') {
+      return clampNumber(px / rate, 0, TOTAL_MINUTES);
+    }
+    var firstStart = numberOption(geometry.firstStart, 0);
+    var lastEnd = numberOption(geometry.lastEnd, TOTAL_MINUTES);
+    var lead = numberOption(geometry.leadLength, numberOption(geometry.leadHeight, 0));
+    var real = numberOption(geometry.realLength, numberOption(geometry.realHeight, 0));
+    var trail = numberOption(geometry.trailLength, numberOption(geometry.trailHeight, 0));
+    if (!(real > 0)) { real = Math.max(0, (lastEnd - firstStart) * rate); }
+    if (px <= 0) { return 0; }
+    if (lead > 0 && px <= lead) { return clampNumber(px / lead * firstStart, 0, TOTAL_MINUTES); }
+    if (px <= lead + real) {
+      return clampNumber(firstStart + (px - lead) / rate, 0, TOTAL_MINUTES);
+    }
+    var tailSpan = TOTAL_MINUTES - lastEnd;
+    if (trail > 0 && tailSpan > 0) {
+      return clampNumber(lastEnd + (px - lead - real) / trail * tailSpan, 0, TOTAL_MINUTES);
+    }
+    return TOTAL_MINUTES;
+  }
+
+  /**
+   * 分钟数吸附到 step 的整数倍，结果落在 0..1439。
+   * @param {number} minute
+   * @param {number} [step=5]
+   * @returns {number}
+   */
+  function snapMinute(minute, step) {
+    var s = positiveIntOption(step, SNAP_STEP_DEFAULT);
+    var v = Number(minute);
+    if (!isFinite(v)) { v = 0; }
+    return clampNumber(Math.round(v / s) * s, 0, TOTAL_MINUTES - 1);
+  }
+
+  /**
+   * 未排事项落到时间轴：落点取整段**中点**，向前后各取半个 duration。
+   * 靠近 0:00 / 24:00 时把整段夹回轴内（start 夹到 0..1439−dur），不截短时长。
+   *
+   * @param {number} pointerMinute 鼠标落点对应的分钟（= 时段中点）
+   * @param {number} [durationMinutes=60]
+   * @param {{step?:number}} [options]
+   * @returns {{start:string, end:string, startMinute:number, endMinute:number}}
+   */
+  function scheduleTime(pointerMinute, durationMinutes, options) {
+    var opts = options || {};
+    var step = positiveIntOption(opts.step, SNAP_STEP_DEFAULT);
+    var dur = positiveIntOption(durationMinutes, 60);
+    dur = Math.min(dur, TOTAL_MINUTES - 1);
+    var center = snapMinute(pointerMinute, step);
+    var start = Math.round(center - dur / 2);
+    start = clampNumber(start, 0, TOTAL_MINUTES - 1 - dur);
+    var end = start + dur;
+    return {
+      start: clockText(start),
+      end: clockText(end),
+      startMinute: start,
+      endMinute: end
+    };
+  }
+
+  /**
+   * 拉边：把被拖端点吸附到 pointerMinute，另一端不动，最短 minDuration。
+   * 左端点不会越过「右端点 − 最短时长」，右端点不会越过 23:59。
+   *
+   * @param {{start:string,end:string}|null} time 原时段
+   * @param {'start'|'end'} edge 拖的是哪一端
+   * @param {number} pointerMinute 指针所在分钟
+   * @param {{step?:number, minDuration?:number}} [options]
+   * @returns {{start:string, end:string, startMinute:number, endMinute:number}|null}
+   */
+  function resizeTime(time, edge, pointerMinute, options) {
+    if (!time) { return null; }
+    var s = minutesOfTime(time.start, false);
+    var e = minutesOfTime(time.end, false);
+    if (s === null || e === null || e <= s) { return null; }
+    var opts = options || {};
+    var step = positiveIntOption(opts.step, SNAP_STEP_DEFAULT);
+    var minDur = positiveIntOption(opts.minDuration, MIN_DURATION_DEFAULT);
+    var m = snapMinute(pointerMinute, step);
+    if (edge === 'start') {
+      s = clampNumber(m, 0, e - minDur);
+      if (s % step !== 0) { s = Math.floor(s / step) * step; }
+    } else {
+      e = clampNumber(m, s + minDur, TOTAL_MINUTES - 1);
+      if (e % step !== 0) { e = Math.min(TOTAL_MINUTES - 1, Math.ceil(e / step) * step); }
+      if (e < s + minDur) { e = Math.min(TOTAL_MINUTES - 1, s + minDur); }
+    }
+    return {
+      start: clockText(s),
+      end: clockText(e),
+      startMinute: s,
+      endMinute: e
+    };
+  }
+
   /**
    * 类别名排版的纯函数度量（DM-21.4 / BR-26 / ADR-21）。
    * 竖排文本：CJK/全角/其它记 1 个单位，ASCII(0x20–0x7E) 记 0.5；
@@ -956,6 +1085,13 @@
     computeAxisGeometry: computeAxisGeometry,
     axisTicks: axisTicks,
     axisIdleBands: axisIdleBands,
+    /* 2026-11-01：拖放排时 / 拉边调整（与 computeAxisGeometry 互逆的纯函数） */
+    SNAP_STEP_DEFAULT: SNAP_STEP_DEFAULT,
+    MIN_DURATION_DEFAULT: MIN_DURATION_DEFAULT,
+    axisMinuteAt: axisMinuteAt,
+    snapMinute: snapMinute,
+    scheduleTime: scheduleTime,
+    resizeTime: resizeTime,
     categoryLabelMetrics: categoryLabelMetrics,
     /* 迭代 8（F-52）：块尺寸的内容度量 */
     TEXT_UNIT_PX: TEXT_UNIT_PX,
