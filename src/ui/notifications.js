@@ -12,6 +12,8 @@
   var M = root.DayPlan.modal;
   var el = M.el;
 
+  var UPCOMING_LIMIT = 8;
+
   var REASON_TEXT = {
     file: '单文件版不支持推送；应用打开期间仍会提醒。',
     electron: '桌面版不接推送；应用打开期间仍会提醒。',
@@ -111,15 +113,66 @@
     var toggle = el('input', { type: 'checkbox', 'aria-label': '云端推送' });
     var status = el('div', { class: 'hint' });
     var busyText = el('div', { class: 'hint' });
+    var upcomingBox = el('div', { class: 'reminder-upcoming' });
 
     wrap.appendChild(el('div', { class: 'field' }, [
       el('label', { class: 'switch' }, [toggle, el('span', { text: '云端推送' })])
     ]));
     wrap.appendChild(status);
     wrap.appendChild(busyText);
+    wrap.appendChild(upcomingBox);
 
     var busy = false;
     var alive = true;
+    var unsubscribe = null;
+    var ticker = null;
+    var onVisible = null;
+
+    /** 只读视图：直读本机文档，不代表推送是否真的能送达。 */
+    function renderUpcoming() {
+      if (!alive) return;
+      upcomingBox.innerHTML = '';
+      var R = root.DayPlan && root.DayPlan.reminder;
+      var getDoc = typeof opts.getDoc === 'function' ? opts.getDoc : null;
+      if (!R || typeof R.upcoming !== 'function' || !getDoc) return;
+      var doc;
+      try { doc = getDoc(); } catch (e) { return; }
+      var nowMs = Date.now();
+      var res;
+      try { res = R.upcoming(doc, { nowMs: nowMs, limit: UPCOMING_LIMIT }); } catch (e) { return; }
+      var rows = res && Array.isArray(res.rows) ? res.rows : [];
+      var total = res && isFinite(res.total) ? res.total : rows.length;
+
+      upcomingBox.appendChild(el('h3', { text: '将要通知' }));
+      if (!rows.length) {
+        upcomingBox.appendChild(el('div', {
+          class: 'hint reminder-upcoming-empty',
+          text: '接下来 60 天内没有要通知的事项。在事项或倒计时表单里打开「通知」即可添加。'
+        }));
+        return;
+      }
+
+      var list = el('ul', { class: 'reminder-upcoming-list' });
+      rows.forEach(function (r) {
+        var kind = r.sourceKind === 'countdown' ? '倒计时'
+          : (r.occurrenceKey ? '重复事项' : '事项');
+        var meta = [kind];
+        if (typeof R.reminderLabel === 'function') meta.push(R.reminderLabel(r));
+        else if (typeof R.offsetLabel === 'function') meta.push(R.offsetLabel(r.offsetMinutes));
+        list.appendChild(el('li', { class: 'reminder-upcoming-row' }, [
+          el('span', { class: 'reminder-upcoming-title', text: r.title || '未命名' }),
+          el('span', { class: 'reminder-upcoming-when', text: R.formatFireAt(r.fireAt, nowMs) }),
+          el('span', { class: 'reminder-upcoming-meta', text: meta.join(' · ') })
+        ]));
+      });
+      upcomingBox.appendChild(list);
+      if (total > rows.length) {
+        upcomingBox.appendChild(el('div', {
+          class: 'hint reminder-upcoming-more',
+          text: '共 ' + total + ' 项，先列接下来 ' + rows.length + ' 项。'
+        }));
+      }
+    }
 
     function setBusy(on, text) {
       busy = !!on;
@@ -143,6 +196,7 @@
 
     function render() {
       if (!alive) return;
+      renderUpcoming();
       if (!P || !Cfg) {
         toggle.checked = false;
         toggle.disabled = true;
@@ -270,12 +324,35 @@
       });
     });
 
+    if (typeof opts.subscribe === 'function') {
+      try { unsubscribe = opts.subscribe(function () { renderUpcoming(); }); } catch (e) { unsubscribe = null; }
+    }
+    if (root.document && typeof root.document.addEventListener === 'function') {
+      onVisible = function () {
+        if (root.document.visibilityState === 'visible') renderUpcoming();
+      };
+      root.document.addEventListener('visibilitychange', onVisible);
+    }
+    /* 设置面板可能开着跨过某个提醒时刻；每分钟重算一次，让过点的行自然消失。 */
+    if (typeof root.setInterval === 'function') ticker = root.setInterval(renderUpcoming, 60 * 1000);
+
     render();
 
     return {
       element: wrap,
       render: render,
-      destroy: function () { alive = false; }
+      destroy: function () {
+        alive = false;
+        if (typeof unsubscribe === 'function') {
+          try { unsubscribe(); } catch (e) { /* 退订失败不影响关闭 */ }
+        }
+        unsubscribe = null;
+        if (ticker !== null) { clearInterval(ticker); ticker = null; }
+        if (onVisible && root.document && typeof root.document.removeEventListener === 'function') {
+          root.document.removeEventListener('visibilitychange', onVisible);
+        }
+        onVisible = null;
+      }
     };
   }
 

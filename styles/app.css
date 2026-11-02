@@ -1790,12 +1790,16 @@ html.has-modal body {
 .inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .hint { color: var(--text-3); font-size: 12px; margin-top: 4px; }
 
-/* D34：通知提醒（天 / 时 / 分） */
+/* D34：通知提醒（天 / 时 / 分；不设时间的事项为日期 + 时刻） */
 .dp-reminder-offset { margin-top: 8px; font-size: 13px; }
+.dp-reminder-offset[hidden] { display: none; }   /* .inline 的 flex 会盖掉 UA [hidden] */
 .dp-reminder-offset input[type=number] { width: 56px; text-align: center; }
+.dp-reminder-at { margin-top: 8px; }
+.dp-reminder-at .field { margin-bottom: 0; }
 .dp-reminder-preview { color: var(--text-3); font-size: 12px; margin-top: 6px; min-height: 15px; }
 .dp-reminder-note { color: var(--text-3); font-size: 12px; }
-.dp-reminder.is-off .dp-reminder-offset { display: none; }
+.dp-reminder.is-off .dp-reminder-offset,
+.dp-reminder.is-off .dp-reminder-at { display: none; }
 
 .weekdays { display: flex; gap: 4px; flex-wrap: wrap; }
 .weekday-chip {
@@ -1971,6 +1975,30 @@ html.has-modal body {
 .cloud-versions > .cloud-version-row:first-child { border-top: 0; }
 .cloud-version-meta { flex: 1 1 auto; min-width: 0; font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cloud-version-tag { font-size: 12px; color: var(--text-3); }
+
+/* 通知（19 号契约）：设置里「将要通知」——每个事项 / 倒计时只列下一次 */
+.reminder-upcoming { margin-top: 14px; }
+.reminder-upcoming h3 { font-size: 13px; margin: 0 0 6px; }
+.reminder-upcoming-list {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.reminder-upcoming-row {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px;
+  padding: 7px 0; border-top: 1px solid var(--border);
+}
+.reminder-upcoming-row:first-child { border-top: 0; }
+.reminder-upcoming-title {
+  flex: 1 1 auto; min-width: 0; font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.reminder-upcoming-when {
+  flex: none; font-size: 12px; color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.reminder-upcoming-meta { flex-basis: 100%; font-size: 12px; color: var(--text-3); }
+.reminder-upcoming-empty,
+.reminder-upcoming-more { margin-top: 6px; }
 
 /* 无障碍：屏幕阅读器专用 */
 .sr-only {

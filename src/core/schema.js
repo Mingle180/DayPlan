@@ -50,9 +50,11 @@
   var COUNTDOWN_AT_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;
   var COUNTDOWN_MAX = 1000;         /* 条目上限（防御异常数据撑爆栏） */
 
-  /* D34：通知提醒。item / countdown 上的可选字段 `reminder = {offsetMinutes}`；
+  /* D34：通知提醒。item / countdown 上的可选字段 `reminder`；
      · 只存在即代表开启，删除字段即关闭（不设 enabled，避免「开着但抵消」的歧义）；
-     · 0 = 准时；上限 365 天，防止异常数据把说明与物化窗口撑爆。 */
+     · 有时间：`{offsetMinutes}`，0 = 准时；上限 365 天，防止异常数据撑爆物化窗口；
+     · 不设时间的单次事项：`{date, time}`（通知日期 + 时刻）；重复事项：`{time}`（每次发生当天）。
+     · 倒计时始终有目标时刻，只允许 `{offsetMinutes}`。 */
   var REMINDER_OFFSET_MAX = 365 * 24 * 60;
 
   /* 2026-11-01：右栏图片（用户点右栏插画替换本地图片）。
@@ -267,32 +269,53 @@
   }
 
   /**
-   * D34：提醒归一。合法形状 → `{offsetMinutes}`（整数、0…上限）；其余 → null。
-   * 只保留一个字段：多余键在同步载荷里没有意义，也避免旧版本写入的脏键继续传播。
+   * D34：提醒归一。两种合法形状：
+   *   · `{offsetMinutes}`（整数、0…上限）——相对开始时间的提前量；
+   *   · `{time}` 或 `{date, time}`（不设时间的事项）——绝对通知时刻。
+   * 其余 → null。只保留用得到的键：多余键在同步载荷里没有意义，也避免脏键继续传播。
    */
   function normalizeReminder(value) {
     if (!isPlainObject(value)) return null;
-    var n = Number(value.offsetMinutes);
-    if (!isFinite(n) || n < 0) return null;
-    n = Math.floor(n);
-    if (n > REMINDER_OFFSET_MAX) n = REMINDER_OFFSET_MAX;
-    return { offsetMinutes: n };
+    if (value.offsetMinutes !== undefined && value.offsetMinutes !== null) {
+      var n = Number(value.offsetMinutes);
+      if (!isFinite(n) || n < 0) return null;
+      n = Math.floor(n);
+      if (n > REMINDER_OFFSET_MAX) n = REMINDER_OFFSET_MAX;
+      return { offsetMinutes: n };
+    }
+    if (!dt.isValidTime(value.time)) return null;
+    var out = { time: value.time };
+    if (value.date !== undefined && value.date !== null) {
+      if (!dt.isValidDate(value.date)) return null;
+      out.date = value.date;
+    }
+    return out;
   }
 
-  /** D34：reminder 校验；缺失合法，存在则必须是合法对象。 */
+  /** D34：reminder 校验；缺失合法，存在则必须是两种合法形状之一。 */
   function validateReminder(reminder, path) {
     path = path || 'reminder';
     var errors = [];
     if (reminder === null || reminder === undefined) return errors;
     if (!isPlainObject(reminder)) return [err(path, '必须是对象或 null')];
-    if (!isFiniteNumber(reminder.offsetMinutes)) {
-      errors.push(err(path + '.offsetMinutes', '提前量必须是数字'));
+    if (reminder.offsetMinutes !== undefined && reminder.offsetMinutes !== null) {
+      if (!isFiniteNumber(reminder.offsetMinutes)) {
+        errors.push(err(path + '.offsetMinutes', '提前量必须是数字'));
+        return errors;
+      }
+      if (reminder.offsetMinutes < 0 || Math.floor(reminder.offsetMinutes) !== reminder.offsetMinutes) {
+        errors.push(err(path + '.offsetMinutes', '提前量必须是非负整数（分钟）'));
+      } else if (reminder.offsetMinutes > REMINDER_OFFSET_MAX) {
+        errors.push(err(path + '.offsetMinutes', '提前量不能超过 365 天'));
+      }
       return errors;
     }
-    if (reminder.offsetMinutes < 0 || Math.floor(reminder.offsetMinutes) !== reminder.offsetMinutes) {
-      errors.push(err(path + '.offsetMinutes', '提前量必须是非负整数（分钟）'));
-    } else if (reminder.offsetMinutes > REMINDER_OFFSET_MAX) {
-      errors.push(err(path + '.offsetMinutes', '提前量不能超过 365 天'));
+    if (!dt.isValidTime(reminder.time)) {
+      errors.push(err(path + '.time', '通知时刻必须是 HH:mm'));
+      return errors;
+    }
+    if (reminder.date !== undefined && reminder.date !== null && !dt.isValidDate(reminder.date)) {
+      errors.push(err(path + '.date', '通知日期必须是 YYYY-MM-DD'));
     }
     return errors;
   }
@@ -484,7 +507,11 @@
     validateTime(item.time, path + '.time').forEach(function (e) { errors.push(e); });
     if (item.reminder !== undefined && item.reminder !== null) {
       validateReminder(item.reminder, path + '.reminder').forEach(function (e) { errors.push(e); });
-      if (!item.time) errors.push(err(path + '.reminder', '未设置时间段的事项不能开启通知'));
+      /* 不设时间的事项没有「开始时刻」可比，只能用绝对通知日期 / 时刻；提前量在这里无意义。 */
+      if (!item.time && isPlainObject(item.reminder)
+        && item.reminder.offsetMinutes !== undefined && item.reminder.offsetMinutes !== null) {
+        errors.push(err(path + '.reminder', '未设置时间段的事项请选择通知日期与时刻'));
+      }
     }
 
     if (item.kind === 'single') {
@@ -717,9 +744,11 @@
       if (!rem) {
         delete out.reminder;
         if (ctx.warnings) ctx.warnings.push(err('$.items', '提醒设置不合法，已关闭：' + (out.title || out.id)));
-      } else if (!out.time) {
-        delete out.reminder; // 没有时段就没有提醒时刻
+      } else if (!out.time && rem.offsetMinutes !== undefined) {
+        delete out.reminder; // 没有开始时刻，提前量无法换算
       } else {
+        /* 重复事项的通知日期由每次发生决定；这里只保留时刻，避免同一份数据里出现两套日期口径。 */
+        if (!out.time && out.kind === 'series' && rem.date) delete rem.date;
         out.reminder = rem;
       }
     }
@@ -1061,6 +1090,10 @@
     }
     if (cd.reminder !== undefined && cd.reminder !== null) {
       validateReminder(cd.reminder, path + '.reminder').forEach(function (e) { errors.push(e); });
+      if (isPlainObject(cd.reminder)
+        && (cd.reminder.offsetMinutes === undefined || cd.reminder.offsetMinutes === null)) {
+        errors.push(err(path + '.reminder', '倒计时提醒需要提前量'));
+      }
     }
     if (cd.note !== undefined && cd.note !== null) {
       if (typeof cd.note !== 'string') errors.push(err(path + '.note', '备注必须是字符串'));
@@ -1154,7 +1187,7 @@
       entry.note = typeof cd.note === 'string' ? cd.note.slice(0, NOTE_MAX) : '';
       if (entry.reminder !== undefined && entry.reminder !== null) {
         var rem = normalizeReminder(entry.reminder);
-        if (rem) entry.reminder = rem;
+        if (rem && rem.offsetMinutes !== undefined) entry.reminder = rem;
         else {
           delete entry.reminder;
           if (warnings) warnings.push(err(path + '.reminder', '提醒设置不合法，已关闭'));

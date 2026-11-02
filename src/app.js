@@ -1462,6 +1462,8 @@
         getSession: function () { return session; },
         getConfig: function () { return cloudConfig; },
         getFetch: function () { return cloudFetchImpl; },
+        getDoc: function () { return store.getState(); },
+        subscribe: function (fn) { return store.subscribe(fn); },
         onPushStateChange: function (active) {
           if (localReminders) localReminders.setPushActive(!!active);
         },

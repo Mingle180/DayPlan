@@ -464,23 +464,38 @@
   }
 
   /**
-   * 提醒控件：提醒开关 + 提前 天/时/分 + 一行时刻预览。
+   * 提醒控件：提醒开关 + 时间基准对应的两种输入。
+   *   · 事项有时间 / 倒计时 → 「提前 天/时/分」；
+   *   · 不设时间的单次事项 → 「通知日期 + 通知时刻」；
+   *   · 不设时间的重复事项 → 「通知时刻」，每次发生当天提醒。
    * @param {object} opts
-   *   - reminder: 现有 `{offsetMinutes}`（可空）
-   *   - getBase(): {date:string, time:string} | null —— 返回 null 表示「还没有时间」
-   *   - unavailableText: 没有时间时开关旁的说明
+   *   - reminder: 既有提醒（`{offsetMinutes}` 或 `{date,time}` / `{time}`）
+   *   - getBase(): {date:string, time:string} | null —— 有开始时间时用于预览
+   *   - getContext(): {hasTime:boolean, date:string, series:boolean, allowAt:boolean}
+   *   - unavailableText: 当前入口不支持绝对时刻时的说明
    * @returns {{element:HTMLElement, get:Function, validate:Function,
-   *            setAvailable:Function, setEnabled:Function, refresh:Function}}
+   *            setEnabled:Function, refresh:Function}}
    */
   function reminderControl(opts) {
     opts = opts || {};
     var initial = S.normalizeReminder(opts.reminder);
-    var offset0 = initial ? initial.offsetMinutes : REMINDER_DEFAULT_OFFSET;
-    var parts = splitOffsetLocal(offset0);
+    var initialOffset = initial && initial.offsetMinutes !== undefined ? initial.offsetMinutes : null;
+    var parts = splitOffsetLocal(initialOffset === null ? REMINDER_DEFAULT_OFFSET : initialOffset);
+
+    function readContext() {
+      var c = typeof opts.getContext === 'function' ? opts.getContext() : null;
+      if (!c) return { hasTime: true, date: '', series: false, allowAt: false };
+      return {
+        hasTime: c.hasTime !== false,
+        date: c.date || '',
+        series: c.series === true,
+        allowAt: c.allowAt === true
+      };
+    }
 
     var toggle = el('input', { type: 'checkbox', 'aria-label': '通知' });
     toggle.checked = !!initial;
-    var note = el('span', { class: 'dp-reminder-note', text: opts.unavailableText || '先设置时间才能开启通知' });
+    var note = el('span', { class: 'dp-reminder-note', text: opts.unavailableText || '先设置起止时间才能开启通知' });
 
     var dayInput = numberInput({ min: '0', max: '365', value: String(parts.days), 'aria-label': '提前天数', style: 'width:56px' });
     var hourInput = numberInput({ min: '0', max: '23', value: String(parts.hours), 'aria-label': '提前小时', style: 'width:56px' });
@@ -490,6 +505,27 @@
       el('span', { text: '提前' }), dayInput, el('span', { text: '天' }),
       hourInput, el('span', { text: '时' }), minInput, el('span', { text: '分' })
     ]);
+
+    var ctx0 = readContext();
+    var atDateCtl = dateFieldControl({
+      value: (initial && initial.date) || ctx0.date || D.todayISO(),
+      'aria-label': '通知日期（YYYY-MM-DD）'
+    });
+    var atDateInput = atDateCtl.input;
+    var atTimeCtl = timeFieldControl(
+      { value: (initial && initial.time) || '09:00', 'aria-label': '通知时刻' },
+      { step: 1 }
+    );
+    var atTimeInput = atTimeCtl.input;
+    var atDateField = el('div', { class: 'field' }, [
+      el('label', { class: 'field-label', text: '通知日期' }), atDateCtl.wrap
+    ]);
+    var atTimeField = el('div', { class: 'field' }, [
+      el('label', { class: 'field-label', text: '通知时刻' }), atTimeCtl.wrap
+    ]);
+    var atRow = el('div', { class: 'field-row dp-reminder-at' }, [atDateField, atTimeField]);
+    atRow.style.display = 'none';
+
     var preview = el('div', { class: 'dp-reminder-preview' });
     var err = el('div', { class: 'field-error' });
     var element = el('div', { class: 'fieldset dp-reminder' }, [
@@ -497,10 +533,17 @@
         el('label', { class: 'switch' }, [toggle, el('span', { text: '通知' })]),
         note
       ]),
-      offsetRow, preview, err
+      offsetRow, atRow, preview, err
     ]);
 
-    var available = true;
+    var dateTouched = false;
+
+    function setAtDate(iso) {
+      atDateInput.value = iso;
+      atDateCtl.button.textContent = dateLabelCN(iso);
+      atDateCtl.button.setAttribute('data-date-value', iso);
+      atDateCtl.button.setAttribute('aria-label', '选择日期（当前 ' + iso + '）');
+    }
 
     function readOffset() {
       var R = reminderApi();
@@ -513,55 +556,84 @@
     }
 
     function refresh() {
-      var on = toggle.checked && available;
-      offsetRow.hidden = !on;
-      var base = available && on && typeof opts.getBase === 'function' ? opts.getBase() : null;
-      var off = readOffset();
+      var ctx = readContext();
+      var absolute = !ctx.hasTime;
+      var canUse = absolute ? ctx.allowAt : true;
+      var on = toggle.checked && canUse;
+      offsetRow.hidden = !(on && !absolute);
+      atRow.style.display = (on && absolute) ? '' : 'none';
+      atDateField.hidden = ctx.series;
+      toggle.disabled = !canUse;
+      note.hidden = canUse;
+      if (on && absolute && !ctx.series && !dateTouched
+        && D.isValidDate(ctx.date) && atDateInput.value !== ctx.date) {
+        setAtDate(ctx.date);
+      }
+
       var text = '';
-      if (!available) text = '';
+      if (!canUse) text = '';
       else if (!on) text = '关闭时不打扰';
-      else if (off === null) text = '提前量需填 0 或正整数';
-      else if (!base || !D.isValidDate(base.date) || !D.isValidTime(base.time)) text = '设置时间后显示提醒时刻';
-      else {
-        var R = reminderApi();
-        var iso = R ? R.fireAtISO(base.date, base.time, off) : null;
-        var ms = iso ? Date.parse(iso) : NaN;
-        if (!iso || !isFinite(ms)) text = '设置时间后显示提醒时刻';
-        else if (ms <= Date.now()) text = '该时间已过，保存后会立即提醒一次';
-        else text = '将于 ' + (R.formatFireAt(iso)) + ' 提醒';
+      else if (!absolute) {
+        var base = typeof opts.getBase === 'function' ? opts.getBase() : null;
+        var off = readOffset();
+        if (off === null) text = '提前量需填 0 或正整数';
+        else if (!base || !D.isValidDate(base.date) || !D.isValidTime(base.time)) text = '设置时间后显示提醒时刻';
+        else {
+          var R = reminderApi();
+          var iso = R ? R.fireAtISO(base.date, base.time, off) : null;
+          var ms = iso ? Date.parse(iso) : NaN;
+          if (!iso || !isFinite(ms)) text = '设置时间后显示提醒时刻';
+          else if (ms <= Date.now()) text = '该时间已过，保存后会立即提醒一次';
+          else text = '将于 ' + (R.formatFireAt(iso)) + ' 提醒';
+        }
+      } else {
+        var t = atTimeInput.value;
+        if (!D.isValidTime(t)) text = '请选择通知时刻';
+        else if (ctx.series) text = '每次发生当天 ' + t + ' 提醒';
+        else {
+          var d = atDateInput.value;
+          if (!D.isValidDate(d)) text = '请选择通知日期';
+          else {
+            var RR = reminderApi();
+            var atIso = RR ? RR.fireAtISO(d, t, 0) : null;
+            var atMs = atIso ? Date.parse(atIso) : NaN;
+            if (!atIso || !isFinite(atMs)) text = '请选择通知日期与时刻';
+            else if (atMs <= Date.now()) text = '该时间已过，保存后会立即提醒一次';
+            else text = '将于 ' + RR.formatFireAt(atIso) + ' 提醒';
+          }
+        }
       }
       if (preview.textContent !== text) preview.textContent = text;
       element.classList.toggle('is-off', !on);
     }
 
-    function setAvailable(on) {
-      available = !!on;
-      toggle.disabled = !available;
-      if (!available) {
-        toggle.checked = false;
-        err.textContent = '';
-      }
-      note.hidden = available;
-      refresh();
-    }
-
     function setEnabled(on) {
-      if (!available) return;
       toggle.checked = !!on;
       refresh();
     }
 
     function get() {
-      if (!available || !toggle.checked) return null;
-      var off = readOffset();
-      if (off === null) return { offsetMinutes: REMINDER_DEFAULT_OFFSET, invalid: true };
-      return { offsetMinutes: off };
+      if (!toggle.checked) return null;
+      var ctx = readContext();
+      if (ctx.hasTime) {
+        var off = readOffset();
+        if (off === null) return { offsetMinutes: REMINDER_DEFAULT_OFFSET, invalid: true };
+        return { offsetMinutes: off };
+      }
+      if (!ctx.allowAt) return null;
+      if (ctx.series) return { time: atTimeInput.value };
+      return { date: atDateInput.value, time: atTimeInput.value };
     }
 
     function validate() {
-      if (!available || !toggle.checked) { err.textContent = ''; return ''; }
-      if (readOffset() === null) {
-        var msg = '提前量需填 0 或正整数';
+      if (!toggle.checked) { err.textContent = ''; return ''; }
+      var ctx = readContext();
+      var msg = '';
+      if (!ctx.hasTime && !ctx.allowAt) msg = opts.unavailableText || '当前入口不支持按日期时刻提醒';
+      else if (!ctx.hasTime && !D.isValidTime(atTimeInput.value)) msg = '请选择通知时刻';
+      else if (!ctx.hasTime && !ctx.series && !D.isValidDate(atDateInput.value)) msg = '请选择通知日期';
+      else if (ctx.hasTime && readOffset() === null) msg = '提前量需填 0 或正整数';
+      if (msg) {
         flashFieldError(err, 'reminder', msg);
         return msg;
       }
@@ -574,18 +646,17 @@
       n.addEventListener('input', refresh);
       n.addEventListener('change', refresh);
     });
+    atDateInput.addEventListener('input', function () { dateTouched = true; refresh(); });
+    atDateInput.addEventListener('change', function () { dateTouched = true; refresh(); });
+    atTimeInput.addEventListener('input', refresh);
+    atTimeInput.addEventListener('change', refresh);
 
-    note.hidden = true; // setAvailable 决定是否显示
+    note.hidden = true;
     refresh();
-    if (typeof opts.getBase === 'function') {
-      /* 外部日期 / 时间变化时由使用方调用 refresh（本控件不重复绑定） */
-    }
-    setAvailable(true);
     return {
       element: element,
       get: get,
       validate: validate,
-      setAvailable: setAvailable,
       setEnabled: setEnabled,
       refresh: refresh
     };
@@ -692,13 +763,21 @@
       timeRow, timeErr
     ]);
 
-    /* D34：提醒只依赖开始时间；没有时间段时开关禁用 */
+    /* D34：有时间用提前量；不设时间用通知日期 / 时刻（重复事项取每个发生日） */
     var reminderCtl = reminderControl({
       reminder: initial.reminder,
       getBase: function () {
         return timeToggle.checked
           ? { date: normalizeDateText(dateInput.value), time: startInput.value }
           : null;
+      },
+      getContext: function () {
+        return {
+          hasTime: timeToggle.checked,
+          date: normalizeDateText(dateInput.value),
+          series: repeatTypeSelect ? repeatTypeSelect.value !== 'none' : false,
+          allowAt: true
+        };
       }
     });
 
@@ -706,7 +785,7 @@
       var on = timeToggle.checked;
       timeRow.style.display = on ? '' : 'none';
       if (!on) timeErr.textContent = '';
-      reminderCtl.setAvailable(on);
+      reminderCtl.refresh();
       // 未定时段的重复事项也可以没有时间，因此不强制
     }
     timeToggle.checked = !!initial.time;
@@ -827,6 +906,8 @@
       repeatLegend.textContent = '';
       repeatLegend.hidden = true;
       dateField.querySelector('.field-label').textContent = t === 'none' ? '日期' : '开始日期';
+      /* 重复 / 单次切换会改变不设时间事项的提醒口径（日期 + 时刻 ↔ 每次发生当天时刻）。 */
+      if (reminderCtl) reminderCtl.refresh();
       if (t === 'none') return;
       if (t === 'daily') {
         intervalSuffix.textContent = '天';
@@ -883,7 +964,7 @@
       var prevCat = urgentNow
         ? (preUrgentCategoryId || firstNonUrgentId(catOptions) || initial.categoryId)
         : null;
-      var rem = timeToggle.checked ? reminderCtl.get() : null;
+      var rem = reminderCtl.get();
       var payload = {
         title: titleInput.value.trim(),
         categoryId: urgentNow ? URGENT_ID : catSelect.value,
@@ -896,7 +977,7 @@
         // 迭代 4：meta.previousCategoryId 仅在紧急时写入；其余 meta 字段原样保留
         meta: metaFor(item, urgentNow, prevCat),
         repeat: repeatOut,
-        reminder: rem ? { offsetMinutes: rem.offsetMinutes } : null,
+        reminder: rem,
         kind: t === 'none' ? 'single' : 'series'
       };
       return payload;
@@ -1059,7 +1140,7 @@
         date: dateCtl.input.value,
         time: timeCtl.input.value,
         note: noteInput.value,
-        reminder: rem ? { offsetMinutes: rem.offsetMinutes } : null
+        reminder: rem
       };
     }
 
