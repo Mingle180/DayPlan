@@ -1149,6 +1149,18 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
   height: 11px;    /* ≤ 一行（11px 字、行高 14.85px）→ 只让首行让位 */
   margin-left: 2px;
 }
+/* 2026-11-02（用户反馈）：短时段块明明放得下 4 个字的标题，却因胶囊让位被压成一字一行。
+   这类块的标题独占整行、胶囊仍在右上角（视觉不变）：标题从胶囊下方开始，
+   不再扣水平让位。度量侧同步（core/layout.js::needsChipAbove / blockHeightNeed）。 */
+.tl-block.is-chip-above:not(.is-omitted):not(.is-expanded):not(.is-peek) .tl-titlerow {
+  display: block;
+  padding-right: 0;
+  padding-top: 14px;
+}
+.tl-block.is-chip-above:not(.is-omitted):not(.is-expanded):not(.is-peek) .tl-titlerow::before {
+  content: none;
+  display: none;
+}
 /* 美化迭代 5（用户裁定）：紧急 = 标题文字变红，不再有左侧色条与淡红底 */
 .tl-block.is-urgent .tl-title { color: var(--danger); }
 /* 折叠态备注（迭代 8 / F-52）：块高由内容度量撑开（core/layout.js::blockHeightNeed），
@@ -1455,6 +1467,9 @@ html.has-modal body {
   line-height: 18px;
 }
 .field input[type="text"],
+.field input[type="email"],
+.field input[type="password"],
+.field input[type="number"],
 .field input[type="date"],
 .field input[type="time"],
 .field select,
@@ -1468,8 +1483,22 @@ html.has-modal body {
   color: var(--text);
   transition: background var(--ease), box-shadow var(--ease);
 }
+/* 2026-11-02（用户反馈）：密码 / 邮箱 / 数字框此前漏在样式表外，保留 UA 的「方形小白框」，
+   手机上 13px 聚焦还会放大页面。这里与普通输入对齐；提前量控件不在 .field 内，单独补一条。 */
+.dp-reminder-offset input[type="number"] {
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font: inherit;
+  color: var(--text);
+  transition: background var(--ease), box-shadow var(--ease);
+}
 .field textarea { resize: vertical; min-height: 62px; }
-.field input:focus, .field select:focus, .field textarea:focus {
+.field input:focus,
+.field select:focus,
+.field textarea:focus,
+.dp-reminder-offset input[type="number"]:focus {
   outline: none;
   border-color: var(--primary);
   background: var(--surface);
@@ -1994,10 +2023,15 @@ html.has-modal body {
   .field-row { flex-wrap: wrap; gap: 0; }
   .field-row > .field { flex: 1 1 100%; }
   .field input[type="text"],
+  .field input[type="email"],
+  .field input[type="password"],
+  .field input[type="number"],
   .field input[type="date"],
   .field input[type="time"],
   .field select,
   .field textarea { font-size: 16px; min-height: 44px; }
+  /* 16px 以下 iOS 聚焦会放大页面；提前量数字框同样补到 16px / 44px 热区 */
+  .dp-reminder-offset input[type="number"] { font-size: 16px; min-height: 44px; }
   .field textarea { min-height: 96px; }
   .dp-date-btn, .dp-time-btn, .dp-select-btn { font-size: 16px; min-height: 44px; }
   .notes-input { font-size: 16px; }
@@ -2189,6 +2223,17 @@ html.is-touch-dragging * {
 @media (pointer: coarse) {
   .tl-resize { width: 14px; }
   .tl-block.is-resizing .tl-resize::after { opacity: .85; }
+}
+/* 2026-11-02（用户口径）：手机上先点一下左右边「上膛」，再按住拖动才改时间。
+   上膛时该侧竖条染成主色并加长，另一侧只留一点淡影，明确告诉用户拖哪一边。 */
+.tl-block.is-resize-armed .tl-resize::after { opacity: .22; transition: none; }
+.tl-block.is-resize-armed-start .tl-resize-start::after,
+.tl-block.is-resize-armed-end .tl-resize-end::after {
+  opacity: 1;
+  width: 3px;
+  height: 26px;
+  background: var(--primary);
+  transition: none;
 }
 
 /* 触屏加长版拉边判定区（2026-11-01 用户反馈「判定区纵向更长一点」）：

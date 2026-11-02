@@ -278,6 +278,11 @@
     var lastGeom = null;          /* 最近一次 renderGrid 的折叠轴（拉边换算用） */
     var axisResizeExpanded = false; /* 拉边进入折叠区：临时关掉空闲折叠 */
     var resizeState = null;
+    /* 2026-11-02（用户口径）：手机端拉上下边同样要先点一下边、再拖动 */
+    var armedResize = null;
+    var armedResizeTimer = 0;
+    var armCandidate = null;
+    var ARMED_RESIZE_MS = 4000;
     var weekPill = null;
     var dragSuppressUntil = 0;
     var weekScrollRaf = 0;
@@ -782,6 +787,12 @@
       return false;
     }
 
+    function needsResizeArm(e) {
+      var type = e && e.pointerType;
+      if (type === 'touch' || type === 'pen') return true;
+      return coarsePointer();
+    }
+
     function weekDragStep() {
       var s = Number(Layout && Layout.SNAP_STEP_DEFAULT);
       return (isFinite(s) && s > 0) ? Math.floor(s) : 5;
@@ -964,10 +975,10 @@
       var top = el('span', { class: 'wk-resize wk-resize-start', 'aria-hidden': 'true' });
       var bottom = el('span', { class: 'wk-resize wk-resize-end', 'aria-hidden': 'true' });
       top.addEventListener('pointerdown', function (e) {
-        onWeekResizeStart(e, occ, 'start', top, card, geom, col);
+        requestWeekResizeStart(e, occ, 'start', top, card, geom, col);
       });
       bottom.addEventListener('pointerdown', function (e) {
-        onWeekResizeStart(e, occ, 'end', bottom, card, geom, col);
+        requestWeekResizeStart(e, occ, 'end', bottom, card, geom, col);
       });
       top.addEventListener('dragstart', function (e) { if (e.preventDefault) e.preventDefault(); });
       bottom.addEventListener('dragstart', function (e) { if (e.preventDefault) e.preventDefault(); });
@@ -975,9 +986,73 @@
       card.appendChild(bottom);
     }
 
+    function clearArmedWeekResize() {
+      if (armedResizeTimer) { clearTimeout(armedResizeTimer); armedResizeTimer = 0; }
+      if (armedResize && armedResize.card && armedResize.card.classList) {
+        armedResize.card.classList.remove('is-resize-armed', 'is-resize-armed-start', 'is-resize-armed-end');
+      }
+      armedResize = null;
+    }
+
+    function armWeekResize(card, edge) {
+      clearArmedWeekResize();
+      if (!card || !card.classList) return;
+      armedResize = { card: card, edge: edge };
+      card.classList.add('is-resize-armed', 'is-resize-armed-' + edge);
+      armedResizeTimer = setTimeout(clearArmedWeekResize, ARMED_RESIZE_MS);
+    }
+
+    function requestWeekResizeStart(e, occ, edge, handle, card, geom, col) {
+      if (e.button !== undefined && e.button !== 0) return;
+      if (!needsResizeArm(e)) {
+        onWeekResizeStart(e, occ, edge, handle, card, geom, col);
+        return;
+      }
+      if (armedResize && armedResize.card === card && armedResize.edge === edge) {
+        clearArmedWeekResize();
+        onWeekResizeStart(e, occ, edge, handle, card, geom, col);
+        return;
+      }
+      if (armCandidate) return;
+      var cand = { pointerId: e.pointerId, x: e.clientX, y: e.clientY };
+      armCandidate = cand;
+      function finish(arm) {
+        if (armCandidate !== cand) return;
+        armCandidate = null;
+        docRemove();
+        if (arm) {
+          armWeekResize(card, edge);
+          suppressWeekClick();
+        }
+      }
+      function docRemove() {
+        var doc = root.document;
+        if (!doc) return;
+        doc.removeEventListener('pointermove', onMove, true);
+        doc.removeEventListener('pointerup', onUp, true);
+        doc.removeEventListener('pointercancel', onCancel, true);
+      }
+      function onMove(ev) {
+        if (cand.pointerId !== undefined && ev.pointerId !== undefined && ev.pointerId !== cand.pointerId) return;
+        if (Math.abs(ev.clientX - cand.x) > 6 || Math.abs(ev.clientY - cand.y) > 6) finish(false);
+      }
+      function onUp(ev) {
+        if (cand.pointerId !== undefined && ev.pointerId !== undefined && ev.pointerId !== cand.pointerId) return;
+        finish(Math.abs(ev.clientX - cand.x) <= 6 && Math.abs(ev.clientY - cand.y) <= 6);
+      }
+      function onCancel() { finish(false); }
+      var doc = root.document;
+      if (doc) {
+        doc.addEventListener('pointermove', onMove, true);
+        doc.addEventListener('pointerup', onUp, true);
+        doc.addEventListener('pointercancel', onCancel, true);
+      }
+    }
+
     function onWeekResizeStart(e, occ, edge, handle, card, geom, col) {
       if (e.button !== undefined && e.button !== 0) return;
       if (!occ.time || !card || !col || resizeState) return;
+      clearArmedWeekResize();
       var startMin = D.minutesOf(occ.time.start);
       var endMin = D.minutesOf(occ.time.end);
       if (startMin === null || endMin === null) return;

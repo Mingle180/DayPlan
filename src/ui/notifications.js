@@ -110,14 +110,12 @@
     var wrap = el('div', {});
     var toggle = el('input', { type: 'checkbox', 'aria-label': '云端推送' });
     var status = el('div', { class: 'hint' });
-    var permBtn = el('button', { class: 'btn', type: 'button', text: '允许浏览器通知' });
     var busyText = el('div', { class: 'hint' });
 
     wrap.appendChild(el('div', { class: 'field' }, [
       el('label', { class: 'switch' }, [toggle, el('span', { text: '云端推送' })])
     ]));
     wrap.appendChild(status);
-    wrap.appendChild(el('div', { class: 'field' }, [permBtn]));
     wrap.appendChild(busyText);
 
     var busy = false;
@@ -149,16 +147,12 @@
         toggle.checked = false;
         toggle.disabled = true;
         setStatus('推送模块未加载，应用打开期间仍会提醒。');
-        permBtn.hidden = true;
         return;
       }
       var env = P.environment();
       var perm = P.permission();
       var uid = typeof opts.getUid === 'function' ? opts.getUid() : '';
       var can = ready();
-
-      permBtn.hidden = !env.supported || perm !== 'default';
-      permBtn.disabled = busy;
 
       if (!env.supported) {
         toggle.checked = false;
@@ -274,12 +268,6 @@
         }
         setBusy(false);
       });
-    });
-
-    permBtn.addEventListener('click', function () {
-      if (!P) return;
-      permBtn.disabled = true;
-      P.requestPermission().then(function () { render(); }, function () { render(); });
     });
 
     render();

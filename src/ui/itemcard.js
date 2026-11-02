@@ -627,6 +627,18 @@
       block.classList.add('is-omitted');
       block.setAttribute('data-omit', '1');
     }
+    /* 2026-11-02（用户反馈）：标题独占整行放得下、与胶囊并排放不下 →
+       胶囊留在右上角，标题从它下方独占一行（视觉不变，不再一字一行）。 */
+    if (width !== null && !tooNarrow && !block.classList.contains('is-omitted')) {
+      var L = root && root.DayPlan && root.DayPlan.layout;
+      if (L && typeof L.needsChipAbove === 'function' && typeof L.blockMetricOpts === 'function') {
+        try {
+          if (L.needsChipAbove(occ, width, L.blockMetricOpts(width))) {
+            block.classList.add('is-chip-above');
+          }
+        } catch (e) { /* 度量失败保持原布局 */ }
+      }
+    }
 
     /* 美化迭代 10 / 2026-10-20：
        标题行 = [省略号（仅省略态可见）] + 标题（flex:1，不省略、可换行）+ 类别胶囊；

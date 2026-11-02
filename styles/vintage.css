@@ -1471,10 +1471,14 @@ html[data-theme='dark'] .modal-backdrop { background: rgba(0, 0, 0, .55); }
 .modal-foot .btn { border-radius: var(--radius-sm); }
 
 .field input[type="text"],
+.field input[type="email"],
+.field input[type="password"],
+.field input[type="number"],
 .field input[type="date"],
 .field input[type="time"],
 .field select,
 .field textarea,
+.dp-reminder-offset input[type="number"],
 .dp-date-btn,
 .dp-time-btn,
 .dp-select-btn {
@@ -1484,7 +1488,8 @@ html[data-theme='dark'] .modal-backdrop { background: rgba(0, 0, 0, .55); }
 }
 .field input:focus,
 .field select:focus,
-.field textarea:focus {
+.field textarea:focus,
+.dp-reminder-offset input[type="number"]:focus {
   border-color: var(--primary);
   background: var(--surface);
   box-shadow: 0 0 0 4px var(--primary-weak);

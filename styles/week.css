@@ -163,6 +163,16 @@
   .wk-resize { height: 12px; }
   .wk-item.is-resizing .wk-resize::after { opacity: .85; }
 }
+/* 2026-11-02（用户口径）：手机上先点一下上下边「上膛」，再按住拖动才改时间。 */
+.wk-item.is-resize-armed .wk-resize::after { opacity: .22; transition: none; }
+.wk-item.is-resize-armed-start .wk-resize-start::after,
+.wk-item.is-resize-armed-end .wk-resize-end::after {
+  opacity: 1;
+  width: 26px;
+  height: 3px;
+  background: var(--primary);
+  transition: none;
+}
 .wk-item.is-wk-short .wk-resize { height: 50%; }
 .wk-item.is-resizing {
   z-index: 9;

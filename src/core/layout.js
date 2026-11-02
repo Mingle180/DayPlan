@@ -897,6 +897,28 @@
   }
 
   /**
+   * 2026-11-02（用户反馈）：标题单独放得下、和右上角胶囊并排放不下时，
+   * 让标题独占整行、胶囊留在块顶（视觉不变），而不是把标题压成一字一行。
+   * 判定与 styles/app.css 的 `.is-chip-above` 同源。
+   * @param {object} occ
+   * @param {number} width 块宽（像素）
+   * @param {{unitPx?:number, padX?:number, chipWidth?:number}} [options]
+   * @returns {boolean}
+   */
+  function needsChipAbove(occ, width, options) {
+    var opts = options || {};
+    if (typeof width !== 'number' || !isFinite(width) || width <= 0) { return false; }
+    var unitPx = numberOption(opts.unitPx, TEXT_UNIT_PX);
+    var padX = numberOption(opts.padX, BLOCK_PAD_X);
+    var chipWidth = Math.max(0, numberOption(opts.chipWidth, titleChipReserve(width)));
+    if (!(chipWidth > 0)) { return false; }
+    var avail = width - padX;
+    var title = textMetrics(occ ? occ.title : '', { unitPx: unitPx });
+    if (title.empty) { return false; }
+    return title.width <= avail && title.width > avail - chipWidth;
+  }
+
+  /**
    * 在给定可用宽度下，一个事项块完整显示所需的最小高度。
    * 组成：时间行 + 标题行（美化迭代 10：标题不省略，放不下按宽度换行，可占多行）
    *       + 备注行数（按宽度自然换行）。标题行右侧留给类别胶囊（opts.chipWidth）。
@@ -916,6 +938,7 @@
     var padX = numberOption(opts.padX, BLOCK_PAD_X);
     var noteGap = numberOption(opts.noteGap, BLOCK_NOTE_GAP);
     var chipWidth = Math.max(0, numberOption(opts.chipWidth, 0));
+    var chipAbove = opts.chipAbove === true;
 
     /* 2026-10-20：时间行在窄块里会换行，行数由 timeLineCount 给定（默认 1 行） */
     var lines = Math.max(1, numberOption(opts.timeLines, 1));
@@ -923,7 +946,7 @@
     var titleAvail = width - padX;
     var perFull = titleAvail > 0 ? Math.max(1, Math.floor(titleAvail / unitPx)) : 1;
     var perTitle = perFull;
-    if (chipWidth > 0) {
+    if (!chipAbove && chipWidth > 0) {
       var afterChip = titleAvail - chipWidth;
       perTitle = afterChip > 0 ? Math.max(1, Math.floor(afterChip / unitPx)) : 1;
     }
@@ -936,6 +959,8 @@
     } else {
       lines += Math.max(1, Math.ceil(title.units / perTitle));   /* 标题可多行（不省略） */
     }
+    /* 胶囊独立占块顶一行：标题从它下方开始、独占整行（见 needsChipAbove / CSS）。 */
+    if (chipAbove && title.units > 0) { lines += 1; }
     /* 四十五轮：重复类型与起止日期固定占一行（折叠态单行省略，不换行）。 */
     if (occ && occ.showRepeat && occ.repeatLabel) { lines += 1; }
     var note = textMetrics(occ ? occ.note : '', opts);
@@ -998,6 +1023,7 @@
       /* 2026-10-20 三轮：窄块「只让首行」的口径必须一起透传，否则这里按「每行让位」
          算出 7 行（144px），而块高只有 3 行（97px）→ 时间被误判为放不下而藏起来。 */
       chipFirstLineOnly: opts.chipFirstLineOnly,
+      chipAbove: opts.chipAbove,
       timeLines: timeLineCount(occ, width, opts)
     });
     /* 允许 1px 的取整误差（块高在渲染侧用了 Math.ceil） */
@@ -1109,6 +1135,8 @@
     blockMetricOpts: blockMetricOpts,
     /* 2026-10-20：标题行给胶囊让位的真实宽度（与 CSS 的 padding-right 同源） */
     titleChipReserve: titleChipReserve,
+    /* 2026-11-02：标题独占整行、胶囊留在块顶（见 needsChipAbove） */
+    needsChipAbove: needsChipAbove,
     NARROW_BLOCK_PX: NARROW_BLOCK_PX,
     TITLE_RESERVE: TITLE_RESERVE,
     TITLE_RESERVE_NARROW: TITLE_RESERVE_NARROW,

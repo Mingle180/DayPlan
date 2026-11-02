@@ -155,6 +155,12 @@
     var dragPointer = null;       // {x, y, mode:'drag'|'resize'}，自动滚动用
     var autoScrollRaf = 0;
     var resizeState = null;
+    /* 2026-11-02（用户口径）：手机端拉边改为「先点一下边、再拖动」——
+       点中边缘只上膛，第二下按住才改时间，避免划时间轴时误把事项拉长/缩短。 */
+    var armedResize = null;
+    var armedResizeTimer = 0;
+    var armCandidate = null;
+    var ARMED_RESIZE_MS = 4000;
     /* 2026-11-01：两端手柄各占 10px；过窄的块（省略态 / 微块）不放，免得整块都成拉边区、点不开 */
     var RESIZE_HANDLE_MIN_W = 40;
     var touchDrag = null;
@@ -370,7 +376,7 @@
             return itemBlockWidth(geometry, occ, minBlockW);
           },
           optionsOf: function (occ, w) {
-            var opts = measureOptsOf(w);
+            var opts = measureOptsFor(occ, w);
             if (typeof Layout.timeLineCount === 'function') opts.timeLines = Layout.timeLineCount(occ, w, opts);
             return opts;
           }
@@ -692,7 +698,7 @@
         if (omitLevel) return Math.min(laneBlockH, Math.max(BLOCK_HEIGHT_MIN, LANE_HEIGHT_MIN - BLOCK_GAP));
       } catch (e) { return laneBlockH; }
       if (typeof Layout.blockHeightNeed !== 'function') return laneBlockH;
-      var measureOpts = measureOptsOf(w);
+      var measureOpts = measureOptsFor(item.occ, w);
       /* 2026-10-20：时间行在窄块里会换行 —— 需求高必须按真实行数算，与 dayBlockShowsTime 同源 */
       if (typeof Layout.timeLineCount === 'function') {
         measureOpts.timeLines = Layout.timeLineCount(item.occ, w, measureOpts);
@@ -728,6 +734,23 @@
       return narrow
         ? { unitPx: 11, padX: 8, chipWidth: 22 }
         : { unitPx: 13, padX: 14, chipWidth: 36 };
+    }
+
+    /**
+     * 2026-11-02（用户反馈）：短时段块的标题明明独占一行放得下，
+     * 与右上角胶囊并排却被压成一字一行。这类块改用「胶囊在块顶、标题整行」的口径：
+     * 度量侧不再扣胶囊宽度，并多算一行给块顶留白（与 CSS .is-chip-above 同源）。
+     */
+    function measureOptsFor(occ, w) {
+      var opts = measureOptsOf(w);
+      if (Layout && typeof Layout.needsChipAbove === 'function') {
+        try {
+          if (Layout.needsChipAbove(occ, w, opts)) {
+            return Object.assign({}, opts, { chipAbove: true, chipWidth: 0 });
+          }
+        } catch (e) { /* 度量失败沿用原口径 */ }
+      }
+      return opts;
     }
 
     /** 设置内联 px 值：真实浏览器与 DOM 垫片（含 getPropertyValue 回退）都能读到。 */
@@ -972,7 +995,7 @@
             var showsTime = true;
             try {
               showsTime = Layout.dayBlockShowsTime(occ, Number(item.width) || 0, blockHeight,
-                measureOptsOf(item.width));
+                measureOptsFor(occ, item.width));
             } catch (e) { showsTime = true; }
             if (!showsTime) node.classList.add('is-time-hidden');
           }
@@ -1684,12 +1707,75 @@
       return false;
     }
 
+    /* 触屏 / 触控笔要先上膛；笔虽精确，但平板上的笔也会把边缘当滚动起点 */
+    function needsResizeArm(e) {
+      var type = e && e.pointerType;
+      if (type === 'touch' || type === 'pen') return true;
+      return coarsePointer();
+    }
+
+    function clearArmedResize() {
+      if (armedResizeTimer) { clearTimeout(armedResizeTimer); armedResizeTimer = 0; }
+      if (armedResize && armedResize.block && armedResize.block.classList) {
+        armedResize.block.classList.remove('is-resize-armed', 'is-resize-armed-start', 'is-resize-armed-end');
+      }
+      armedResize = null;
+    }
+
+    function armResize(block, edge) {
+      clearArmedResize();
+      if (!block || !block.classList) return;
+      armedResize = { block: block, edge: edge };
+      block.classList.add('is-resize-armed', 'is-resize-armed-' + edge);
+      armedResizeTimer = setTimeout(clearArmedResize, ARMED_RESIZE_MS);
+    }
+
+    function requestResizeStart(e, occ, edge, handle, block) {
+      if (e.button !== undefined && e.button !== 0) return;
+      if (!needsResizeArm(e)) {
+        onResizeStart(e, occ, edge, handle, block);
+        return;
+      }
+      if (armedResize && armedResize.block === block && armedResize.edge === edge) {
+        clearArmedResize();
+        onResizeStart(e, occ, edge, handle, block);
+        return;
+      }
+      if (armCandidate) return;
+      /* 第一下必须是「点」而不是「划」：移动超过 6px 就当成滚动时间轴，不记上膛。 */
+      var cand = { pointerId: e.pointerId, x: e.clientX, y: e.clientY };
+      armCandidate = cand;
+      function finish(arm) {
+        if (armCandidate !== cand) return;
+        armCandidate = null;
+        document.removeEventListener('pointermove', onMove, true);
+        document.removeEventListener('pointerup', onUp, true);
+        document.removeEventListener('pointercancel', onCancel, true);
+        if (arm) {
+          armResize(block, edge);
+          suppressNextClick();
+        }
+      }
+      function onMove(ev) {
+        if (cand.pointerId !== undefined && ev.pointerId !== undefined && ev.pointerId !== cand.pointerId) return;
+        if (Math.abs(ev.clientX - cand.x) > 6 || Math.abs(ev.clientY - cand.y) > 6) finish(false);
+      }
+      function onUp(ev) {
+        if (cand.pointerId !== undefined && ev.pointerId !== undefined && ev.pointerId !== cand.pointerId) return;
+        finish(Math.abs(ev.clientX - cand.x) <= 6 && Math.abs(ev.clientY - cand.y) <= 6);
+      }
+      function onCancel() { finish(false); }
+      document.addEventListener('pointermove', onMove, true);
+      document.addEventListener('pointerup', onUp, true);
+      document.addEventListener('pointercancel', onCancel, true);
+    }
+
     function attachResizeHandles(node, occ, geom) {
       if (!node || !occ || !occ.time) return;
       var left = el('span', { class: 'tl-resize tl-resize-start', 'aria-hidden': 'true' });
       var right = el('span', { class: 'tl-resize tl-resize-end', 'aria-hidden': 'true' });
-      left.addEventListener('pointerdown', function (e) { onResizeStart(e, occ, 'start', left, node); });
-      right.addEventListener('pointerdown', function (e) { onResizeStart(e, occ, 'end', right, node); });
+      left.addEventListener('pointerdown', function (e) { requestResizeStart(e, occ, 'start', left, node); });
+      right.addEventListener('pointerdown', function (e) { requestResizeStart(e, occ, 'end', right, node); });
       /* 手柄在 draggable 块内：再挡一层 dragstart，确保拉边不会被当成拖去完成台 */
       left.addEventListener('dragstart', function (e) { if (e.preventDefault) e.preventDefault(); });
       right.addEventListener('dragstart', function (e) { if (e.preventDefault) e.preventDefault(); });
@@ -1710,8 +1796,8 @@
       padR.style.top = padTop;
       padL.style.height = padH + 'px';
       padR.style.height = padH + 'px';
-      padL.addEventListener('pointerdown', function (e) { onResizeStart(e, occ, 'start', padL, node); });
-      padR.addEventListener('pointerdown', function (e) { onResizeStart(e, occ, 'end', padR, node); });
+      padL.addEventListener('pointerdown', function (e) { requestResizeStart(e, occ, 'start', padL, node); });
+      padR.addEventListener('pointerdown', function (e) { requestResizeStart(e, occ, 'end', padR, node); });
       geom.parent.appendChild(padL);
       geom.parent.appendChild(padR);
     }
@@ -1719,6 +1805,7 @@
     function onResizeStart(e, occ, edge, handle, block) {
       if (e.button !== undefined && e.button !== 0) return;
       if (!occ.time || !block || resizeState) return;
+      clearArmedResize();
       var startMin = D.minutesOf(occ.time.start);
       var endMin = D.minutesOf(occ.time.end);
       if (startMin === null || endMin === null) return;
@@ -1866,6 +1953,9 @@
       if (!node || !occ) return;
       node.addEventListener('touchstart', function (e) {
         if (resizeState || touchDrag) return;
+        /* 边缘手柄上的点按是「上膛」，不能同时启动长按拖去完成台 */
+        var t0 = e.target;
+        if (t0 && typeof t0.closest === 'function' && t0.closest('.tl-resize')) return;
         if (!e.touches || e.touches.length !== 1) return;
         var t = e.touches[0];
         var td = {

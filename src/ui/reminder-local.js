@@ -9,6 +9,7 @@
  *   · 一次只武装一个 setTimeout，文档每次变化或页面回到前台才重算；
  *   · 只补发最近 10 分钟内错过的提醒，且同一行只提醒一次（按 key 记忆）；
  *   · 存在有效推送订阅时由调用方 setPushActive(true) 关闭本地补发，避免双响；
+ *   · 首次 setPushActive() 之前不补发：启动时订阅查询是异步的，先补发会与刚点开的推送重复；
  *   · 不做后台 / 关页面的任何承诺——那正是推送要解决的问题。
  */
 (function (root) {
@@ -33,6 +34,7 @@
     var fired = {};
     var unsubscribe = null;
     var pushActive = false;
+    var pushDecided = false;
     var started = false;
     var onOpen = typeof opts.onOpen === 'function' ? opts.onOpen : function () {};
 
@@ -92,7 +94,9 @@
     }
 
     function refresh() {
-      if (!started || pushActive || !store || !R) return;
+      /* 推送状态未判定前什么都不做：boot 时 start() 会先于异步订阅查询执行，
+         此时若补发最近 10 分钟，会和「点开推送通知」本身叠成两次提醒。 */
+      if (!started || !pushDecided || pushActive || !store || !R) return;
       var rows;
       try {
         rows = R.materialize(store.getState(), { nowMs: Date.now() });
@@ -124,6 +128,7 @@
     }
 
     function setPushActive(on) {
+      pushDecided = true;
       pushActive = !!on;
       if (pushActive) clearTimer();
       else refresh();
@@ -134,7 +139,8 @@
       stop: stop,
       refresh: refresh,
       setPushActive: setPushActive,
-      isPushActive: function () { return pushActive; }
+      isPushActive: function () { return pushActive; },
+      isPushDecided: function () { return pushDecided; }
     };
   }
 
