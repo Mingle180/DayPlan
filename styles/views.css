@@ -186,6 +186,16 @@
   border-radius: var(--radius-sm);
   overflow: visible;
 }
+/* 2026-11-02：跨类别共享道后，每个类别容器只覆盖本类别实际用到的道，允许互相重叠。
+   容器自身不吃指针事件，块与拉边判定区各自声明 auto —— 否则后渲染的空容器会挡住
+   落在它范围内的别组事项（点击 / 拖拽 / 拉边全部失效）。 */
+.tl-typegroup {
+  pointer-events: none;
+}
+.tl-typegroup > .tl-block,
+.tl-typegroup > .tl-resize-pad {
+  pointer-events: auto;
+}
 /* 四十四轮（用户裁定）：类别行组之间不画分隔虚线，靠留白与竖排类别名区分。 */
 
 /* 首末空闲窄带（BR-20 / F-16.4 / S29）：竖直窄带，位于时间轴两端

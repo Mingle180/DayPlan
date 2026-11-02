@@ -1082,6 +1082,8 @@
     minutesOfTime: minutesOfTime,
     layoutDayGroups: layoutDayGroups,
     assignGroupedLanes: assignGroupedLanes,
+    /* 2026-11-02：日视图跨类别共享道 —— 调用方把所有类别的事项拼成一列后直接分道 */
+    greedyAssignLanes: greedyAssignLanes,
     computeAxisGeometry: computeAxisGeometry,
     axisTicks: axisTicks,
     axisIdleBands: axisIdleBands,

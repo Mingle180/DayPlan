@@ -48,7 +48,6 @@
   /* 美化迭代 12：块高在「内容需求高度」之上再加一点余量——
      字体实际渲染略高于纯函数估算时，最高那排（通常是最下一排）的文字底部会被裁掉几像素 */
   var BLOCK_HEIGHT_SLACK = 4;
-  var GROUP_GAP_FALLBACK = 10;
   var LABEL_CHAR_PX = 14;
   var LABEL_PAD_PX = 8;
   var OVERFLOW_OFFSET_STEP = 8;
@@ -503,30 +502,73 @@
      * 参考图里时间轴是视觉中心，所以把富余高度先摊给组间距（≤22px），
      * 剩下的均摊进每条道。只在桌面分栏生效；窄屏保持内容高度。
      */
-    function stretchTimeline(geometry, laid, groups, catNames, rate, lanesMax) {
+    function stretchTimeline(geometry, laid, groups, rate) {
       if (!els.scroll || !laid || !laid.groups || !laid.groups.length) return null;
       if (typeof root !== 'undefined' && root.innerWidth && root.innerWidth < 1024) return null;
       var rulerH = (els.ruler && els.ruler.offsetHeight) || 30;
       var avail = els.scroll.clientHeight - rulerH;
       var extra = avail - laid.height;
       if (!(extra > 10)) return null;
-      var gapCount = Math.max(0, laid.groups.length - 1);
-      var gapExtra = gapCount ? Math.min(22, Math.floor(extra / gapCount)) : 0;
-      var rest = extra - gapExtra * gapCount;
-      var lanes = 0;
-      laid.groups.forEach(function (g) { lanes += Math.max(1, Number(g.laneCount) || 1); });
-      var laneExtra = lanes ? rest / lanes : 0;
-      var next = layoutGroups(geometry, groups, catNames, rate, lanesMax,
-        { laneExtra: laneExtra, gapExtra: gapExtra });
+      var lanes = Math.max(1, Number(laid.laneCount) || 1);
+      var laneExtra = extra / lanes;
+      var next = layoutGroups(geometry, groups, rate, { laneExtra: laneExtra });
       return (next && next.height > laid.height + 1) ? next : null;
     }
 
-    /** 组纵向排布（DM-21.6 / BR-26）：组间不相交；组内**逐道定高**（DM-21.7）。
-     *  2026-10-30：新增 stretch（{laneExtra, gapExtra}）—— 卡片有富余高度时把差值
-     *  均摊到道高与组间距，让时间轴成为页面主体，而不是缩成一条矮带。
-     *  2026-10-31：道数 = 并发峰值（maxLanes 只作下限），道高逐道按本道内容定，
-     *  块顶 = 道顶累加值（D... 见 DM-19.3 / DM-21.7 / DM-21.8）。 */
-    function layoutGroups(geometry, groups, catNames, rate, lanesMax, stretch) {
+    /**
+     * 2026-11-02（用户口径）：**跨类别共享道**。
+     * 有类别不同但时间不冲突的事项时，不再各占一行组 —— 所有类别的事项拼成一列，
+     * 按时间做全局贪心分道：时间不冲突的（含不同类别）复用同一条道，
+     * 只有真正重叠的事项才向下加道。类别不再决定纵向位置，改由块内胶囊标识。
+     * 决策表与周视图 / core/layout.js::greedyAssignLanes 完全一致（start ↑ → end ↓ →
+     * order ↑ → key ↑ → 输入序），类别序只通过输入序影响「完全同时段」时的先后。
+     *
+     * 每个类别仍保留一个 `.tl-typegroup` 容器（块内标签 / 拉边判定区挂在它上面），
+     * 但容器的 [top, top+height) 现在只覆盖该类别实际用到的道，**允许与其他容器重叠**；
+     * 容器的 pointer-events 已交给块自身（见 styles/views.css），不会挡住别组的事项。
+     *
+     * 道高逐道按**本道**内容定（跨类别取最高），富余高度由 stretch 均摊到各道。
+     */
+    function assignSharedLanes(blocks) {
+      if (Layout && typeof Layout.greedyAssignLanes === 'function') {
+        return Layout.greedyAssignLanes(blocks, Math.max(1, blocks.length));
+      }
+      /* 兜底：与 core/layout.js::greedyAssignLanes 同一张决策表（本视图不设上限） */
+      var positions = blocks.map(function (b, i) { return { block: b, index: i }; });
+      positions.sort(function (a, b) {
+        var ba = a.block;
+        var bb = b.block;
+        if (ba.start !== bb.start) return ba.start - bb.start;
+        if (ba.end !== bb.end) return bb.end - ba.end;
+        var oa = Number(ba.occ && ba.occ.order) || 0;
+        var ob = Number(bb.occ && bb.occ.order) || 0;
+        if (oa !== ob) return oa - ob;
+        var ka = (ba.occ && ba.occ.key) || '';
+        var kb = (bb.occ && bb.occ.key) || '';
+        if (ka !== kb) return ka < kb ? -1 : 1;
+        return a.index - b.index;
+      });
+      var lastEnds = [];
+      var lanes = [];
+      for (var p = 0; p < positions.length; p += 1) {
+        var entry = positions[p];
+        var lane = -1;
+        for (var L = 0; L < lastEnds.length; L += 1) {
+          if (lastEnds[L] <= entry.block.start) { lane = L; break; }
+        }
+        if (lane === -1) {
+          lane = lastEnds.length;
+          lastEnds.push(entry.block.end);
+        } else {
+          lastEnds[lane] = entry.block.end;
+        }
+        lanes[entry.index] = lane;
+      }
+      return { lanes: lanes, count: lastEnds.length };
+    }
+
+    /** 跨类别分道 + 逐道定高 + 回填各类别容器（2026-11-02，取代按类别堆叠的行组排布）。 */
+    function layoutGroups(geometry, groups, rate, stretch) {
       var ordered = groups.slice();
       var pin = urgentCategoryId();          /* v2 由 pinFirst 处理；v1 在此本地前置（幂等） */
       if (pin) {
@@ -537,112 +579,90 @@
       }
 
       var minBlockWidth = Number(Layout.DEFAULT_MIN_BLOCK_WIDTH) || 12;
-      var groupGap = Number(Layout.GROUP_GAP);
-      if (!isFinite(groupGap) || groupGap < 0) groupGap = GROUP_GAP_FALLBACK;
       var extra = stretch || {};
       var laneExtra = Math.max(0, Number(extra.laneExtra) || 0);
-      var gapExtra = Math.max(0, Number(extra.gapExtra) || 0);
-      groupGap += gapExtra;
 
-      /* 2026-10-31（用户反馈）：同类并发事项变多时**不再压进同一道**。
-         旧口径把 settings.maxLanes（默认 3）当硬上限，第 4 条起并入最后一道、
-         每条只横向偏移 8px —— 实测 4 条同时段事项里有 3 条几乎完全叠在一起，
-         既看不清也点不准。现在把这个值降级为「道数下限」（与周视图 DM-22 同口径），
-         实际道数由该组并发峰值决定：每个事项都有自己的道，不会互相遮挡。 */
-      var peak = 0;
-      ordered.forEach(function (g) { peak = Math.max(peak, (g.items || []).length); });
-      var laneCap = Math.max(1, Math.floor(Number(lanesMax) || 1), peak);
+      /* 1) 所有类别的事项拼成一列（输入序 = 类别序，只影响完全同时段时的先后） */
+      var blocks = [];
+      ordered.forEach(function (g, gi) {
+        (g.items || []).forEach(function (occ) {
+          if (!occ || !occ.time) return;
+          var start = D.minutesOf(occ.time.start);
+          var end = D.minutesOf(occ.time.end);
+          if (!isFinite(start) || !isFinite(end) || end <= start) return;
+          blocks.push({ occ: occ, groupIndex: gi, start: start, end: end, index: blocks.length });
+        });
+      });
 
-      var laid = (Layout && typeof Layout.assignGroupedLanes === 'function')
-        ? Layout.assignGroupedLanes(ordered, {
-          pxPerHour: rate,
-          lanesMax: laneCap,
-          laneHeight: LANE_HEIGHT_MIN,
-          /* 迭代 8（F-52）：道高 = max(类别名高度, 该类别内容完整显示所需高度)；
-             换行宽度取该类别里最宽的块（不是整天轴宽，否则 30 分钟的块会按 24 小时宽算，明显偏高） */
-          laneHeightFor: function (categoryId) {
-            var g = null;
-            for (var gi = 0; gi < ordered.length; gi += 1) {
-              if (String(ordered[gi].categoryId) === String(categoryId)) { g = ordered[gi]; break; }
-            }
-            var its = (g && g.items) || [];
-            return groupLaneHeightFor(catNames[categoryId] || '未分类', its,
-              groupWrapWidth(geometry, its, minBlockWidth), geometry) + laneExtra;
-          },
-          minBlockWidth: minBlockWidth,
-          groupGap: groupGap,
-          projectX: function (minute) { return axisX(geometry, minute); }
-        })
-        : { groups: [] };
+      /* 2) 全局贪心分道（不设上限：道数 = 并发峰值） */
+      var assigned = assignSharedLanes(blocks);
+      var laneCount = Math.max(1, Number(assigned.count) || 0);
+      var laneItems = [];
+      for (var L = 0; L < laneCount; L += 1) laneItems.push([]);
+      blocks.forEach(function (b) {
+        var raw = Number(assigned.lanes[b.index]);
+        var lane = isFinite(raw) ? Math.max(0, Math.min(laneCount - 1, raw)) : 0;
+        b.lane = lane;
+        laneItems[lane].push(b.occ);
+      });
 
-      var list = (laid && laid.groups) || [];
-
-      /* 2026-10-31（用户反馈）：**逐道定高**，不再让整组共用一个 laneHeight。
-         旧口径的行组高 = 道数 × 一组统一道高，而道高取「该组最高块」的需求 ——
-         一条带长备注的块（实测 148px）会把同组的 46px 短块也拉开 148px，
-         多条并发时整片空白，看起来像排布错乱。
-         现在每道单独按**本道内**事项的需求定高，逐道向下堆叠：
-         带长内容的道自己高，短内容的道贴着块高走，间距只留 BLOCK_GAP。 */
+      /* 3) 逐道定高：本道内跨类别取最高内容需求 */
+      var laneTops = [];
+      var laneHeights = [];
       var y = 0;
-      list.forEach(function (g) {
-        var catName = catNames[g.categoryId] || '未分类';
-        var items = g.items || [];
-        var laneCount = Math.max(1, Number(g.laneCount) || 1);
-        items.forEach(function (item) {
-          laneCount = Math.max(laneCount, (Number(item.lane) || 0) + 1);
-        });
+      for (var L2 = 0; L2 < laneCount; L2 += 1) {
+        var laneH = groupLaneHeightFor('', laneItems[L2],
+          groupWrapWidth(geometry, laneItems[L2], minBlockWidth), geometry);
+        laneH = Math.max(LANE_HEIGHT_MIN, Number(laneH) || LANE_HEIGHT_MIN) + laneExtra;
+        laneTops[L2] = y;
+        laneHeights[L2] = laneH;
+        y += laneH;
+      }
 
-        if (y > 0) y += groupGap;
-        var groupTop = y;
-        var laneTops = [];
-        var laneHeights = [];
-        for (var L = 0; L < laneCount; L += 1) {
-          var laneItems = [];
-          items.forEach(function (item) {
-            if ((Number(item.lane) || 0) === L) laneItems.push(item);
-          });
-          /* 该道需求仍走 groupLaneHeightFor（内部 = Layout.maxBlockHeightNeed），
-             内容度量与块高同源；注入 F-73 时同样会退化成 48，断言口径不变。 */
-          var laneH = groupLaneHeightFor(catName, laneItems,
-            groupWrapWidth(geometry, laneItems, minBlockWidth), geometry);
-          laneH = Math.max(LANE_HEIGHT_MIN, Number(laneH) || LANE_HEIGHT_MIN) + laneExtra;
-          laneTops[L] = y - groupTop;   /* 组内坐标（渲染层按 group.top 绝对定位） */
-          laneHeights[L] = laneH;
-          y += laneH;
-        }
-
-        items.forEach(function (item) {
-          var start = D.minutesOf(item.occ.time.start);
-          var end = D.minutesOf(item.occ.time.end);
-          /* 横向坐标统一取自 computeAxisGeometry（ADR-20 / BR-35）；v2 的 projectX 结果与此一致 */
-          item.left = axisX(geometry, start);
-          item.width = Math.max(axisX(geometry, end) - item.left, minBlockWidth);
-          /* 纵向 = 道顶（逐道累加），与开始时间无关（US-25.2） */
-          var lane = Math.max(0, Math.min(laneCount - 1, Number(item.lane) || 0));
-          item.lane = lane;
-          item.top = laneTops[lane];
-          /* 该道的块高上限：渲染层按它收紧块高（每道可能不同） */
-          item.laneBlockH = Math.max(BLOCK_HEIGHT_MIN, laneHeights[lane] - BLOCK_GAP);
-        });
-
-        g.top = groupTop;
-        g.laneHeight = laneHeights[0];
-        g.laneCount = laneCount;
-        g.height = y - groupTop;
+      /* 4) 各类别容器：只覆盖本类别实际用到的道（允许互相重叠） */
+      var out = ordered.map(function (g) {
+        return {
+          categoryId: g.categoryId, top: 0, height: 0,
+          laneHeight: LANE_HEIGHT_MIN, laneCount: 0, items: []
+        };
+      });
+      blocks.forEach(function (b) {
+        var lane = b.lane;
+        var item = {
+          occ: b.occ,
+          categoryId: ordered[b.groupIndex].categoryId,
+          lane: lane,
+          top: laneTops[lane],
+          laneBlockH: Math.max(BLOCK_HEIGHT_MIN, laneHeights[lane] - BLOCK_GAP)
+        };
+        var start = D.minutesOf(b.occ.time.start);
+        var end = D.minutesOf(b.occ.time.end);
+        /* 横向坐标统一取自 computeAxisGeometry（ADR-20 / BR-35） */
+        item.left = axisX(geometry, start);
+        item.width = Math.max(axisX(geometry, end) - item.left, minBlockWidth);
+        out[b.groupIndex].items.push(item);
       });
 
-      /* 迭代 5（F-32 / 规范 08）：总高必须两条通路都算对。
-         2026-10-31：逐道定高后本函数的 y 才是权威值 —— layout.js 返回的 height 仍是
-         「统一道高 × 道数」（有长备注块时虚高一整截），不能再取较大者，否则轨道底部
-         会多出一段没有内容的空白。这里以逐道累加高度为准，并用各组 top+height 兜底。 */
-      var height = 0;
-      if (y > height) height = y;
-      list.forEach(function (g) {
-        var bottom = (Number(g.top) || 0) + Math.max(0, Number(g.height) || 0);
-        if (bottom > height) height = bottom;
+      out.forEach(function (g) {
+        var minTop = Infinity;
+        var maxBottom = -Infinity;
+        var lanes = {};
+        g.items.forEach(function (item) {
+          var top = laneTops[item.lane];
+          var bottom = top + laneHeights[item.lane];
+          if (top < minTop) minTop = top;
+          if (bottom > maxBottom) maxBottom = bottom;
+          lanes[item.lane] = true;
+        });
+        g.top = isFinite(minTop) ? minTop : 0;
+        g.height = isFinite(maxBottom) ? Math.max(0, maxBottom - minTop) : 0;
+        g.laneCount = Object.keys(lanes).length;
+        g.laneHeight = g.items.length ? laneHeights[g.items[0].lane] : LANE_HEIGHT_MIN;
+        /* 块 top 回填为**容器内坐标**（渲染层按 group.top 绝对定位） */
+        g.items.forEach(function (item) { item.top -= g.top; });
       });
 
-      return { groups: list, height: height };
+      return { groups: out, height: Math.max(0, y), laneCount: laneCount };
     }
 
     /**
@@ -814,11 +834,7 @@
     function renderTimeline() {
       var doc = currentDoc();
       var cats = categoryMap();
-      var catNames = {};
-      Object.keys(cats).forEach(function (id) { catNames[id] = (cats[id] && cats[id].name) || '未分类'; });
       var rate = pxPerHour();
-      var lanesMax = Number((doc.settings && doc.settings.maxLanes) || 3);
-      if (!isFinite(lanesMax) || lanesMax < 1) lanesMax = 3;
       var compressible = (!doc.settings || doc.settings.idleCompressEnabled !== false) && !idleDragExpanded;
       var labelWidth = catLabelWidth();
 
@@ -849,11 +865,11 @@
       axis = geometry;
 
       var groups = Layout.layoutDayGroups(timed, categoryOrder(), { pinFirst: urgentCategoryId() });
-      var laid = layoutGroups(geometry, groups, catNames, rate, lanesMax);
+      var laid = layoutGroups(geometry, groups, rate);
       /* 装不下就先长高面板（读 clientHeight 会顺带把新高度落到布局里），再分配富余 */
       fitPanelToContent(laid.height);
-      /* 2026-10-30（用户口径）：时间轴是页面主体 —— 桌面端把卡片富余高度摊进道高与组间距 */
-      var stretched = stretchTimeline(geometry, laid, groups, catNames, rate, lanesMax);
+      /* 2026-10-30（用户口径）：时间轴是页面主体 —— 桌面端把卡片富余高度摊进道高 */
+      var stretched = stretchTimeline(geometry, laid, groups, rate);
       if (stretched) laid = stretched;
 
       /* ADR-19：inner 宽 = 类别名列宽 + 轴长（美化迭代 10：labelWidth 恒 0）。

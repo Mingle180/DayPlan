@@ -5,7 +5,8 @@
  * 契约：docs/spec/07-iteration-4-delta.md §3 **DM-22 v2**（取代 04 §2.7 的 v1）
  *       + §3 DM-26 裁定 R-5 / R-6 / R-7
  * 功能：02 F-18.1（7 列并行、纵向时间尺、不做空闲压缩，ADR-12）、
- *       S32 / US-28（每日列内按类别分道）、S33 / US-29（按需加宽当天列）
+ *       S32 / US-28（每日列内跨类别共享道：不冲突即同一条道，2026-11-02）、
+ *       S33 / US-29（按需加宽当天列）
  * 用例：07 §6 LG-33（+ 05 §3.5 LG-22/LG-23 的 layoutWeek 分支按 DM-22 修订）
  *
  * 与 core/layout.js 的关系：本模块**内联**同一张贪心分道决策表
@@ -116,15 +117,18 @@
   }
 
   /**
-   * 类别内贪心分道（决策表与 core/layout.js::greedyAssignLanes 完全一致）：
+   * 全局贪心分道（决策表与 core/layout.js::greedyAssignLanes 完全一致）：
    * start 升序 → end 降序 → occ.order 升序 → occ.key 升序 → 输入序；
    * 放入第一条满足 `lastEnd <= start` 的道（闭区间可复用同一条道）。
-   * 本函数**不设道数上限**（DM-22.2b：类别内先如实分道，全局上限在编号阶段处理）。
+   *
+   * 2026-11-02（用户口径）：道**不再按类别归属** —— 类别不同但时间不冲突的事项
+   * 共享同一条道，只有真正重叠的事项才向下加道；类别序只通过入参次序影响
+   * 「完全同时段」时的先后。本函数不设道数上限（上限在编号阶段处理）。
    *
    * @param {Array} blocks [{occ, start, end}]（不修改入参）
-   * @returns {{lanes: Array<number>, count: number}} lanes 按输入下标
+   * @returns {{lanes: Array<number>, count: number}} lanes 按入参下标
    */
-  function assignLanesWithinCategory(blocks) {
+  function assignLanesShared(blocks) {
     var src = blocks || [];
     var positions = [];
     for (var i = 0; i < src.length; i += 1) {
@@ -201,11 +205,11 @@
    *     `minute × pxPerHour/60`（迭代 4 口径，逐字节等价）。
    *   - axisLength：给了有限数就作为返回的 `height`（与 projectY 同源，保证「轴高 = 内容区高」）；
    *     缺省 = `1440 × pxPerHour/60`（不做空闲压缩的旧口径）。
-   *   - measureWidth(occ, cellItems) → 像素（迭代 8 / F-52）：给了就按**内容**算列宽。
-   *     口径（用户裁定）：
-   *       · 某类别的列宽 = 该类别事项所需宽度的**最大值**，下限 `minItemWidth`
+   *   - measureWidth(occ, laneItems) → 像素（迭代 8 / F-52）：给了就按**内容**算列宽。
+   *     口径（用户裁定；2026-11-02 改为按**道**投票）：
+   *       · 某条道的列宽 = 该道内事项所需宽度的**最大值**，下限 `minItemWidth`
    *         （保证时间不换行），上限 `maxCategoryWidth`（封顶，可调）；
-   *       · 某天的列宽 = 该天**各构成类别列宽之和**；
+   *       · 某天的列宽 = 该天**各道列宽之和**；
    *       · 一周总宽 = 7 天列宽之和（可超过容器 → 由渲染层横向滚动）。
    *     未提供 measureWidth 时退回迭代 4 的等分权重口径（`widthWeight`）。
    *   - tooNarrow(occ, laneWidthPx) → boolean（迭代 8 / F-53）：给了就给每个 item 打
@@ -215,9 +219,9 @@
    *   column = {iso, laneCount, laneHeight, widthWeight, widthPx, overflowCount, items}
    *   item   = {occ, categoryId, lane, left, width, top, height, laneOverflow?, overflowOffsetX?}
    *           left/width 为**列内百分比**；top/height 为像素。
-   *           R-7：left = lane / laneCount × 100（**不含**溢出偏移，偏移由渲染层相加）
-   *           迭代 8：给 measureWidth 时，left/width 按「该类别实际列宽占当天总宽的比例」算，
-   *           故不同类别的列不再等分（用户裁定：按需占用）。
+   *           R-7：不给 measureWidth 时 left = lane / laneCount × 100（**不含**溢出偏移，
+   *           偏移由渲染层相加）；迭代 8：给 measureWidth 时，left/width 按「该道实际
+   *           列宽占当天总宽的比例」算，故各道不再等分（用户裁定：按需占用）。
    */
   function layoutWeek(days, options) {
     var opts = options || {};
@@ -279,7 +283,8 @@
         blocks.push({ occ: occ, categoryId: cid, start: start, end: end, index: blocks.length });
       }
 
-      /* 2) 按 categoryId 分桶（桶内保持输入序；桶序见 DM-22.2a） */
+      /* 2) 桶序（DM-22.2a / BR-29）：pinFirst → categoryOrder → 首次出现。
+         2026-11-02：桶序只决定「完全同时段」时的先后，不再决定道号归属。 */
       var buckets = {};
       var firstSeen = [];
       for (var b = 0; b < blocks.length; b += 1) {
@@ -288,66 +293,61 @@
         buckets[key].push(blocks[b]);
       }
       var order = bucketOrder(buckets, firstSeen, categoryOrder, pinFirst);
-
-      /* 3) 类别内贪心分道 → 全局道号按「类别序 → 该类别第 k 道」编号，超 laneCap 回落溢出。
-         2026-10-30 修复：输出宽度时用的是「类别内道号」，不是全局道号 —— 第二个及以后的
-         类别只要各自有 ≥2 道，用全局道号会被 clamp 到同一道而完全重叠（用户截图）。 */
-      var laneByIndex = [];
-      var catLaneByIndex = [];
-      var overflowByIndex = [];
-      var usedLanes = 0;
-      var overflowSeq = 0;
+      var ordered = [];
       for (var o = 0; o < order.length; o += 1) {
         var bucket = buckets[order[o]];
-        var res = assignLanesWithinCategory(bucket);
-        for (var k = 0; k < res.count; k += 1) {
-          var globalLane = usedLanes + k;
-          var overflowing = globalLane >= laneCap;
-          for (var m = 0; m < bucket.length; m += 1) {
-            if (res.lanes[m] !== k) { continue; }
-            var blockIndex = bucket[m].index;
-            catLaneByIndex[blockIndex] = k;
-            if (overflowing) {
-              overflowSeq += 1;
-              laneByIndex[blockIndex] = laneCap - 1;
-              overflowByIndex[blockIndex] = overflowSeq;
-            } else {
-              laneByIndex[blockIndex] = globalLane;
-            }
-          }
-        }
-        usedLanes += res.count;
+        for (var k = 0; k < bucket.length; k += 1) { ordered.push(bucket[k]); }
       }
 
-      var laneCount = Math.min(usedLanes, laneCap);
+      /* 3) 全局贪心分道（决策表同 core/layout.js::greedyAssignLanes）：
+         时间不冲突的（含不同类别）复用同一条道，只有真正重叠才向下加道；
+         道号 ≥ laneCap 的事项并入最后一道并记溢出序号（按入参次序递增）。 */
+      var assigned = assignLanesShared(ordered);
+      var laneByIndex = [];
+      var overflowByIndex = [];
+      var overflowSeq = 0;
+      for (var a = 0; a < ordered.length; a += 1) {
+        var rawLane = Number(assigned.lanes[a]);
+        if (!isFinite(rawLane) || rawLane < 0) { rawLane = 0; }
+        var inputIndex = ordered[a].index;
+        if (rawLane >= laneCap) {
+          overflowSeq += 1;
+          laneByIndex[inputIndex] = laneCap - 1;
+          overflowByIndex[inputIndex] = overflowSeq;
+        } else {
+          laneByIndex[inputIndex] = rawLane;
+        }
+      }
+
+      var laneCount = Math.min(assigned.count, laneCap);
       var unit = laneCount > 0 ? 100 / laneCount : 0;
 
-      /* 迭代 8（F-52）：按内容算各构成类别的列宽（像素），并记下每个类别的累计起点 */
-      var laneCountByCat = {};
-      if (measureWidth) {
-        for (var q = 0; q < order.length; q += 1) {
-          var qb = buckets[order[q]];
-          var qres = assignLanesWithinCategory(qb);
-          laneCountByCat[order[q]] = Math.max(1, Math.min(qres.count, laneCap));
-        }
+      /* 迭代 8（F-52）：按内容算各道列宽（像素）。一条道里可能混着不同类别的事项，
+         宽度取它们所需宽度的最大值（每项按自己的类别胶囊让位）。 */
+      var laneItems = [];
+      var L;
+      for (L = 0; L < laneCount; L += 1) { laneItems.push([]); }
+      for (var bi = 0; bi < blocks.length; bi += 1) {
+        var lv = laneByIndex[bi];
+        if (lv === undefined) { continue; }
+        laneItems[lv].push(blocks[bi]);
       }
-      var catWidthPx = {};
-      var catLeftPx = {};
-      var cursorPx = 0;
-      for (var s = 0; s < order.length; s += 1) {
-        var sk = order[s];
-        var wpx = 0;
-        if (measureWidth) {
+      var laneWidthPx = [];
+      var laneLeftPx = [];
+      var dayWidthPx = 0;
+      if (measureWidth && laneCount > 0) {
+        var cursorPx = 0;
+        for (L = 0; L < laneCount; L += 1) {
           var voted = 0;
-          try { voted = Number(measureWidth(null, buckets[sk])) || 0; } catch (e) { voted = 0; }
+          try { voted = Number(measureWidth(null, laneItems[L])) || 0; } catch (e) { voted = 0; }
           if (!isFinite(voted) || voted < 0) { voted = 0; }
-          wpx = Math.min(Math.max(voted, minItemWidth), maxCategoryWidth);
+          var wpx = Math.min(Math.max(voted, minItemWidth), maxCategoryWidth);
+          laneWidthPx[L] = wpx;
+          laneLeftPx[L] = cursorPx;
+          cursorPx += wpx;
         }
-        catWidthPx[sk] = wpx;
-        catLeftPx[sk] = cursorPx;
-        cursorPx += wpx;
+        dayWidthPx = cursorPx;   /* 该天总宽 = 各道列宽之和 */
       }
-      var dayWidthPx = cursorPx;   /* 该天总宽 = 各构成类别列宽之和 */
 
       /* 4) 输出（保持输入序） */
       var items = [];
@@ -365,15 +365,12 @@
           height: Math.max(rawHeight - gapY, blockHeightMin)
         };
         if (measureWidth && dayWidthPx > 0) {
-          /* 迭代 8：left/width 是「列内百分比」，但按类别实际列宽换算 →
-             不同类别的列按需占用，不再等分（用户裁定） */
-          var cw = catWidthPx[blocks[n].categoryId] || 0;
-          var lanesInCat = Math.max(1, laneCountByCat[blocks[n].categoryId] || 1);
-          var laneInCat = Math.min(Number(catLaneByIndex[n]) || 0, lanesInCat - 1);
-          item.left = (catLeftPx[blocks[n].categoryId] + laneInCat * cw / lanesInCat) / dayWidthPx * 100;
-          item.width = (cw / lanesInCat) / dayWidthPx * 100;
+          /* 迭代 8：left/width 是「列内百分比」，但按该道实际列宽换算 →
+             各道按需占用，不再等分（用户裁定） */
+          item.left = laneLeftPx[lane] / dayWidthPx * 100;
+          item.width = laneWidthPx[lane] / dayWidthPx * 100;
           /* 2026-10-21：块的**真实像素宽**（渲染层展开时按它挑按钮排布；百分比无法判断） */
-          item.pxWidth = cw / lanesInCat;
+          item.pxWidth = laneWidthPx[lane];
         } else {
           /* R-7：纯净道内百分比；溢出偏移由渲染层用 overflowOffsetX 相加 */
           item.left = lane * unit;
@@ -384,11 +381,10 @@
           item.overflowOffsetX = overflowByIndex[n] * OVERFLOW_OFFSET_PERCENT;
         }
         /* 迭代 8（F-53）：窄/矮到「显示不完整」的块 → 渲染层只留色块（点击展开看全部）。
-           判定必须用**真实像素**（宽 = 类别列宽 ÷ 道数；高 = item.height），
+           判定必须用**真实像素**（宽 = 该道列宽；高 = item.height），
            绝不能用渲染层的 ctx.width（百分比）—— 曾因此把 220px 的大块误判为 2px。 */
         if ((tooNarrowFn || omitFn) && measureWidth && dayWidthPx > 0) {
-          var laneWpx2 = (catWidthPx[blocks[n].categoryId] || 0) /
-            Math.max(1, laneCountByCat[blocks[n].categoryId] || 1);
+          var laneWpx2 = laneWidthPx[lane] || 0;
           if (tooNarrowFn) { item.tooNarrow = !!tooNarrowFn(blocks[n].occ, laneWpx2, item.height); }
           /* 省略态只在「不是微块」时成立（两级：微块什么都不显示） */
           if (omitFn && !item.tooNarrow) {

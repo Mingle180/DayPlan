@@ -49,6 +49,12 @@
   var WEEK_LANE_HARD_CAP = 6;          /* DM-19.4 / DM-22：道数硬上限 */
   var WEEK_GRID_AXIS_WIDTH = 38;       /* .week-grid 第一列（时间轴）像素宽；四十九轮由 52 收到 38（只够 10px 的 HH:mm） */
   var WEEK_MIN_DAY_WIDTH_PX = 84;      /* 迭代 8（F-52）：无内容时单天列宽的兜底（与静态 CSS 的 84px 一致） */
+  /* 2026-11-02：事项块上下拉边。预览几何与 layoutWeek 同一口径（gapY=2 / blockHeightMin=22），
+     拖进折叠区时临时把整条轴展开成 1:1（收尾时再折回去）。 */
+  var WEEK_BLOCK_GAP = 2;
+  var WEEK_BLOCK_MIN_HEIGHT = 22;
+  var WEEK_RESIZE_EDGE = 36;
+  var WEEK_RESIZE_SHORT_H = 28;        /* 块高低于此值 → 两个手柄各占一半，避免重叠 */
   var HOURS_PER_DAY = 24;
   var MINUTES_PER_DAY = 1440;
   var MS_PER_DAY = 86400000;
@@ -269,6 +275,12 @@
     var state = { monday: null, hideDone: false };
     var notesTimer = null;
     var lastRenderStamp = null;   /* 最近一次渲染时的文档指纹（见 setWeekStart 的过期判断） */
+    var lastGeom = null;          /* 最近一次 renderGrid 的折叠轴（拉边换算用） */
+    var axisResizeExpanded = false; /* 拉边进入折叠区：临时关掉空闲折叠 */
+    var resizeState = null;
+    var weekPill = null;
+    var dragSuppressUntil = 0;
+    var weekScrollRaf = 0;
 
     /* ------------------------------------------------------------------ *
      * 1. 静态骨架（只建一次：记录栏不能在重渲染时被重建，否则会丢焦点）
@@ -532,11 +544,12 @@
      * 周视图纵向几何（单一几何源，ADR-20 / BR-36 / F-38）：
      *   - 有时段事项且 computeAxisGeometry 可用 → 折叠轴（height = lead + real + trail）；
      *   - 否则 → 整日 1:1（height = 1440 × pxPerHour/60，无折叠带）。
+     * @param {boolean} [expand] 拉边进入折叠区时为 true：关闭空闲折叠、整条轴 1:1
      */
-    function axisGeometry(doc, days, byDate, pxPerHour) {
+    function axisGeometry(doc, days, byDate, pxPerHour, expand) {
       var settings = settingsOf(doc);
       var full = MINUTES_PER_DAY * (pxPerHour / 60);
-      var compressible = settings.idleCompressEnabled !== false;
+      var compressible = !expand && settings.idleCompressEnabled !== false;
       var compressHeight = clampInt(settings.idleCompressHeight, 16, 48, DEFAULT_COMPRESS_HEIGHT);
       var axis = (Layout && typeof Layout.computeAxisGeometry === 'function')
         ? Layout.computeAxisGeometry(weekTimedOccurrences(byDate, days), {
@@ -650,8 +663,10 @@
      * @param {object} cats 类别表
      * @param {boolean} [tooNarrow] 迭代 8（F-53）：由 week-layout 用**真实像素宽**判定的窄块标记
      * @param {boolean} [omit] 2026-10-20：放不下标题但放得下「…」+首字 → 省略态
+     * @param {object} [geom] 折叠轴（拉边换算与截图/测试定位用）
+     * @param {object} [col] 所在日列（拉边手柄的坐标参照）
      */
-    function weekCard(occ, geo, cats, tooNarrow, omit) {
+    function weekCard(occ, geo, cats, tooNarrow, omit, geom, col) {
       var ItemCard = root.DayPlan ? root.DayPlan.itemcard : null;
       var card = null;
       if (ItemCard && typeof ItemCard.createItemCard === 'function') {
@@ -688,18 +703,23 @@
       if (!card) card = fallbackCard(occ, cats);
       /* 几何全部来自 week-layout 的返回值（ADR-20）：top/height 为像素，left/width 为列内百分比 */
       var place = itemPlacement(geo);
+      card.setAttribute('data-occ-key', occKey(occ));
       card.style.left = place.left + '%';
       card.style.width = place.width + '%';
       card.style.top = place.top + 'px';
       card.style.height = place.height + 'px';
       /* 迭代 10 批次 3（条7）：展开后先保持原块高度，内容放不下时才向下加长 */
       card.style.setProperty('--block-h', place.height + 'px');
+      /* 2026-11-02：矮块的两个拉边手柄各占一半（否则上下手柄会在块中间重叠） */
+      if (place.height < WEEK_RESIZE_SHORT_H && card.classList) card.classList.add('is-wk-short');
       /* 2026-10-30（用户口径）：矮块里右上角类别胶囊和居中的「…」抢同一行，
          半透明胶囊会盖掉省略号右半 —— 看起来「省略号总是偏左」。
          矮块标记放这里（高度只有渲染层知道），CSS 在折叠态收起胶囊。 */
       if (place.height < 34 && card.classList && card.classList.contains('is-omitted')) {
         card.classList.add('is-short');
       }
+      /* 2026-11-02（用户口径）：上下边拖动调整时间（与日视图左右拉边同一套纯函数） */
+      attachWeekResize(card, occ, geom, col);
       /* US-22.2：事项块的点击=折叠/展开，不得冒泡到 .wk-col 触发「进入日视图」 */
       card.addEventListener('click', function (e) {
         if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
@@ -725,7 +745,7 @@
       var items = (col && col.items) || [];
       items.forEach(function (item) {
         if (!item || !item.occ) return;
-        var card = weekCard(item.occ, item, cats, item.tooNarrow, item.omit);
+        var card = weekCard(item.occ, item, cats, item.tooNarrow, item.omit, geom, node);
         node.appendChild(card);
         /* US-24 / DM-25：展开卡 pin 到本列；pin 返回 false（无 rect 能力）→ 保持原位展开。
            2026-10-31：把外层滚动容器交给浮层 —— iOS 会把 fixed 后代连同容器裁掉，
@@ -736,6 +756,7 @@
       });
       /* S26 / US-22.2：单击列空白（不含事项块）→ 日视图 */
       node.addEventListener('click', function (e) {
+        if (dragSuppressUntil && Date.now() < dragSuppressUntil) return;
         var t = e && e.target;
         if (t && t !== node) {
           if (typeof t.closest === 'function' && (t.closest('.wk-item') || t.closest('.item-detail'))) return;
@@ -744,6 +765,339 @@
         openDay(iso);
       });
       return node;
+    }
+
+    /* ------------------------------------------------------------------ *
+     * 7.5 事项块上下拉边（2026-11-02，用户口径：与日视图同样的拖边改时间）
+     *   纵向映射直接复用折叠轴的反函数 Layout.axisMinuteAt（ADR-20，
+     *   指针落在哪个时刻，块边就跟到哪个时刻）；吸附 / 最短时长与日视图同源。
+     * ------------------------------------------------------------------ */
+
+    function coarsePointer() {
+      try {
+        if (root && typeof root.matchMedia === 'function') {
+          return !!root.matchMedia('(pointer: coarse)').matches;
+        }
+      } catch (e) { /* 老引擎：当作细指针 */ }
+      return false;
+    }
+
+    function weekDragStep() {
+      var s = Number(Layout && Layout.SNAP_STEP_DEFAULT);
+      return (isFinite(s) && s > 0) ? Math.floor(s) : 5;
+    }
+
+    function weekDragMinDuration() {
+      var m = Number(Layout && Layout.MIN_DURATION_DEFAULT);
+      return (isFinite(m) && m > 0) ? Math.floor(m) : 15;
+    }
+
+    function weekColumnNode(iso) {
+      if (!gridEl || typeof gridEl.querySelectorAll !== 'function') return null;
+      var cols = gridEl.querySelectorAll('.wk-col');
+      for (var i = 0; i < cols.length; i += 1) {
+        if (cols[i] && cols[i].getAttribute('data-date') === iso) return cols[i];
+      }
+      return null;
+    }
+
+    function weekCardByKey(col, key) {
+      if (!col || !key || typeof col.querySelectorAll !== 'function') return null;
+      var cards = col.querySelectorAll('.wk-item');
+      for (var i = 0; i < cards.length; i += 1) {
+        if (cards[i] && cards[i].getAttribute('data-occ-key') === key) return cards[i];
+      }
+      return null;
+    }
+
+    function weekMinuteAtClientY(st, clientY) {
+      if (!st || !st.col) return 0;
+      var rect = (typeof st.col.getBoundingClientRect === 'function')
+        ? st.col.getBoundingClientRect() : { top: 0 };
+      var y = clientY - (Number(rect.top) || 0);
+      var pxPerHour = (st.geom && isFinite(st.geom.pxPerHour)) ? st.geom.pxPerHour : DEFAULT_WEEK_PX_PER_HOUR;
+      if (Layout && typeof Layout.axisMinuteAt === 'function') {
+        return Layout.axisMinuteAt(st.geom ? st.geom.raw : null, y, { pxPerHour: pxPerHour });
+      }
+      var rate = pxPerHour / 60;
+      return Math.max(0, Math.min(MINUTES_PER_DAY, y / (rate > 0 ? rate : 1)));
+    }
+
+    /** 指针是否进了首 / 末折叠带；返回该带的边界时刻与边界线的屏幕 Y。 */
+    function weekResizeBoundary(st, clientY) {
+      var raw = st && st.geom ? st.geom.raw : null;
+      if (!raw || !st.col) return null;
+      var rect = (typeof st.col.getBoundingClientRect === 'function')
+        ? st.col.getBoundingClientRect() : { top: 0 };
+      var top = Number(rect.top) || 0;
+      var y = clientY - top;
+      var lead = numOr(raw.leadHeight, 0);
+      var real = numOr(raw.realHeight, 0);
+      var trail = numOr(raw.trailHeight, 0);
+      if (trail > 0 && y > lead + real) {
+        return { minute: numOr(raw.lastEnd, MINUTES_PER_DAY), screenY: top + lead + real };
+      }
+      if (lead > 0 && y < lead) {
+        return { minute: numOr(raw.firstStart, 0), screenY: top + lead };
+      }
+      return null;
+    }
+
+    /** 进入折叠带时临时关掉折叠：整条轴变 1:1，指针下面的精度才够用。 */
+    function expandWeekResizeAxis(st, boundary) {
+      if (!st || axisResizeExpanded || !boundary) return;
+      axisResizeExpanded = true;
+      var key = occKey(st.occ);
+      render();
+      var col = weekColumnNode(st.occ.date);
+      if (col) st.col = col;
+      st.geom = lastGeom;
+      st.card = col ? weekCardByKey(col, key) : null;
+      if (st.col && st.geom) {
+        var screenY = (Number(st.col.getBoundingClientRect().top) || 0) + st.geom.getY(boundary.minute);
+        var delta = screenY - boundary.screenY;
+        if (isFinite(delta) && Math.abs(delta) >= 0.5) {
+          scrollEl.scrollTop = Math.max(0, (Number(scrollEl.scrollTop) || 0) + delta);
+        }
+      }
+      if (st.card) {
+        if (st.card.classList) st.card.classList.add('is-resizing');
+        applyWeekResizeVisual(st.card, st.geom, st);
+      }
+    }
+
+    function applyWeekResizeVisual(card, geom, st) {
+      if (!card || !card.style || !geom) return;
+      var top = geom.getY(st.startMinute);
+      var bottom = geom.getY(st.endMinute);
+      card.style.top = Math.round(top) + 'px';
+      card.style.height = Math.max(WEEK_BLOCK_MIN_HEIGHT,
+        Math.round(bottom - top) - WEEK_BLOCK_GAP) + 'px';
+      var te = (typeof card.querySelector === 'function') ? card.querySelector('.wk-time') : null;
+      if (te) te.textContent = st.current.start + '–' + st.current.end;
+    }
+
+    function ensureWeekPill() {
+      var doc = root.document;
+      if (!doc) return null;
+      if (!weekPill) weekPill = el('div', { class: 'tl-drag-pill', 'aria-hidden': 'true' });
+      if (doc.body && weekPill.parentNode !== doc.body) doc.body.appendChild(weekPill);
+      return weekPill;
+    }
+
+    function showWeekPill(clientX, clientY, text) {
+      var pill = ensureWeekPill();
+      if (!pill) return;
+      if (pill.textContent !== text) pill.textContent = text;
+      pill.hidden = false;
+      var vw = Number(root.innerWidth) || 0;
+      var x = clientX;
+      if (vw > 0) x = Math.max(30, Math.min(vw - 30, clientX));
+      var gap = coarsePointer() ? 46 : 12;
+      pill.style.left = Math.round(x) + 'px';
+      pill.style.top = Math.max(26, Math.round(clientY - gap)) + 'px';
+    }
+
+    function hideWeekPill() {
+      if (weekPill) weekPill.hidden = true;
+    }
+
+    function weekRaf(fn) {
+      return (typeof root.requestAnimationFrame === 'function')
+        ? root.requestAnimationFrame(fn) : setTimeout(fn, 16);
+    }
+
+    function weekRafCancel(id) {
+      if (!id) return;
+      if (typeof root.cancelAnimationFrame === 'function') root.cancelAnimationFrame(id);
+      else clearTimeout(id);
+    }
+
+    function startWeekAutoScroll() {
+      if (weekScrollRaf) return;
+      weekScrollRaf = weekRaf(weekAutoScrollTick);
+    }
+
+    function stopWeekAutoScroll() {
+      if (weekScrollRaf) weekRafCancel(weekScrollRaf);
+      weekScrollRaf = 0;
+    }
+
+    function weekAutoScrollTick() {
+      weekScrollRaf = 0;
+      var st = resizeState;
+      if (!st) return;
+      var r = scrollEl.getBoundingClientRect();
+      var edge = WEEK_RESIZE_EDGE;
+      var speed = 0;
+      if (st.lastY < r.top + edge) {
+        speed = -Math.max(1, Math.ceil((r.top + edge - st.lastY) / edge * 4));
+      } else if (st.lastY > r.bottom - edge) {
+        speed = Math.max(1, Math.ceil((st.lastY - (r.bottom - edge)) / edge * 4));
+      }
+      if (speed && scrollEl.scrollHeight > scrollEl.clientHeight + 1) {
+        var before = scrollEl.scrollTop;
+        scrollEl.scrollTop = before + speed;
+        if (scrollEl.scrollTop !== before) updateWeekResizeAt(st.lastX, st.lastY);
+      }
+      if (resizeState) weekScrollRaf = weekRaf(weekAutoScrollTick);
+    }
+
+    function suppressWeekClick() {
+      var doc = root.document;
+      if (!doc || typeof doc.addEventListener !== 'function') return;
+      dragSuppressUntil = Date.now() + 800;
+      function block(e) {
+        if (e && e.stopPropagation) e.stopPropagation();
+        if (e && e.preventDefault) e.preventDefault();
+        doc.removeEventListener('click', block, true);
+      }
+      doc.addEventListener('click', block, true);
+      setTimeout(function () { doc.removeEventListener('click', block, true); }, 700);
+    }
+
+    function attachWeekResize(card, occ, geom, col) {
+      if (!card || !occ || !occ.time) return;
+      if (isExpanded(occ)) return;   /* 展开卡是固定浮层，不参与拉边 */
+      if (!Layout || typeof Layout.resizeTime !== 'function' ||
+        typeof Layout.axisMinuteAt !== 'function') return;
+      var top = el('span', { class: 'wk-resize wk-resize-start', 'aria-hidden': 'true' });
+      var bottom = el('span', { class: 'wk-resize wk-resize-end', 'aria-hidden': 'true' });
+      top.addEventListener('pointerdown', function (e) {
+        onWeekResizeStart(e, occ, 'start', top, card, geom, col);
+      });
+      bottom.addEventListener('pointerdown', function (e) {
+        onWeekResizeStart(e, occ, 'end', bottom, card, geom, col);
+      });
+      top.addEventListener('dragstart', function (e) { if (e.preventDefault) e.preventDefault(); });
+      bottom.addEventListener('dragstart', function (e) { if (e.preventDefault) e.preventDefault(); });
+      card.appendChild(top);
+      card.appendChild(bottom);
+    }
+
+    function onWeekResizeStart(e, occ, edge, handle, card, geom, col) {
+      if (e.button !== undefined && e.button !== 0) return;
+      if (!occ.time || !card || !col || resizeState) return;
+      var startMin = D.minutesOf(occ.time.start);
+      var endMin = D.minutesOf(occ.time.end);
+      if (startMin === null || endMin === null) return;
+      if (e.preventDefault) e.preventDefault();
+      if (e.stopPropagation) e.stopPropagation();
+      resizeState = {
+        occ: occ, edge: edge, card: card, handle: handle,
+        col: col, geom: geom,
+        pointerId: e.pointerId,
+        orig: { start: occ.time.start, end: occ.time.end },
+        origStart: startMin,
+        origEnd: endMin,
+        current: { start: occ.time.start, end: occ.time.end, startMinute: startMin, endMinute: endMin },
+        startMinute: startMin,
+        endMinute: endMin,
+        lastX: e.clientX,
+        lastY: e.clientY,
+        moved: false
+      };
+      if (card.classList) card.classList.add('is-resizing');
+      if (root.document && root.document.documentElement && root.document.documentElement.classList) {
+        root.document.documentElement.classList.add('is-week-resizing');
+      }
+      suppressWeekClick();
+      showWeekPill(e.clientX, e.clientY, D.formatMinutes(edge === 'start' ? startMin : endMin));
+      startWeekAutoScroll();
+      var doc = root.document;
+      if (doc) {
+        doc.addEventListener('pointermove', onWeekResizeMove, true);
+        doc.addEventListener('pointerup', onWeekResizeEnd, true);
+        doc.addEventListener('pointercancel', onWeekResizeCancel, true);
+      }
+      try { if (handle.setPointerCapture) handle.setPointerCapture(e.pointerId); } catch (err) { /* 忽略 */ }
+    }
+
+    function onWeekResizeMove(e) {
+      if (!resizeState) return;
+      if (resizeState.pointerId !== undefined && e.pointerId !== undefined &&
+        e.pointerId !== resizeState.pointerId) return;
+      if (e.preventDefault) e.preventDefault();
+      updateWeekResizeAt(e.clientX, e.clientY);
+    }
+
+    function updateWeekResizeAt(clientX, clientY) {
+      var st = resizeState;
+      if (!st) return;
+      st.lastX = clientX;
+      st.lastY = clientY;
+      var boundary = weekResizeBoundary(st, clientY);
+      if (boundary) expandWeekResizeAxis(st, boundary);
+      var minute = weekMinuteAtClientY(st, clientY);
+      var step = weekDragStep();
+      var t = Layout.resizeTime(st.orig, st.edge, minute, {
+        step: step, minDuration: weekDragMinDuration()
+      });
+      if (!t) return;
+      showWeekPill(clientX, clientY, D.formatMinutes(Layout.snapMinute(minute, step)));
+      if (t.startMinute === st.startMinute && t.endMinute === st.endMinute) return;
+      st.current = t;
+      st.startMinute = t.startMinute;
+      st.endMinute = t.endMinute;
+      st.moved = (t.startMinute !== st.origStart || t.endMinute !== st.origEnd);
+      applyWeekResizeVisual(st.card, st.geom, st);
+    }
+
+    function stopWeekResize(commit) {
+      var st = resizeState;
+      if (!st) return;
+      resizeState = null;
+      var doc = root.document;
+      if (doc) {
+        doc.removeEventListener('pointermove', onWeekResizeMove, true);
+        doc.removeEventListener('pointerup', onWeekResizeEnd, true);
+        doc.removeEventListener('pointercancel', onWeekResizeCancel, true);
+      }
+      stopWeekAutoScroll();
+      hideWeekPill();
+      var wasExpanded = axisResizeExpanded;
+      axisResizeExpanded = false;
+      if (doc && doc.documentElement && doc.documentElement.classList) {
+        doc.documentElement.classList.remove('is-week-resizing');
+      }
+      if (st.card && st.card.classList) st.card.classList.remove('is-resizing');
+      if (!commit || !st.moved) {
+        if (wasExpanded) render();
+        return;
+      }
+      var item = findItemFor(st.occ);
+      if (!item) {
+        if (wasExpanded) render();
+        return;
+      }
+      var time = { start: st.current.start, end: st.current.end };
+      try {
+        if (item.kind === 'series') {
+          store.addSeriesException(item.id, st.occ.date, { time: time });
+        } else {
+          store.updateItem(item.id, { time: time });
+        }
+      } catch (e) {
+        M.toast('调整时间失败：' + errText(e));
+        if (wasExpanded) render();
+        return;
+      }
+      afterWrite();   /* 重渲染时 axisResizeExpanded 已复位 → 轴折回去 */
+      M.toast('时间已改为 ' + time.start + '–' + time.end);
+    }
+
+    function onWeekResizeEnd(e) {
+      if (!resizeState) return;
+      if (resizeState.pointerId !== undefined && e.pointerId !== undefined &&
+        e.pointerId !== resizeState.pointerId) return;
+      stopWeekResize(true);
+    }
+
+    function onWeekResizeCancel(e) {
+      if (!resizeState) return;
+      if (resizeState.pointerId !== undefined && e && e.pointerId !== undefined &&
+        e.pointerId !== resizeState.pointerId) return;
+      stopWeekResize(false);
     }
 
     /* ---------------- 渲染 ---------------- */
@@ -779,7 +1133,8 @@
       });
 
       /* ---------------- 唯一几何源：折叠轴 + layoutWeek（ADR-20 / BR-36 / F-38） ---------------- */
-      var geom = axisGeometry(doc, days, byDate, pxPerHourSetting);
+      var geom = axisGeometry(doc, days, byDate, pxPerHourSetting, axisResizeExpanded);
+      lastGeom = geom;
       var rawLayout = null;
       if (WeekLayout && typeof WeekLayout.layoutWeek === 'function') {
         try {
@@ -794,28 +1149,30 @@
             /* F-38：块 top/height 与轴共用折叠映射；axisLength 保证「轴高 = 内容区高」 */
             projectY: geom.getY,
             axisLength: geom.height,
-            /* 迭代 8（F-52）：列宽由内容决定 —— 每个类别列宽 = 该类别事项所需宽度的最大值
-               （下限保证时间不换行、上限封顶）；某天列宽 = 其构成类别列宽之和 */
-            measureWidth: function (occ, cellItems) {
-              if (!Layout || typeof Layout.maxBlockWidthNeed !== 'function') {
-                if (root.console) console.warn('[DayPlan] measureWidth 降级：Layout.maxBlockWidthNeed 缺失');
+            /* 迭代 8（F-52）：列宽由内容决定 —— 每条道列宽 = 该道事项所需宽度的最大值
+               （下限保证时间不换行、上限封顶）；某天列宽 = 其各道列宽之和。
+               2026-11-02：一条道可能混着不同类别的事项，故逐项按**自己的**类别胶囊
+               认真宽度，再取最大值（不能沿用「整桶共享一个类别」的旧口径）。 */
+            measureWidth: function (occ, laneItems) {
+              if (!Layout || typeof Layout.blockWidthNeed !== 'function') {
+                if (root.console) console.warn('[DayPlan] measureWidth 降级：Layout.blockWidthNeed 缺失');
                 return 0;
               }
-              try {
-                /* 美化迭代 10：类别胶囊占宽参与列宽度量（周视图胶囊 padding 2×6 + gap 6）。
-                   迭代 10 反馈修复：week-layout 的列宽投票以 measureWidth(null, bucket) 调用
-                   （occ 恒为 null），此前 occ 为空时胶囊宽被跳过 → 列宽从不包含胶囊，
-                   而 weekCard 的显示判定又要求「标题+胶囊」放得下 → 胶囊几乎恒被隐藏。
-                   同一 bucket 内事项共享类别 → 从 occ 或 bucket 首个事项取 categoryId。 */
+              var max = 0;
+              (laneItems || []).forEach(function (it) {
+                var o = (it && it.occ) ? it.occ : it;
+                if (!o) return;
                 var chipW = 0;
-                var chipSrc = occ || (cellItems && cellItems[0]) || null;
-                if (typeof Layout.chipWidthFor === 'function' && chipSrc) {
-                  var cat = (doc.categories || []).filter(function (c) { return c && c.id === chipSrc.categoryId; })[0];
+                if (typeof Layout.chipWidthFor === 'function') {
+                  var cat = (doc.categories || []).filter(function (c) { return c && c.id === o.categoryId; })[0];
                   /* 胶囊显示类别前两个字 → 列宽度量也按两个字占宽 */
                   chipW = Layout.chipWidthFor(chipLabelOf(cat ? cat.name : ''), { padX: 12, gap: 6 });
                 }
-                return Layout.maxBlockWidthNeed(cellItems || [], { chipWidth: chipW });
-              } catch (e) { return 0; }
+                var w = 0;
+                try { w = Layout.blockWidthNeed(o, { chipWidth: chipW }); } catch (e) { w = 0; }
+                if (isFinite(w) && w > max) max = w;
+              });
+              return max;
             },
             minItemWidth: Number(Layout && Layout.WEEK_MIN_ITEM_WIDTH) || 74,
             maxCategoryWidth: Number(Layout && Layout.WEEK_CATEGORY_MAX_WIDTH) || 320,
@@ -876,6 +1233,8 @@
       }
       gridEl.style.setProperty('grid-template-columns', tracks);      gridEl.style.gridTemplateColumns = tracks;   /* 兼容直接读 style.gridTemplateColumns 的断言 */
       gridEl.setAttribute('data-week-column-weights', geo.weights.join(','));
+      /* 拉边进入折叠区时会临时展开整条轴（收尾自动折回），供诊断与冒烟断言 */
+      gridEl.setAttribute('data-week-axis-expanded', axisResizeExpanded ? '1' : '0');
 
       /* 重渲染前先释放所有已 pin 的展开卡（旧节点即将被丢弃） */
       if (pinner) { try { pinner.releaseAll(); } catch (e) { /* 忽略 */ } }

@@ -130,6 +130,52 @@
 @media (hover: hover) {
   .wk-item:hover { box-shadow: var(--shadow); }
 }
+/* 2026-11-02（用户口径）：事项块上下边可拖动改时间，与日视图左右拉边同一套手感。
+   手柄常驻占位，悬停才显示细横线；矮块上下各占一半，避免中间重叠。 */
+.wk-resize {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 10px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: ns-resize;
+  touch-action: none;
+}
+.wk-resize-start { top: 0; }
+.wk-resize-end { bottom: 0; }
+.wk-resize::after {
+  content: "";
+  width: 18px;
+  height: 2px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+@media (hover: hover) {
+  .wk-item:hover .wk-resize::after { opacity: .3; }
+  .wk-item .wk-resize:hover::after { opacity: .72; }
+}
+@media (pointer: coarse) {
+  .wk-resize { height: 12px; }
+  .wk-item.is-resizing .wk-resize::after { opacity: .85; }
+}
+.wk-item.is-wk-short .wk-resize { height: 50%; }
+.wk-item.is-resizing {
+  z-index: 9;
+  transition: none;
+  box-shadow: 0 6px 18px rgba(74, 56, 34, .22);
+}
+.wk-item.is-resizing .wk-resize::after { opacity: .8; transition: none; }
+html.is-week-resizing,
+html.is-week-resizing * {
+  cursor: ns-resize !important;
+  -webkit-user-select: none;
+  user-select: none;
+}
 .wk-item.is-done { opacity: .5; }
 .wk-item.is-done .wk-title { text-decoration: line-through; }
 /* 美化迭代 10 / 2026-10-20（用户裁定）：标题行 = [省略号] + 标题；类别胶囊取**首字**
