@@ -849,7 +849,9 @@
             config: config,
             fetchImpl: fetchImpl,
             kv: cloudStorage()
-          })
+          }),
+          config: config,
+          fetchImpl: fetchImpl
         };
       } catch (e2) {
         warn('danger', '云端模块初始化失败：' + (e2 && e2.message ? e2.message : '未知错误'),
@@ -863,6 +865,8 @@
     var session = cloudModules ? cloudModules.session : null;
     var http = cloudModules ? cloudModules.http : null;
     var cloudAuth = cloudModules ? cloudModules.auth : null;
+    var cloudConfig = cloudModules ? cloudModules.config : null;
+    var cloudFetchImpl = cloudModules ? cloudModules.fetchImpl : null;
     var deviceLabel = CloudRecord && typeof CloudRecord.deviceLabel === 'function'
       ? CloudRecord.deviceLabel(root.navigator ? root.navigator.userAgent : '')
       : '';
@@ -925,6 +929,62 @@
       return cloudClient;
     }
 
+    /* ---------------- 提醒同步（D34） ---------------- */
+
+    var reminderSync = (root.DayPlan.remindersCloud && cloudModules)
+      ? root.DayPlan.remindersCloud.createSync({
+          session: session,
+          config: cloudConfig,
+          fetchImpl: cloudFetchImpl
+        })
+      : null;
+    var reminderSyncTimer = null;
+    var reminderSyncArmed = false;
+    var reminderSectionInst = null;
+    var lastReminderSync = null;
+
+    function syncReminders(opts) {
+      opts = opts || {};
+      var uid = sessionUserId();
+      if (!uid || !reminderSync || !onAccountScope(uid)) {
+        return Promise.resolve({ ok: false, code: 'E_SKIP' });
+      }
+      return reminderSync.sync({
+        uid: uid,
+        doc: store.getState(),
+        nowMs: Date.now(),
+        force: !!opts.force
+      }).then(function (r) {
+        lastReminderSync = r || null;
+        if (reminderSectionInst && typeof reminderSectionInst.render === 'function') {
+          try { reminderSectionInst.render(); } catch (e) { /* 面板已关闭 */ }
+        }
+        return r;
+      }, function (e) {
+        lastReminderSync = { ok: false, code: 'E_NETWORK', message: e && e.message };
+        return lastReminderSync;
+      });
+    }
+
+    function scheduleReminderSync() {
+      if (!reminderSyncArmed) return;
+      if (reminderSyncTimer !== null) clearTimeout(reminderSyncTimer);
+      reminderSyncTimer = setTimeout(function () {
+        reminderSyncTimer = null;
+        syncReminders();
+      }, 1500);
+    }
+
+    /** 推送 / 订阅模块需要的云端上下文（设置面板与启动补注册共用）。 */
+    function pushContextOpts() {
+      return {
+        getUid: function () { return sessionUserId(); },
+        getSession: function () { return session; },
+        getConfig: function () { return cloudConfig; },
+        getFetch: function () { return cloudFetchImpl; }
+      };
+    }
+
     /** 「保存」二字的颜色就是未保存提示：还没传到云端时变主色蓝，传上去回黑。 */
     function refreshSaveState() {
       if (!els.saveBtn) return;
@@ -955,6 +1015,9 @@
       if (r && r.ok) {
         onDataChanged();
         refreshSaveState();
+        if (reminderSync) reminderSync.reset();
+        reminderSyncArmed = onAccountScope(uid);
+        if (reminderSyncArmed) scheduleReminderSync();
         if (cloudSectionInst && typeof cloudSectionInst.render === 'function') {
           try { cloudSectionInst.render(); } catch (e) { /* 面板已关闭 */ }
         }
@@ -980,6 +1043,7 @@
       syncDockFromDoc(doc);
       if (!sameContent(before, store.getState())) onDataChanged();
       refreshSaveState();
+      scheduleReminderSync();
     }
 
     function saveErrorText(r) {
@@ -1040,6 +1104,7 @@
         if (cloudSectionInst && typeof cloudSectionInst.render === 'function') {
           try { cloudSectionInst.render(); } catch (e) { /* 面板已关闭 */ }
         }
+        syncReminders();
         M.toast(truncated ? '已保存到云端（超长内容按上限截断）' : '已保存到云端');
       }, function (err) {
         cloudBusy = false;
@@ -1249,6 +1314,12 @@
         if (res && res.ok && cloudSectionInst && typeof cloudSectionInst.render === 'function') {
           try { cloudSectionInst.render(); } catch (e) { /* 面板已关闭 */ }
         }
+        if (res && res.ok) {
+          if (reminderSync) reminderSync.reset();
+          reminderSyncArmed = true;
+          syncReminders({ force: true });
+          refreshPushActive();
+        }
       });
     }
 
@@ -1257,9 +1328,12 @@
       store.setSessionUid(null);
       cloudClient = null;
       cloudClientUid = null;
+      if (reminderSync) reminderSync.reset();
+      reminderSyncArmed = false;
       if (store.getScopeId() !== 'guest') switchStoreScope('guest');
       syncDockFromDoc(store.getState());
       refreshSaveState();
+      refreshPushActive();
     }
 
     function listVersions() {
@@ -1340,6 +1414,10 @@
         lastOpenPassAt = Date.now();
         enterAccountForSession(uid, true).then(function () {
           if (onAccountScope(uid)) cloudOpenPass();
+          if (reminderSync) reminderSync.reset();
+          reminderSyncArmed = true;
+          scheduleReminderSync();
+          refreshPushActive();
         });
       }, function () {
         store.setSessionUid(null);
@@ -1379,6 +1457,17 @@
         }
       },
       registerCloudSection: function (inst) { cloudSectionInst = inst; },
+      notifications: {
+        getUid: function () { return sessionUserId(); },
+        getSession: function () { return session; },
+        getConfig: function () { return cloudConfig; },
+        getFetch: function () { return cloudFetchImpl; },
+        onPushStateChange: function (active) {
+          if (localReminders) localReminders.setPushActive(!!active);
+        },
+        getSyncState: function () { return lastReminderSync; }
+      },
+      registerNotificationSection: function (inst) { reminderSectionInst = inst; },
       /* 清空只影响当前作用域：云端那份不动，保存按钮的文字会变蓝提醒「还没传」。 */
       onDataCleared: function () { refreshSaveState(); },
       /* 2026-10-22 二十三轮：响铃开关移入设置后，立即同步到已创建的完成台实例。 */
@@ -1766,6 +1855,79 @@
       scheduleReconcile();
     });
 
+    /* ---------------- D34：本地提醒兜底 ----------------
+       未登录 / 未授权 / 无 SW / 单文件 / Electron 都走这里；
+       推送订阅成功后由云端模块调用 setPushActive(true) 关闭本地补发。 */
+
+    var localReminders = null;
+    (function () {
+      var factory = root.DayPlan.reminderLocal;
+      if (!factory || typeof factory.create !== 'function') return;
+      localReminders = factory.create({
+        store: store,
+        onOpen: function (row) {
+          var iso = row && row.occurrenceKey;
+          if (!D.isValidDate(iso) && row && row.fireAt) {
+            var t = Date.parse(row.fireAt);
+            if (isFinite(t)) iso = D.formatDate(new Date(t));
+          }
+          goDay(D.isValidDate(iso) ? iso : D.todayISO());
+        }
+      });
+      localReminders.start();
+    })();
+
+    function refreshPushActive() {
+      var P = root.DayPlan.push;
+      if (!localReminders) return;
+      if (!P || typeof P.getRegistration !== 'function') {
+        localReminders.setPushActive(false);
+        return;
+      }
+      P.getRegistration().then(function (reg) {
+        return reg && reg.pushManager ? reg.pushManager.getSubscription() : null;
+      }).then(function (sub) {
+        /* 只有登录状态下的有效订阅才关闭本地兜底：游客数据不走云端。 */
+        var active = !!sub && P.permission() === 'granted' && !!sessionUserId();
+        localReminders.setPushActive(active);
+        if (!active) return null;
+        var N = root.DayPlan.notifications;
+        if (N && typeof N.syncExistingSubscription === 'function') {
+          return N.syncExistingSubscription(pushContextOpts()).then(function (r) {
+            if (reminderSectionInst && typeof reminderSectionInst.render === 'function') {
+              try { reminderSectionInst.render(); } catch (e) { /* 面板已关闭 */ }
+            }
+            return r;
+          });
+        }
+        return null;
+      }, function () {
+        localReminders.setPushActive(false);
+      });
+    }
+    refreshPushActive();
+
+    if (root.navigator && root.navigator.serviceWorker && root.navigator.serviceWorker.addEventListener) {
+      root.navigator.serviceWorker.addEventListener('message', function (e) {
+        var data = e && e.data ? e.data : null;
+        if (!data) return;
+        if (data.type === 'dayplan:open-date' && D.isValidDate(data.date)) {
+          goDay(data.date);
+          return;
+        }
+        if (data.type === 'dayplan:resubscribe') {
+          var N = root.DayPlan.notifications;
+          if (N && typeof N.resubscribe === 'function') {
+            N.resubscribe(pushContextOpts()).then(refreshPushActive, refreshPushActive);
+          } else {
+            refreshPushActive();
+          }
+        }
+      });
+    }
+
+    store.subscribe(function () { scheduleReminderSync(); });
+
     /* ---------------- 初始化渲染 ---------------- */
 
     setViewMode(state.viewMode, { persist: false });
@@ -1779,6 +1941,10 @@
       modules: root.DayPlan,
       setViewMode: setViewMode,
       setViewDate: setViewDate,
+      reminders: function () { return localReminders; },
+      reminderSync: function () {
+        return { armed: reminderSyncArmed, last: lastReminderSync };
+      },
       goDay: goDay,
       goWeek: goWeek,
       goMonth: goMonth,

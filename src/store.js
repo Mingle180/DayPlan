@@ -539,6 +539,7 @@
         var prevCategoryId = next.categoryId;
         Object.keys(patch).forEach(function (k) {
           if (k === 'id' || k === 'createdAt') return; // 不可改
+          if (k === 'reminder' && patch[k] === null) { delete next.reminder; return; }
           next[k] = patch[k];
         });
         // 迭代 4（BR-38）：只传 categoryId 的视图（表单）也能正确维护 meta.previousCategoryId
@@ -1601,6 +1602,7 @@
           categoryId: e.categoryId,
           targetAt: e.targetAt,
           note: e.note || '',
+          reminder: e.reminder || null,
           createdAt: e.createdAt,
           updatedAt: e.updatedAt
         };
@@ -1621,6 +1623,7 @@
         categoryId: input.categoryId,
         targetAt: input.targetAt,
         note: typeof input.note === 'string' ? input.note.slice(0, schema.NOTE_MAX) : '',
+        reminder: schema.normalizeReminder(input.reminder),
         createdAt: stamp,
         updatedAt: stamp
       };
@@ -1647,6 +1650,7 @@
         if (!target) throw StoreError('E_NOT_FOUND', '倒计时不存在：' + id);
         Object.keys(patch).forEach(function (k) {
           if (k === 'id' || k === 'createdAt' || k === 'updatedAt') return;
+          if (k === 'reminder' && patch[k] === null) { delete target.reminder; return; }
           target[k] = patch[k];
         });
         target.categoryId = normalizeCountdownCategory(draft, target.categoryId);

@@ -290,14 +290,16 @@
                 title: v.title,
                 categoryId: v.categoryId,
                 targetAt: targetAt,
-                note: v.note
+                note: v.note,
+                reminder: v.reminder
               });
             } else {
               store.updateCountdown(cd.id, {
                 title: v.title,
                 categoryId: v.categoryId,
                 targetAt: targetAt,
-                note: v.note
+                note: v.note,
+                reminder: v.reminder
               });
             }
           } catch (e) {

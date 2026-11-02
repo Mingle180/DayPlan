@@ -1761,6 +1761,13 @@ html.has-modal body {
 .inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .hint { color: var(--text-3); font-size: 12px; margin-top: 4px; }
 
+/* D34：通知提醒（天 / 时 / 分） */
+.dp-reminder-offset { margin-top: 8px; font-size: 13px; }
+.dp-reminder-offset input[type=number] { width: 56px; text-align: center; }
+.dp-reminder-preview { color: var(--text-3); font-size: 12px; margin-top: 6px; min-height: 15px; }
+.dp-reminder-note { color: var(--text-3); font-size: 12px; }
+.dp-reminder.is-off .dp-reminder-offset { display: none; }
+
 .weekdays { display: flex; gap: 4px; flex-wrap: wrap; }
 .weekday-chip {
   display: inline-flex;

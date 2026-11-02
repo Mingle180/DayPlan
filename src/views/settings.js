@@ -396,6 +396,7 @@
     var store = opts.store;
     var body = el('div', {});
     var changed = false;
+    var notificationSectionInst = null;
 
     function dataChanged() {
       changed = true;
@@ -669,6 +670,21 @@
       }
     });
 
+    /* ---------- 通知（D34） ---------- */
+    (function () {
+      var section = M.foldSection('通知');
+      var mod = root.DayPlan.notifications;
+      if (!mod || typeof mod.createNotificationSection !== 'function' || !opts.notifications) {
+        section.body.appendChild(el('div', { class: 'field', text: '通知模块未加载，应用打开期间仍会提醒。' }));
+        body.appendChild(section.element);
+        return;
+      }
+      notificationSectionInst = mod.createNotificationSection(opts.notifications);
+      if (opts.registerNotificationSection) opts.registerNotificationSection(notificationSectionInst);
+      section.body.appendChild(notificationSectionInst.element);
+      body.appendChild(section.element);
+    })();
+
     /* 云端分组自带折叠壳（同样走 modal.foldSection），这里只负责挂载。
        18 号契约：设置里只有「云端」（账号 + 版本回溯），不再有实时同步分组。 */
     (function () {
@@ -701,6 +717,10 @@
       showSubmit: false,
       cancelLabel: '关闭',
       onClose: function () {
+        if (notificationSectionInst && typeof notificationSectionInst.destroy === 'function') {
+          notificationSectionInst.destroy();
+        }
+        notificationSectionInst = null;
         if (changed && opts.onDataChanged) opts.onDataChanged();
       }
     });

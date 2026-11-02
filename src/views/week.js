@@ -1627,6 +1627,12 @@
     }
 
     function applyOccurrenceEdit(item, occ, v, scope) {
+      /* D34：提醒挂在整条序列上，两种范围都写回序列。 */
+      var seriesReminder = v.reminder || null;
+      if (JSON.stringify(seriesReminder) !== JSON.stringify(item.reminder || null)) {
+        store.updateItem(item.id, { reminder: seriesReminder });
+        item.reminder = seriesReminder || undefined;
+      }
       if (scope === 'only') {
         var patch = {
           time: v.time, title: v.title, categoryId: v.categoryId, note: v.note, done: v.done
@@ -1652,7 +1658,8 @@
       if (v.kind === 'single' && item.kind === 'single') {
         var patch = {
           title: v.title, categoryId: v.categoryId, date: v.date,
-          time: v.time, note: v.note, done: v.done
+          time: v.time, note: v.note, done: v.done,
+          reminder: v.reminder || null
         };
         store.updateItem(item.id, patch);
         return;
@@ -1669,6 +1676,7 @@
         createdAt: item.createdAt,
         updatedAt: new Date().toISOString()
       };
+      if (v.reminder) next.reminder = v.reminder;
       if (v.kind === 'single') {
         next.date = v.date;
       } else {

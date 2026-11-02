@@ -50,6 +50,11 @@
   var COUNTDOWN_AT_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;
   var COUNTDOWN_MAX = 1000;         /* 条目上限（防御异常数据撑爆栏） */
 
+  /* D34：通知提醒。item / countdown 上的可选字段 `reminder = {offsetMinutes}`；
+     · 只存在即代表开启，删除字段即关闭（不设 enabled，避免「开着但抵消」的歧义）；
+     · 0 = 准时；上限 365 天，防止异常数据把说明与物化窗口撑爆。 */
+  var REMINDER_OFFSET_MAX = 365 * 24 * 60;
+
   /* 2026-11-01：右栏图片（用户点右栏插画替换本地图片）。
      · 按日键 / 按周一键各一张，随文档同步；src 是裁剪后压好的 data URL。
      · ratio = 高度 / 宽度，最小由界面按「当前显示比例」动态夹取，数据层只兜底到
@@ -261,6 +266,37 @@
     return errors;
   }
 
+  /**
+   * D34：提醒归一。合法形状 → `{offsetMinutes}`（整数、0…上限）；其余 → null。
+   * 只保留一个字段：多余键在同步载荷里没有意义，也避免旧版本写入的脏键继续传播。
+   */
+  function normalizeReminder(value) {
+    if (!isPlainObject(value)) return null;
+    var n = Number(value.offsetMinutes);
+    if (!isFinite(n) || n < 0) return null;
+    n = Math.floor(n);
+    if (n > REMINDER_OFFSET_MAX) n = REMINDER_OFFSET_MAX;
+    return { offsetMinutes: n };
+  }
+
+  /** D34：reminder 校验；缺失合法，存在则必须是合法对象。 */
+  function validateReminder(reminder, path) {
+    path = path || 'reminder';
+    var errors = [];
+    if (reminder === null || reminder === undefined) return errors;
+    if (!isPlainObject(reminder)) return [err(path, '必须是对象或 null')];
+    if (!isFiniteNumber(reminder.offsetMinutes)) {
+      errors.push(err(path + '.offsetMinutes', '提前量必须是数字'));
+      return errors;
+    }
+    if (reminder.offsetMinutes < 0 || Math.floor(reminder.offsetMinutes) !== reminder.offsetMinutes) {
+      errors.push(err(path + '.offsetMinutes', '提前量必须是非负整数（分钟）'));
+    } else if (reminder.offsetMinutes > REMINDER_OFFSET_MAX) {
+      errors.push(err(path + '.offsetMinutes', '提前量不能超过 365 天'));
+    }
+    return errors;
+  }
+
   /* ------------------------------------------------------------------ *
    * 类别
    * ------------------------------------------------------------------ */
@@ -446,6 +482,10 @@
       errors.push(err(path + '.order', 'order 必须是数字'));
     }
     validateTime(item.time, path + '.time').forEach(function (e) { errors.push(e); });
+    if (item.reminder !== undefined && item.reminder !== null) {
+      validateReminder(item.reminder, path + '.reminder').forEach(function (e) { errors.push(e); });
+      if (!item.time) errors.push(err(path + '.reminder', '未设置时间段的事项不能开启通知'));
+    }
 
     if (item.kind === 'single') {
       if (!dt.isValidDate(item.date)) errors.push(err(path + '.date', '日期非法，应为 YYYY-MM-DD'));
@@ -672,6 +712,17 @@
       out.categoryId = ctx.fallbackCategoryId || URGENT_CATEGORY_ID;
     }
     out.time = sanitizeTime(out.time);
+    if (out.reminder !== undefined && out.reminder !== null) {
+      var rem = normalizeReminder(out.reminder);
+      if (!rem) {
+        delete out.reminder;
+        if (ctx.warnings) ctx.warnings.push(err('$.items', '提醒设置不合法，已关闭：' + (out.title || out.id)));
+      } else if (!out.time) {
+        delete out.reminder; // 没有时段就没有提醒时刻
+      } else {
+        out.reminder = rem;
+      }
+    }
     if (typeof out.note !== 'string') out.note = out.note === undefined || out.note === null ? '' : String(out.note);
     out.note = out.note.slice(0, NOTE_MAX);
     out.done = toBool(out.done);
@@ -761,7 +812,7 @@
     var rawItems = Array.isArray(doc.items) ? doc.items : [];
     rawItems.forEach(function (it, i) {
       var originalCategoryId = isPlainObject(it) ? it.categoryId : undefined;
-      var s = sanitizeItem(it, { categoryIds: categoryIds, fallbackCategoryId: fallbackCategoryId });
+      var s = sanitizeItem(it, { categoryIds: categoryIds, fallbackCategoryId: fallbackCategoryId, warnings: warnings });
       if (!s) {
         warnings.push(err('$.items[' + i + ']', '无法修复，已丢弃'));
         return;
@@ -1008,6 +1059,9 @@
     if (!isCountdownTargetAt(cd.targetAt)) {
       errors.push(err(path + '.targetAt', '目标时刻必须是 YYYY-MM-DDTHH:mm'));
     }
+    if (cd.reminder !== undefined && cd.reminder !== null) {
+      validateReminder(cd.reminder, path + '.reminder').forEach(function (e) { errors.push(e); });
+    }
     if (cd.note !== undefined && cd.note !== null) {
       if (typeof cd.note !== 'string') errors.push(err(path + '.note', '备注必须是字符串'));
       else if (cd.note.length > NOTE_MAX) errors.push(err(path + '.note', '备注不能超过 ' + NOTE_MAX + ' 字'));
@@ -1098,6 +1152,14 @@
       }
       entry.targetAt = cd.targetAt;
       entry.note = typeof cd.note === 'string' ? cd.note.slice(0, NOTE_MAX) : '';
+      if (entry.reminder !== undefined && entry.reminder !== null) {
+        var rem = normalizeReminder(entry.reminder);
+        if (rem) entry.reminder = rem;
+        else {
+          delete entry.reminder;
+          if (warnings) warnings.push(err(path + '.reminder', '提醒设置不合法，已关闭'));
+        }
+      }
       if (!isNonEmptyString(entry.createdAt)) entry.createdAt = stamp;
       if (!isNonEmptyString(entry.updatedAt)) entry.updatedAt = entry.createdAt;
       seen[entry.id] = true;
@@ -2089,6 +2151,7 @@
     MONTH_PLAN_TEXT_MAX: MONTH_PLAN_TEXT_MAX,
     MONTH_PLAN_MAX: MONTH_PLAN_MAX,
     COUNTDOWN_MAX: COUNTDOWN_MAX,
+    REMINDER_OFFSET_MAX: REMINDER_OFFSET_MAX,
     FINISH_DOCK_MAX: FINISH_DOCK_MAX,
     COVER_SRC_MAX: COVER_SRC_MAX,
     COVER_RATIO_MIN: COVER_RATIO_MIN,
@@ -2115,6 +2178,8 @@
     compareCategoryOrder: compareCategoryOrder,
     compactCategories: compactCategories,
     validateTime: validateTime,
+    validateReminder: validateReminder,
+    normalizeReminder: normalizeReminder,
     validateCategory: validateCategory,
     validateRepeat: validateRepeat,
     validateException: validateException,

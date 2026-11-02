@@ -2369,6 +2369,7 @@
           note: v.note,
           done: v.done
         };
+        if (v.reminder) single.reminder = v.reminder;
         if (meta) single.meta = meta;
         store.addItem(single);
         M.toast('已创建');
@@ -2383,6 +2384,7 @@
           repeat: v.repeat,
           exceptions: {}
         };
+        if (v.reminder) series.reminder = v.reminder;
         if (meta) series.meta = meta;
         store.addItem(series);
         M.toast('已创建重复事项');
@@ -2395,7 +2397,8 @@
         /* starred 不再由表单写入（DM-18.4）；不带该键即保留原值 */
         var patch = {
           title: v.title, categoryId: v.categoryId, date: v.date,
-          time: v.time, note: v.note, done: v.done, meta: meta
+          time: v.time, note: v.note, done: v.done, meta: meta,
+          reminder: v.reminder || null
         };
         store.updateItem(item.id, patch);
         return;
@@ -2413,6 +2416,7 @@
         createdAt: item.createdAt,
         updatedAt: new Date().toISOString()
       };
+      if (v.reminder) next.reminder = v.reminder;
       if (v.kind === 'single') {
         next.date = v.date;
       } else {
@@ -2426,6 +2430,12 @@
     /** 对重复实例应用编辑：仅此次 / 此次及以后 */
     function applyOccurrenceEdit(item, occ, v, scope) {
       var meta = metaForCategoryChange(item, v.categoryId);
+      /* D34：提醒挂在整条序列上，没有「仅此次的提醒」——两种范围都写回序列。 */
+      var seriesReminder = v.reminder || null;
+      if (JSON.stringify(seriesReminder) !== JSON.stringify(item.reminder || null)) {
+        store.updateItem(item.id, { reminder: seriesReminder });
+        item.reminder = seriesReminder || undefined;
+      }
       if (scope === 'only') {
         var patch = {
           time: v.time, title: v.title, categoryId: v.categoryId,
