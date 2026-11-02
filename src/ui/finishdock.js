@@ -200,6 +200,15 @@
     /* 已响铃次数：既是运行时可观测状态，也让「静音后不再响」可被断言 */
     var dingCount = 0;
 
+    /* 全屏计时（2026-11-01 用户口径）：点计时条目的空白处铺满视口、居中放大读数。
+       浮层只镜像该条目的实时读数，不改任何计时状态；点浮层任意处 / Esc 退出。 */
+    var focusEl = null;
+    var focusTitleEl = null;
+    var focusPhaseEl = null;
+    var focusClockEl = null;
+    var focusKey = null;
+    var focusReturn = null;
+
     /* ---------------- 音效 ---------------- */
 
     function ding() {
@@ -266,6 +275,7 @@
       var isZero = !it.setting && it.mode !== null && it.mode !== 'stopwatch'
         && it.remainingMs <= 0 && !it.running;
       if (it.clockEl.classList) it.clockEl.classList.toggle('is-done', !!isZero);
+      if (focusKey === it.key) renderFocus();
     }
 
     function modeRow(it) {
@@ -478,6 +488,68 @@
       syncClock(it);
     }
 
+    /* ---------------- 全屏计时 ---------------- */
+
+    function isTimerMode(mode) {
+      return mode === 'stopwatch' || mode === 'countdown' || mode === 'pomodoro';
+    }
+
+    function ensureFocusEls() {
+      if (focusEl) return focusEl;
+      var body = doc && doc.body;
+      if (!body) return null;
+      var wrap = mk(doc, 'div', 'dock-focus');
+      wrap.setAttribute('role', 'dialog');
+      wrap.setAttribute('aria-modal', 'true');
+      wrap.setAttribute('aria-label', '全屏计时');
+      wrap.setAttribute('tabindex', '-1');
+      wrap.hidden = true;
+      focusTitleEl = mk(doc, 'div', 'dock-focus-title');
+      focusPhaseEl = mk(doc, 'div', 'dock-focus-phase');
+      focusPhaseEl.hidden = true;
+      focusClockEl = mk(doc, 'div', 'dock-focus-clock', '00:00:00');
+      /* 标题 / 阶段固定在读数上方，读数自身绝对居中（不被上方文字挤偏） */
+      var meta = mk(doc, 'div', 'dock-focus-meta');
+      meta.appendChild(focusTitleEl);
+      meta.appendChild(focusPhaseEl);
+      /* 子元素不接指针：点浮层任何位置（含读数上）都是「退出」 */
+      wrap.appendChild(meta);
+      wrap.appendChild(focusClockEl);
+      wrap.addEventListener('click', function () { api.exitFocus(); });
+      body.appendChild(wrap);
+      if (typeof doc.addEventListener === 'function') doc.addEventListener('keydown', onFocusKeydown);
+      focusEl = wrap;
+      return wrap;
+    }
+
+    function onFocusKeydown(e) {
+      if (!focusEl || focusEl.hidden || !e) return;
+      if (e.key !== 'Escape' && e.key !== 'Esc') return;
+      if (typeof e.preventDefault === 'function') e.preventDefault();
+      if (typeof e.stopPropagation === 'function') e.stopPropagation();
+      api.exitFocus();
+    }
+
+    /** 把当前条目的读数 / 阶段镜像到浮层（tick 内每次 syncClock 都会走到） */
+    function renderFocus() {
+      if (!focusEl || focusEl.hidden || focusKey === null || !focusClockEl) return;
+      var it = find(focusKey);
+      if (!it) { api.exitFocus(); return; }
+      var ms = it.mode === 'stopwatch' ? it.elapsedMs : it.remainingMs;
+      focusClockEl.textContent = fmtClock(ms);
+      var isZero = !it.setting && isTimerMode(it.mode) && it.mode !== 'stopwatch'
+        && it.remainingMs <= 0 && !it.running;
+      if (focusClockEl.classList) focusClockEl.classList.toggle('is-done', !!isZero);
+      if (focusPhaseEl) {
+        var phased = it.mode === 'pomodoro';
+        focusPhaseEl.hidden = !phased;
+        if (phased) {
+          focusPhaseEl.textContent = it.phase === 'break' ? '休息' : '专注';
+          focusPhaseEl.setAttribute('data-phase', it.phase);
+        }
+      }
+    }
+
     function buildItemNode(it) {
       var node = mk(doc, 'article', 'dock-item');
       node.setAttribute('data-key', it.key);
@@ -511,6 +583,18 @@
       node.appendChild(it.stageEl);
 
       paintStage(it);
+
+      /* 点空白处进全屏：按钮 / 下拉 / 滚轮属于操作，不算空白（事件冒泡到这里再判断） */
+      node.addEventListener('click', function (e) {
+        var t = e && e.target;
+        if (!t) return;
+        var tag = t.tagName ? String(t.tagName).toLowerCase() : '';
+        if (tag === 'button' || tag === 'select' || tag === 'input'
+          || tag === 'textarea' || tag === 'a') return;
+        if (typeof t.closest === 'function'
+          && (t.closest('.dock-wheels') || t.closest('.dock-select'))) return;
+        api.enterFocus(it.key);
+      });
       return node;
     }
 
@@ -777,6 +861,7 @@
         var i = indexOfKey(key);
         if (i < 0) return false;
         var it = items[i];
+        if (focusKey === key) api.exitFocus();
         dropWheels(it);
         if (it.node && it.node.parentNode) it.node.parentNode.removeChild(it.node);
         items.splice(i, 1);
@@ -796,6 +881,44 @@
         if (onComplete) onComplete(occ);
         return true;
       },
+
+      /** 进入全屏计时（点条目空白处触发）。未选计时方式的条目不可进。 */
+      enterFocus: function (key) {
+        var it = find(key);
+        if (!it || !isTimerMode(it.mode)) return false;
+        if (!ensureFocusEls()) return false;
+        var wasOpen = !focusEl.hidden;
+        if (focusKey === key && wasOpen) return true;
+        if (!wasOpen) focusReturn = doc ? doc.activeElement : null;
+        focusKey = key;
+        focusTitleEl.textContent = it.occ.title || '（无标题）';
+        focusEl.hidden = false;
+        if (doc.body && doc.body.classList) doc.body.classList.add('is-dock-focus');
+        renderFocus();
+        try { focusEl.focus({ preventScroll: true }); } catch (e) {
+          try { focusEl.focus(); } catch (e2) { /* 垫片 / 旧内核忽略 */ }
+        }
+        return true;
+      },
+
+      /** 退出全屏（点浮层任意处 / Esc / 条目被移除时调用） */
+      exitFocus: function () {
+        if (!focusEl || focusEl.hidden) return false;
+        focusEl.hidden = true;
+        focusKey = null;
+        if (doc.body && doc.body.classList) doc.body.classList.remove('is-dock-focus');
+        var back = focusReturn;
+        focusReturn = null;
+        if (back && back !== focusEl && typeof back.focus === 'function') {
+          try { back.focus({ preventScroll: true }); } catch (e) {
+            try { back.focus(); } catch (e2) { /* 忽略 */ }
+          }
+        }
+        return true;
+      },
+
+      focusOpen: function () { return !!(focusEl && !focusEl.hidden); },
+      focusKeyOf: function () { return focusKey; },
 
       has: function (key) { return indexOfKey(key) >= 0; },
       keys: function () { return items.map(function (it) { return it.key; }); },
@@ -888,6 +1011,7 @@
              全等比较会把每次拉取回放都判成「有变化」而整台重建（界面闪烁）。 */
           if (dockSemanticallySame(incoming)) return items.length;
         } catch (e) { /* 比较失败就走重建，重建本身幂等 */ }
+        api.exitFocus();
         restoring = true;
         try {
           items.forEach(function (it) {
@@ -945,6 +1069,13 @@
       },
 
       destroy: function () {
+        api.exitFocus();
+        if (focusEl) {
+          if (typeof doc.removeEventListener === 'function') doc.removeEventListener('keydown', onFocusKeydown);
+          if (focusEl.parentNode) focusEl.parentNode.removeChild(focusEl);
+          focusEl = null;
+          focusTitleEl = focusPhaseEl = focusClockEl = null;
+        }
         if (timer && typeof root.clearInterval === 'function') root.clearInterval(timer);
         timer = null;
         items.slice().forEach(function (it) { api.remove(it.key); });

@@ -707,6 +707,84 @@ html[data-theme='dark'] .lower-row > .finish-dock { background: var(--surface-2)
 .dock-phase { margin: 0; font-size: 11px; font-weight: 600; text-align: center; color: var(--primary); }
 .dock-phase[data-phase='break'] { color: var(--ok); }
 
+/* ---------- 全屏计时（2026-11-01 用户口径） ----------
+   点计时条目的空白处：整屏铺一层纸色毛玻璃，只在正中放大读数。
+   子元素一律不接指针 —— 点屏幕任何位置（包括数字）都是退出，Esc 等价。 */
+.dock-focus {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  -webkit-backdrop-filter: blur(22px) saturate(160%);
+  backdrop-filter: blur(22px) saturate(160%);
+  cursor: pointer;
+  touch-action: none;
+  overscroll-behavior: contain;
+  /* 浮层自身承接焦点：默认 1px auto 焦点环会沿视口边缘露出一圈黑边（手机档实测） */
+  outline: none;
+  animation: dock-focus-in .18s cubic-bezier(.4, 0, .2, 1);
+}
+.dock-focus[hidden] { display: none; }
+.dock-focus > * { pointer-events: none; }
+.dock-focus-meta {
+  position: absolute;
+  left: 50%;
+  bottom: calc(50% + max(36px, 5.6vw) + 14px);
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: min(90vw, 900px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.dock-focus-title {
+  max-width: min(90vw, 900px);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-align: center;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.dock-focus-phase {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  color: var(--primary);
+}
+.dock-focus-phase[data-phase='break'] { color: var(--ok); }
+.dock-focus-phase[hidden] { display: none; }
+.dock-focus-clock {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-family: var(--font-serif);
+  /* 约半个视口宽：8 位读数宽 ≈ 4.30em，11.6vw × 4.30 ≈ 50vw；窄屏下限 72px 保证 8 位放得下。
+     不加字距：尾部字距会把墨迹整体左推，读数看起来不居中。 */
+  font-size: max(72px, 11.6vw);
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  white-space: nowrap;
+  color: var(--text);
+}
+.dock-focus-clock.is-done { color: var(--warn); }
+@keyframes dock-focus-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dock-focus { animation: none; }
+}
+/* 不支持毛玻璃：用不透明纸底，读数仍清晰 */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .dock-focus { background: var(--bg); }
+}
+
+
 /* 拖拽中的源：半透明 + 轻微缩小，明确「正在搬走」 */
 .is-dragging { opacity: .45; }
 
