@@ -37,8 +37,18 @@
   };
 
   var FALLBACK_PX_PER_HOUR = 96;
-  var MIN_PX_PER_HOUR = 60;
-  var MAX_PX_PER_HOUR = 160;
+  /* 范围以 schema.SETTINGS_RANGES 为单一来源（设置滑块同源），避免滑块放开而被视图悄悄夹回。
+     2026-11-03 用户反馈：滑块放到 160 以上时时间轴不再变化，就是这里还停在 60–160。 */
+  var DAY_ZOOM_RANGE = (function () {
+    var S = root.DayPlan.schema;
+    var r = S && S.SETTINGS_RANGES && S.SETTINGS_RANGES.dayPxPerHour;
+    if (r && r.length === 2 && isFinite(Number(r[0])) && isFinite(Number(r[1]))) {
+      return [Number(r[0]), Number(r[1])];
+    }
+    return [48, 240];
+  })();
+  var MIN_PX_PER_HOUR = DAY_ZOOM_RANGE[0];
+  var MAX_PX_PER_HOUR = DAY_ZOOM_RANGE[1];
 
   /* DM-21 常量（Layout 未提供时的兜底值，与规格同值） */
   var CAT_LABEL_WIDTH_FALLBACK = 34;

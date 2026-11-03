@@ -46,7 +46,7 @@
   var TEXT_UNIT_PX = 13;            /* 1 个单位 ≈ 13px：CJK/全角=1，ASCII=1/2 */
   var BLOCK_LINE_PX = 17;           /* 一行文本占用的纵向像素（含行高） */
   var BLOCK_PAD_Y = 8;              /* 块上下内边距合计（真实 CSS：3+3，这里留余量） */
-  var BLOCK_PAD_X = 14;             /* 块左右内边距合计（真实 CSS：7+8） */
+  var BLOCK_PAD_X = 20;             /* 块左右内边距合计（真实 CSS：padding 4px 10px → 10+10） */
   var BLOCK_NOTE_GAP = 2;           /* 标题与备注之间的间隙 */
   /* 时间不换行的下限：中文数字 + en dash 的实测宽度（"10:10–12:00" ≈ 66px） */
   var WEEK_MIN_ITEM_WIDTH = 74;
@@ -771,9 +771,14 @@
     return false;
   }
 
-  /** 日视图口径：一行放不下 2 个汉字 → 太窄。 */
+  /** 日视图口径：一行放不下 2 个汉字 → 太窄（窄档与普通档的内边距不同，按宽度档位取）。 */
   function isDayBlockTooNarrow(width, options) {
-    return isBlockTooNarrow(width, 2, options);
+    var opts = options || {};
+    if (opts.padX === undefined) {
+      opts = Object.assign({}, opts);
+      opts.padX = blockMetricOpts(width).padX;
+    }
+    return isBlockTooNarrow(width, 2, opts);
   }
 
   /**
