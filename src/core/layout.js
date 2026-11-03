@@ -27,7 +27,8 @@
   var GROUP_LABEL_GAP = 6;          /* 类别名与时段区之间的水平间距 */
 
   /* ===== DM-15 options 默认值 ===== */
-  var DEFAULT_PX_PER_HOUR = 96;      /* F-19：settings.dayPxPerHour 默认 96 */
+  /* 仅在调用方未传 pxPerHour 时的兜底；应用默认见 DEFAULT_SETTINGS（日 120）。 */
+  var DEFAULT_PX_PER_HOUR = 96;
   var DEFAULT_LANES_MAX = 3;
   var DEFAULT_LANE_HEIGHT = MAX_LANE_HEIGHT_DEFAULT;
   var DEFAULT_MIN_BLOCK_WIDTH = 12;  /* F-04.1 最小可点宽度 */
@@ -915,7 +916,19 @@
     var avail = width - padX;
     var title = textMetrics(occ ? occ.title : '', { unitPx: unitPx });
     if (title.empty) { return false; }
-    return title.width <= avail && title.width > avail - chipWidth;
+    /* 独占整行也放不下两个字：胶囊上移没有意义（省略态 / 微块另有处理）。 */
+    var perFull = Math.floor(avail / unitPx);
+    if (perFull < 2) { return false; }
+    if (title.width <= avail) {
+      return title.width > avail - chipWidth;
+    }
+    /* 2026-11-03（用户反馈）：标题本身比块宽还长时，旧规则直接放行，于是 73px 这类
+       「刚过窄块阈值」的块按普通档每行只让出 1 个字（胶囊 22–36px 吃掉大半）。
+       窄块只让首行（chipFirstLineOnly）不会整块一字一行，保持原样；
+       普通档只要并排后每行不足 2 字、独占整行能放下 ≥2 字，就把胶囊移到块顶。 */
+    if (opts.chipFirstLineOnly) { return false; }
+    var perWithChip = Math.floor((avail - chipWidth) / unitPx);
+    return perWithChip < 2;
   }
 
   /**

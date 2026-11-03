@@ -113,9 +113,10 @@
 
   /** DM-10：默认设置（迭代 3） */
   var DEFAULT_SETTINGS = {
-    dayPxPerHour: 96,
-    pxPerHour: 96,
-    weekPxPerHour: 56,
+    /* 2026-11-03（用户反馈）：初次打开（演示数据）的默认缩放调大一档。 */
+    dayPxPerHour: 120,
+    pxPerHour: 120,
+    weekPxPerHour: 72,
     idleCompressHeight: 26,
     idleCompressEnabled: true,
     timelineStartHour: 0,
@@ -131,8 +132,9 @@
 
   /** 数值设置项的夹取范围（DM-10） */
   var SETTINGS_RANGES = {
-    dayPxPerHour: [60, 160],
-    weekPxPerHour: [40, 96],
+    /* 2026-11-03（用户反馈）：两档缩放的可调范围都放宽（原 60–160 / 40–96）。 */
+    dayPxPerHour: [48, 240],
+    weekPxPerHour: [32, 160],
     idleCompressHeight: [16, 48],
     maxLanes: [1, 6]
   };
@@ -945,9 +947,11 @@
     if (src.dayPxPerHour !== undefined && src.dayPxPerHour !== null) zoomSrc = src.dayPxPerHour;
     else if (src.pxPerHour !== undefined && src.pxPerHour !== null) zoomSrc = src.pxPerHour;
     else zoomSrc = DEFAULT_SETTINGS.dayPxPerHour;
-    out.dayPxPerHour = clampInt(zoomSrc, 60, 160, DEFAULT_SETTINGS.dayPxPerHour);
+    out.dayPxPerHour = clampInt(zoomSrc,
+      SETTINGS_RANGES.dayPxPerHour[0], SETTINGS_RANGES.dayPxPerHour[1], DEFAULT_SETTINGS.dayPxPerHour);
     out.pxPerHour = out.dayPxPerHour; // 兼容字段（DM-10：与 dayPxPerHour 保持一致）
-    out.weekPxPerHour = clampInt(out.weekPxPerHour, 40, 96, DEFAULT_SETTINGS.weekPxPerHour);
+    out.weekPxPerHour = clampInt(out.weekPxPerHour,
+      SETTINGS_RANGES.weekPxPerHour[0], SETTINGS_RANGES.weekPxPerHour[1], DEFAULT_SETTINGS.weekPxPerHour);
     out.idleCompressHeight = clampInt(out.idleCompressHeight, 16, 48, DEFAULT_SETTINGS.idleCompressHeight);
     out.maxLanes = clampInt(out.maxLanes, 1, 6, DEFAULT_SETTINGS.maxLanes);
     out.timelineStartHour = clampInt(out.timelineStartHour, 0, 24, DEFAULT_SETTINGS.timelineStartHour);
@@ -1491,13 +1495,13 @@
     // 3. weekNotes
     if (!isPlainObject(out.weekNotes)) out.weekNotes = {};
 
-    // 4. settings：dayPxPerHour = clamp(pxPerHour ?? 60, 60, 160)，并补齐迭代 3 新键
+    // 4. settings：dayPxPerHour = clamp(pxPerHour ?? 60, 48, 240)，并补齐迭代 3 新键
     if (!isPlainObject(out.settings)) out.settings = {};
     var st = out.settings;
     var derived = false;
     if (st.dayPxPerHour === undefined || st.dayPxPerHour === null) {
       var legacy = (st.pxPerHour === undefined || st.pxPerHour === null) ? 60 : st.pxPerHour;
-      st.dayPxPerHour = clampInt(legacy, 60, 160, 60);
+      st.dayPxPerHour = clampInt(legacy, 48, 240, 60);
       derived = true;
     }
     if (st.pxPerHour === undefined || st.pxPerHour === null || derived) {

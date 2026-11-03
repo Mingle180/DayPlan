@@ -43,7 +43,7 @@
 
   var DOW_LABELS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
   var NOTES_DEBOUNCE_MS = 300;
-  var DEFAULT_WEEK_PX_PER_HOUR = 56;   /* F-18.1：settings.weekPxPerHour 默认 56 */
+  var DEFAULT_WEEK_PX_PER_HOUR = 72;   /* F-18.1：settings.weekPxPerHour 默认 72（2026-11-03） */
   var DEFAULT_COMPRESS_HEIGHT = 26;    /* F-38：settings.idleCompressHeight 兜底（DM-21） */
   var DEFAULT_LANES_MAX = 3;           /* DM-19.2：周视图仅作列宽权重下限 */
   var WEEK_LANE_HARD_CAP = 6;          /* DM-19.4 / DM-22：道数硬上限 */

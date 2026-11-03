@@ -438,14 +438,14 @@
       store.updateSettings({ showNoteMarker: noteChk.checked });
       dataChanged();
     });
-    // 迭代 3（F-19）：日视图时间轴缩放改用 range 滑块，范围 60–160 px/小时，默认 96
+    // 迭代 3（F-19）：日视图时间轴缩放改用 range 滑块；2026-11-03 扩到 48–240，默认 120
     var dayPx = Number(doc.settings.dayPxPerHour);
     if (!isFinite(dayPx) || dayPx <= 0) dayPx = Number(doc.settings.pxPerHour);
-    if (!isFinite(dayPx) || dayPx <= 0) dayPx = 96;
-    dayPx = Math.min(160, Math.max(60, dayPx));
+    if (!isFinite(dayPx) || dayPx <= 0) dayPx = 120;
+    dayPx = Math.min(240, Math.max(48, dayPx));
     var zoomRange = el('input', {
       class: 'range',
-      type: 'range', min: '60', max: '160', step: '4',
+      type: 'range', min: '48', max: '240', step: '4',
       'aria-label': '日视图时间轴缩放'
     });
     zoomRange.value = String(dayPx);
@@ -461,13 +461,13 @@
       dataChanged();
     });
 
-    // 周视图纵向缩放（F-18.1，40–96）
+    // 周视图纵向缩放（F-18.1；2026-11-03 扩到 32–160，默认 72）
     var weekPx = Number(doc.settings.weekPxPerHour);
-    if (!isFinite(weekPx) || weekPx <= 0) weekPx = 56;
-    weekPx = Math.min(96, Math.max(40, weekPx));
+    if (!isFinite(weekPx) || weekPx <= 0) weekPx = 72;
+    weekPx = Math.min(160, Math.max(32, weekPx));
     var weekRange = el('input', {
       class: 'range',
-      type: 'range', min: '40', max: '96', step: '4',
+      type: 'range', min: '32', max: '160', step: '4',
       'aria-label': '周视图时间轴缩放'
     });
     weekRange.value = String(weekPx);

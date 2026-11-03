@@ -135,10 +135,11 @@
       /* D9（2026-10-27）：v5 必备顶层字段。演示文档不预置完成台条目，字段必须存在。 */
       finishDock: [],
       settings: {
-        // DM-10：演示数据显式保留迭代 2 的 60px/h 观感（避免 SM-07 的 540px 断言漂移）
-        dayPxPerHour: 60,
-        pxPerHour: 60,
-        weekPxPerHour: 56,
+        // 2026-11-03（用户反馈）：初次打开（演示示例仍在）时默认缩放取大一档，
+        // 避免一上来就显得挤；日 120 / 周 72 与 DEFAULT_SETTINGS 同源。
+        dayPxPerHour: 120,
+        pxPerHour: 120,
+        weekPxPerHour: 72,
         idleCompressHeight: 26,
         idleCompressEnabled: true,
         timelineStartHour: 0,

@@ -30,7 +30,8 @@
   'use strict';
 
   /* ===== DM-22 常量 ===== */
-  var DEFAULT_PX_PER_HOUR = 56;      /* F-18.1：settings.weekPxPerHour 默认 56 */
+  /* 仅在调用方未传 pxPerHour 时的兜底；应用默认见 DEFAULT_SETTINGS（周 72）。 */
+  var DEFAULT_PX_PER_HOUR = 56;
   var DEFAULT_LANES_MAX = 3;         /* DM-19.2：周视图只把它当**列宽权重下限** */
   var LANE_HARD_CAP = 6;             /* DM-19.4：周视图道数硬上限 */
   /* DM-26 R-5：DM-22.1 引用的 DEFAULT_LANE_HEIGHT 在 DM-22 常量表里缺失，

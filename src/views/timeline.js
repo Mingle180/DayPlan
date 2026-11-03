@@ -22,7 +22,7 @@
   /** 时间轴起点固定为 00:00（DM-10 的 timelineStartHour 默认 0）。 */
   var TIMELINE_START_MINUTES = 0;
 
-  /** 默认缩放：60px/小时，即 1 分钟 = 1px（F-04.1）。 */
+  /** 仅在调用方未传 pxPerHour 时的兜底；应用默认见 DEFAULT_SETTINGS（日 120）。 */
   var DEFAULT_PX_PER_HOUR = 60;
   /** 默认最大道数：3（F-04.2 第 4 道起并入第 3 道）。 */
   var DEFAULT_LANES_MAX = 3;
