@@ -2595,11 +2595,16 @@
     els.newItem.addEventListener('click', function () { openEdit(null); });
 
     /* 四十七轮（用户口径）：手机端在时间表以外左右滑动切换日期，取代「‹ / 今天 / ›」
-       两侧箭头；键盘 [ / ] 仍走 shiftDate。 */
+       两侧箭头；键盘 [ / ] 仍走 shiftDate。
+       2026-11-03（用户口径「不够灵敏」）：只排除**会横向滚动的时间轴本身**
+       （默认 120px/小时，全天约 2900px，必须能左右拖动看后半天），日期行也重新
+       交给横滑——四十七轮把整个 .timeline-section 排除，连日期行都滑不动。 */
     if (root.DayPlan.motion && typeof root.DayPlan.motion.enableSwipe === 'function') {
       root.DayPlan.motion.enableSwipe(els.panel, {
         exclude: function (target) {
-          return !!(target && target.closest && target.closest('.timeline-section'));
+          if (!target || typeof target.closest !== 'function') return false;
+          return !!(target.closest('.timeline-scroll') || target.closest('.tl-block')
+            || target.closest('.tl-resize') || target.closest('.tl-resize-pad'));
         },
         onCommit: function (dir) {
           setDate(D.addDays(state.date, dir), { notify: true });

@@ -413,13 +413,13 @@
 
     /* ---------------- 手机横滑切日期 / 周（四十七轮） ---------------- */
 
-    var SWIPE_SLOP_PX = 7;       // 判方向的手指位移（小于浏览器滚动阈值，先手拿住手势）
-    var SWIPE_LOCK_RATIO = 0.9;  // |x| > |y|×0.9 即锁成横滑（约 42° 以内都算横滑）
+    var SWIPE_SLOP_PX = 6;       // 判方向的手指位移（小于浏览器滚动阈值，先手拿住手势）
+    var SWIPE_LOCK_RATIO = 0.85; // |x| > |y|×0.85 即锁成横滑（约 49° 以内都算横滑）
     var SWIPE_HOLD_PX = 20;      // 纵向占优到这个距离才认定是在滚页面
-    var SWIPE_COMMIT_PX = 40;    // 距离阈值（宽度的 14% 与它取大）
-    var SWIPE_COMMIT_RATIO = 0.14;
-    var SWIPE_FLICK_VX = 0.28;   // px/ms：快速轻扫可低于距离阈值
-    var SWIPE_FLICK_MIN_PX = 12;
+    var SWIPE_COMMIT_PX = 28;    // 距离阈值（宽度的 7% 与它取大）
+    var SWIPE_COMMIT_RATIO = 0.07;
+    var SWIPE_FLICK_VX = 0.20;   // px/ms：快速轻扫可低于距离阈值
+    var SWIPE_FLICK_MIN_PX = 8;
     var SWIPE_OUT_MS = 150;
     var SWIPE_IN_MS = 230;
 

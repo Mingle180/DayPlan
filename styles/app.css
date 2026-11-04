@@ -876,9 +876,11 @@ html[data-theme='dark'] .lower-row > .finish-dock { background: var(--surface-2)
 
 /* 四十七轮（用户口径）：手机端横滑切日期 / 周，取代「‹ / 今天(本周) / ›」两侧箭头。
    pan-y 把横向手势留给 JS，纵向滚动仍归浏览器；不含 pinch-zoom，页面缩放仍被挡住。
-   时间表自己保留横向滚动与拖动。 */
+   周网格与日视图时间轴各自保留横向滚动（日轴默认 120px/小时，全天约 2900px），
+   手势从滚动区内部发起时仍归滚动。 */
 #day-panel, #week-view { touch-action: pan-y; }
-#day-panel .timeline-section, #week-view .week-grid-scroll { touch-action: auto; }
+#week-view .week-grid-scroll { touch-action: auto; }
+#day-panel .timeline-scroll { touch-action: auto; }
 #day-panel.is-swiping, #week-view.is-swiping {
   will-change: transform;
   user-select: none;
