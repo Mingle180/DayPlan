@@ -1435,6 +1435,20 @@
     settingsOpts = {
       store: store,
       onDataChanged: onDataChanged,
+      /* 2026-11-05（用户口径）：设置 → 类别清单里点事项 → 那天日视图 + 定位高亮。
+         先切日期与档位（同步重建日视图），下一帧再定位，保证目标节点已在新布局里。 */
+      onJumpToOccurrence: function (row) {
+        if (!row || !D.isValidDate(row.date)) return;
+        goDay(row.date);
+        var dv = instances.day;
+        if (!dv || typeof dv.revealOccurrence !== 'function') return;
+        var run = function () { dv.revealOccurrence(row.key); };
+        if (root && typeof root.requestAnimationFrame === 'function') {
+          root.requestAnimationFrame(function () { root.requestAnimationFrame(run); });
+        } else {
+          setTimeout(run, 32);
+        }
+      },
       cloud: {
         getSession: function () { return session; },
         getAccountName: function (uid) { return cloudAuth ? cloudAuth.accountName(uid) : ''; },

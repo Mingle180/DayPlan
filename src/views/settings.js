@@ -25,11 +25,82 @@
 
   /**
    * 类别管理（供设置面板与其它入口复用）
-   * @param {object} opts { store, onChange }
+   * @param {object} opts { store, onChange, onJump }
    */
   function categoryManager(opts) {
     var store = opts.store;
     var wrap = el('div', {});
+
+    /** 11月4日 周三（清单行头；年月由标题与上下文给出） */
+    function shortDateCN(iso) {
+      var ymd = D.parseYearMonth(iso);
+      if (!ymd) return iso;
+      var wd = D.weekdayName(iso);
+      return ymd.month + '月' + ymd.day + '日' + (wd ? ' ' + wd.replace('星期', '周') : '');
+    }
+
+    /** 2026-11-05 用户口径：点类别 → 列出该类别每个事项一条，重复事项取距今最近的一次。 */
+    function openCategoryItems(cat) {
+      var R = root.DayPlan.recurrence;
+      if (!R || typeof R.categoryListing !== 'function') {
+        if (M && M.toast) M.toast('事项清单模块未加载');
+        return;
+      }
+      var ui = (store.loadUIState && store.loadUIState()) || {};
+      var listing = R.categoryListing(store.getState(), cat.id, { hideDone: !!ui.hideDone });
+      var rows = listing.rows;
+      var scroll = el('div', { class: 'cat-items-scroll' });
+      if (!rows.length) {
+        scroll.appendChild(el('div', { class: 'cat-items-empty', text: '这个类别还没有事项' }));
+      } else {
+        var list = el('ul', { class: 'cat-items-list' });
+        rows.forEach(function (row) {
+          var btn = el('button', {
+            class: 'cat-items-row' + (row.done ? ' is-done' : ''),
+            type: 'button',
+            'data-occ-key': row.key,
+            'data-date': row.date,
+            title: row.title
+          });
+          if (row.key === listing.nearestKey) btn.setAttribute('data-nearest', '1');
+          btn.appendChild(el('span', { class: 'cat-items-date', text: shortDateCN(row.date) }));
+          btn.appendChild(el('span', { class: 'cat-items-time', text: row.time || '未定' }));
+          btn.appendChild(el('span', { class: 'cat-items-title', text: row.title }));
+          if (row.showRepeat && row.repeatLabel) {
+            btn.appendChild(el('span', { class: 'cat-items-flag', text: row.repeatLabel }));
+          }
+          if (row.done) btn.appendChild(el('span', { class: 'cat-items-flag is-done', text: '已完成' }));
+          btn.addEventListener('click', function () {
+            handle.close();
+            if (typeof opts.onJump === 'function') opts.onJump(row);
+          });
+          list.appendChild(el('li', { class: 'cat-items-cell' }, [btn]));
+        });
+        scroll.appendChild(list);
+      }
+      var handle = M.open({
+        title: cat.name,
+        body: scroll,
+        showSubmit: false,
+        showCancel: false
+      });
+      /* 初始滚动：把「距今最近的一项」顶到列表顶端；滚不到时浏览器会夹到底部。
+         .cat-items-scroll 在 CSS 里是 position:relative，行的 offsetParent 就是它，
+         因此 offsetTop 是不受弹窗入场缩放动画影响的布局距离。 */
+      var nearest = scroll.querySelector ? scroll.querySelector('[data-nearest="1"]') : null;
+      if (nearest) {
+        if (typeof nearest.offsetTop === 'number') {
+          scroll.scrollTop = Math.max(0, nearest.offsetTop);
+        } else if (typeof nearest.getBoundingClientRect === 'function'
+            && typeof scroll.getBoundingClientRect === 'function') {
+          var nr = nearest.getBoundingClientRect();
+          var sr = scroll.getBoundingClientRect();
+          if (nr && sr && typeof nr.top === 'number' && typeof sr.top === 'number') {
+            scroll.scrollTop = Math.max(0, nr.top - sr.top + (scroll.scrollTop || 0));
+          }
+        }
+      }
+    }
 
     function render() {
       wrap.innerHTML = '';
@@ -148,10 +219,12 @@
 
         /* 拖动排序（2026-10-21 用户反馈：去掉 ▲▼，整行拖动）：
            紧急恒首位 → 不挂 draggable；其余行可拖，Alt+↑/↓ 作为键盘等价操作。 */
+        li.setAttribute('tabindex', '0');
+        li.setAttribute('title', urgent
+          ? '点击查看该类别全部事项'
+          : '点击查看该类别全部事项 · 拖动调整次序（Alt+↑/↓）');
         if (!urgent) {
           li.setAttribute('draggable', 'true');
-          li.setAttribute('tabindex', '0');
-          li.setAttribute('title', '拖动调整次序（Alt+↑/↓）');
           li.addEventListener('dragstart', function (e) {
             draggingId = cat.id;
             li.classList.add('is-dragging');
@@ -209,6 +282,23 @@
             onclick: function () { remove(cat, refCount[cat.id] || 0); }
           }));
         }
+        /* 2026-11-05 用户口径：点类别行看该类别全部事项。点行内按钮（改色 / 改名 / 删除）
+           交给按钮自己处理，不再冒泡成「打开清单」。 */
+        li.addEventListener('click', function (e) {
+          var t = e && e.target;
+          while (t && t !== li) {
+            if (t.tagName && String(t.tagName).toLowerCase() === 'button') return;
+            t = t.parentNode;
+          }
+          openCategoryItems(cat);
+        });
+        li.addEventListener('keydown', function (e) {
+          if (e.altKey) return;
+          if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+            e.preventDefault();
+            openCategoryItems(cat);
+          }
+        });
         list.appendChild(li);
       });
       wrap.appendChild(list);
@@ -397,6 +487,7 @@
     var body = el('div', {});
     var changed = false;
     var notificationSectionInst = null;
+    var settingsHandle = null;
 
     function dataChanged() {
       changed = true;
@@ -407,7 +498,12 @@
     /* 2026-10-30（用户口径）：四大类默认收起，标题行即折叠入口（见 modal.foldSection）。 */
     var catMgr = categoryManager({
       store: store,
-      onChange: function () { dataChanged(); }
+      onChange: function () { dataChanged(); },
+      /* 2026-11-05：点清单里的事项 → 关掉设置与清单，交给 app 切到那天的日视图并定位。 */
+      onJump: function (row) {
+        if (settingsHandle && typeof settingsHandle.close === 'function') settingsHandle.close();
+        if (typeof opts.onJumpToOccurrence === 'function') opts.onJumpToOccurrence(row);
+      }
     });
     var catSection = M.foldSection('类别');
     catSection.body.appendChild(catMgr.element);
@@ -710,7 +806,7 @@
     dataSection.body.appendChild(el('div', { class: 'field', style: 'margin-top:14px' }, [clearBtn]));
     body.appendChild(dataSection.element);
 
-    M.open({
+    settingsHandle = M.open({
       title: '设置',
       body: body,
       wide: true,

@@ -5,17 +5,17 @@
  *    数据源：reference/holidays/holidays.json
  *    生成器：tools/gen_holidays_module.js（node tools/gen_holidays_module.js）
  *
- * 来源与逐条裁定：reference/holidays/provenance.md（22 份国务院公告 + 4 个开源交叉核对源）
+ * 来源与逐条裁定：reference/holidays/provenance.md（23 份国务院公告 + 4 个开源交叉核对源）
  * 契约：docs/spec/03-data-model.md DM-17 ｜ docs/spec/02-functional-spec.md F-21.1
  * 用例：tests/cases/holidays.test.js（HD-01…HD-12、HDX-*）
  * 独立比对器：tools/holiday_source_check.py --check / --selfcheck
  *
- * datasetVersion: 1.0.0   generatedAt: 2026-10-14
+ * datasetVersion: 1.1.0   generatedAt: 2026-11-05
  *
  * 三条不可违反的口径：
  *   1. holidays 只含「额外休息日」，不含普通周六/周日（需要含周末的连续窗口请用 spans）；
  *   2. 查询一律走全局索引，禁止按 iso.slice(0,4) 去 years 里查（有 4 处跨年例外）；
- *   3. 2027 年三数组为空是正确状态（国务院尚未公布），不得按规律推算补齐。
+ *   3. 年份键三数组皆空即视为"该年无数据"；上层按「无数据即不过滤」处理，不按规律推算。
  *
  * 迭代 7（F-47）：新增 isStatutoryHoliday(iso)。
  *   ⚠️ 本文件的数据表由 tools/gen_holidays_module.js 生成；新增导出函数必须**同步**改
@@ -31,15 +31,15 @@
 
   var DATA = {
     meta: {
-      datasetVersion: "1.0.0",
-      generatedAt: "2026-10-14",
+      datasetVersion: "1.1.0",
+      generatedAt: "2026-11-05",
       range: { from: "2008-01-01", to: "2027-12-31" },
       sources: [
         { id: "chinese-days", kind: "npm", version: "1.5.9", url: "https://www.npmjs.com/package/chinese-days" },
         { id: "holiday-calendar", kind: "npm", version: "1.3.3", url: "https://www.npmjs.com/package/holiday-calendar" },
         { id: "chinesecalendar", kind: "python", version: "1.11.0", url: "https://pypi.org/project/chinesecalendar/" },
         { id: "holiday-cn", kind: "crawl", version: "master@2026-10-14", url: "https://github.com/NateScarlet/holiday-cn" },
-        { id: "gov-cn-notices", kind: "crawl", version: "2008-2026 (22 notices)", url: "https://www.gov.cn/zhengce/zhengceku/" }
+        { id: "gov-cn-notices", kind: "crawl", version: "2008-2027 (23 notices)", url: "https://www.gov.cn/zhengce/zhengceku/" }
       ]
     },
     years: {
@@ -286,9 +286,17 @@
         ]
       },
       "2027": {
-        holidays: [],
-        workdays: [],
-        spans: []
+        holidays: ["2027-01-01", "2027-02-05", "2027-02-08", "2027-02-09", "2027-02-10", "2027-02-11", "2027-02-12", "2027-04-05", "2027-05-03", "2027-05-04", "2027-05-05", "2027-06-09", "2027-09-15", "2027-10-01", "2027-10-04", "2027-10-05", "2027-10-06", "2027-10-07"],
+        workdays: ["2027-01-31", "2027-02-14", "2027-05-08", "2027-09-26", "2027-10-09"],
+        spans: [
+          { name: "元旦", from: "2027-01-01", to: "2027-01-03", workdays: [] },
+          { name: "春节", from: "2027-02-05", to: "2027-02-13", workdays: ["2027-01-31", "2027-02-14"] },
+          { name: "清明节", from: "2027-04-03", to: "2027-04-05", workdays: [] },
+          { name: "劳动节", from: "2027-05-01", to: "2027-05-05", workdays: ["2027-05-08"] },
+          { name: "端午节", from: "2027-06-09", to: "2027-06-09", workdays: [] },
+          { name: "中秋节", from: "2027-09-15", to: "2027-09-15", workdays: [] },
+          { name: "国庆节", from: "2027-10-01", to: "2027-10-07", workdays: ["2027-09-26", "2027-10-09"] }
+        ]
       }
     }
   };
@@ -398,7 +406,7 @@
   /**
    * isStatutoryHoliday(iso)：该日是否为**法定放假日**（F-47 / R-29 的判定口径）。
    * 只认 type === "holiday"：调休补班日（type === "workday"）与普通周末都是 false。
-   * 覆盖范围外的日期（如 2027 起）同样为 false —— 上层按「无数据即不过滤」处理。
+   * 覆盖范围外的日期（如 2028 起）同样为 false —— 上层按「无数据即不过滤」处理。
    */
   function isStatutoryHoliday(iso) { var rec = lookup(iso); return !!rec && rec.type === "holiday"; }
   function isMakeupWorkday(iso) { var rec = lookup(iso); return !!rec && rec.type === "workday"; }
@@ -410,7 +418,7 @@
    * isCovered(iso)：该日的节假日状态是否可知。
    * - 有记录 → true（含早于 range.from 的 2007-12-29/30/31，见 HD-12）；
    * - 落在范围内且该年有数据 → true（普通日也算"已覆盖"，只是不放假）；
-   * - 范围外，或范围内但该年无数据（2027） → false。
+   * - 范围外，或范围内但该年无数据 → false。
    */
   function isCovered(iso) {
     if (!isValidISO(iso)) return false;
@@ -422,7 +430,6 @@
   /**
    * missingYears(fromISO, toISO) -> number[]（升序）
    * 区间与数据集声明范围求交后，三数组皆空（或缺年份键）的年份即为"缺失"。
-   * 2027 官方尚未公布 → 计入；范围外年份不属于覆盖声明，不计入。
    */
   function missingYears(fromISO, toISO) {
     var out = [];

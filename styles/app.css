@@ -1924,6 +1924,110 @@ html.has-modal body {
 .cat-swatch.is-locked { cursor: not-allowed; }
 .cat-name { flex: 1; min-width: 0; font-weight: 600; }
 .cat-name input { width: 100%; }
+
+/* 2026-11-05（用户口径）：点开类别 → 该类别全部事项，从早到晚、可滚动；
+   打开时「距今最近的一项」顶到列表顶端（offsetTop 定位，故本容器要 relative）。
+   滚动容器会裁切子项阴影，所以四周留出 ≥ 阴影扩散距离的内边距，再用负外边距抵消占位。 */
+.cat-items-scroll {
+  position: relative;
+  max-height: min(56vh, 460px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 10px 12px 14px;
+  margin: -10px -12px 0;
+}
+.cat-items-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cat-items-cell { margin: 0; }
+.cat-items-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-block);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: box-shadow var(--ease), background var(--ease), border-color var(--ease);
+}
+@media (hover: hover) {
+  .cat-items-row:hover { box-shadow: var(--shadow); }
+}
+.cat-items-row:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+/* data-nearest 只作为「打开时滚到这里」的锚点，不加视觉标记（2026-11-05 用户口径）。 */
+.cat-items-date {
+  flex: none;
+  min-width: 84px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.cat-items-time {
+  flex: none;
+  min-width: 42px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.cat-items-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cat-items-flag {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(120, 120, 128, .10);
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 1.5;
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cat-items-flag.is-done { color: var(--primary); }
+.cat-items-row.is-done .cat-items-title {
+  text-decoration: line-through;
+  color: var(--text-2);
+}
+.cat-items-empty {
+  padding: 28px 8px;
+  text-align: center;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+/* 类别清单跳转到日视图后的短暂高亮：描边淡入淡出，不动块自身阴影与位移 */
+.tl-block.is-revealed,
+.untimed-item.is-revealed {
+  outline: 3px solid transparent;
+  outline-offset: 1px;
+  animation: dp-reveal-fade 1800ms var(--ease);
+}
+@keyframes dp-reveal-fade {
+  0% { outline-color: transparent; }
+  15% { outline-color: var(--primary); }
+  72% { outline-color: var(--primary); }
+  100% { outline-color: transparent; }
+}
 .settings-section { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
 .settings-section:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
 .settings-section h3 { font-size: 13px; margin: 0 0 8px; }

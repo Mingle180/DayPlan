@@ -55,6 +55,8 @@
   var LANE_HEIGHT_MIN = 48;
   var BLOCK_HEIGHT_MIN = 22;
   var BLOCK_GAP = 6;
+  /* 2026-11-04：块群居中只在余量够大时生效（几像素的取整差不动，免得窄屏轻轻跳）。 */
+  var CENTER_MIN_FREE = 8;
   /* 美化迭代 12：块高在「内容需求高度」之上再加一点余量——
      字体实际渲染略高于纯函数估算时，最高那排（通常是最下一排）的文字底部会被裁掉几像素 */
   var BLOCK_HEIGHT_SLACK = 4;
@@ -175,6 +177,7 @@
     var RESIZE_HANDLE_MIN_W = 40;
     var touchDrag = null;
     var touchGhost = null;
+    var revealTimer = 0;          // 类别清单跳转后的高亮计时
 
     /* US-24 / DM-25：展开卡临时脱离裁切上下文（模块缺失或无 rect 时降级为原位展开） */
     var pinner = (Overlay && typeof Overlay.createExpandPinner === 'function')
@@ -513,22 +516,41 @@
     }
 
     /**
-     * 2026-10-30：时间轴的纵向拉伸。
-     * 卡片按视口高度固定后，若轨道仍按内容高度排版，底部会空出一大片纸 ——
-     * 参考图里时间轴是视觉中心，所以把富余高度先摊给组间距（≤22px），
-     * 剩下的均摊进每条道。只在桌面分栏生效；窄屏保持内容高度。
+     * 2026-11-04（用户口径）：块群撑不满时间轴高度时**整体垂直居中**。
+     * 旧口径（2026-10-30）把富余高度均摊进每条道，但块高按内容收紧后仍贴着各道顶部：
+     * 单条事项贴时间轴上沿、下面空一大片；两条并发还会被拉开七十多像素。现在富余高度
+     * 只用于整体位移 —— 并发事项作为一整块居中，道与道之间仍只留 BLOCK_GAP。
      */
-    function stretchTimeline(geometry, laid, groups, rate) {
-      if (!els.scroll || !laid || !laid.groups || !laid.groups.length) return null;
-      if (typeof root !== 'undefined' && root.innerWidth && root.innerWidth < 1024) return null;
-      var rulerH = (els.ruler && els.ruler.offsetHeight) || 30;
-      var avail = els.scroll.clientHeight - rulerH;
-      var extra = avail - laid.height;
-      if (!(extra > 10)) return null;
-      var lanes = Math.max(1, Number(laid.laneCount) || 1);
-      var laneExtra = extra / lanes;
-      var next = layoutGroups(geometry, groups, rate, { laneExtra: laneExtra });
-      return (next && next.height > laid.height + 1) ? next : null;
+    function centerShiftFor(laid, blockHeights, contentHeight) {
+      if (!laid || !laid.groups || !laid.groups.length) return 0;
+      var top = Infinity;
+      var bottom = -Infinity;
+      laid.groups.forEach(function (group, gi) {
+        var groupTop = Math.round(Number(group.top) || 0);
+        (group.items || []).forEach(function (item, ii) {
+          var h = Number(blockHeights[gi] && blockHeights[gi][ii]);
+          if (!isFinite(h) || h <= 0) return;
+          var t = groupTop + Math.round(Number(item.top) || 0);
+          if (t < top) top = t;
+          if (t + h > bottom) bottom = t + h;
+        });
+      });
+      if (!isFinite(top) || !isFinite(bottom)) return 0;
+      var free = contentHeight - (bottom - top) - top;
+      return free >= CENTER_MIN_FREE ? Math.round(free / 2) : 0;
+    }
+
+    /** 逐块先算好渲染高（与后面建节点同源），居中与节点样式共用同一份结果。 */
+    function blockHeightsFor(laid) {
+      return laid.groups.map(function (group) {
+        var laneHeight = Math.max(LANE_HEIGHT_MIN, Number(group.laneHeight) || LANE_HEIGHT_MIN);
+        var laneBlockH = Math.max(BLOCK_HEIGHT_MIN, laneHeight - BLOCK_GAP);
+        return (group.items || []).map(function (item) {
+          var laneCap = Number(item.laneBlockH);
+          if (!isFinite(laneCap) || laneCap <= 0) laneCap = laneBlockH;
+          return blockHeightFor(item, laneCap);
+        });
+      });
     }
 
     /**
@@ -543,7 +565,7 @@
      * 但容器的 [top, top+height) 现在只覆盖该类别实际用到的道，**允许与其他容器重叠**；
      * 容器的 pointer-events 已交给块自身（见 styles/views.css），不会挡住别组的事项。
      *
-     * 道高逐道按**本道**内容定（跨类别取最高），富余高度由 stretch 均摊到各道。
+     * 道高逐道按**本道**内容定（跨类别取最高），富余高度不再摊进道（2026-11-04 起改为块群整体垂直居中）。
      */
     function assignSharedLanes(blocks) {
       if (Layout && typeof Layout.greedyAssignLanes === 'function') {
@@ -584,7 +606,7 @@
     }
 
     /** 跨类别分道 + 逐道定高 + 回填各类别容器（2026-11-02，取代按类别堆叠的行组排布）。 */
-    function layoutGroups(geometry, groups, rate, stretch) {
+    function layoutGroups(geometry, groups, rate) {
       var ordered = groups.slice();
       var pin = urgentCategoryId();          /* v2 由 pinFirst 处理；v1 在此本地前置（幂等） */
       if (pin) {
@@ -595,9 +617,6 @@
       }
 
       var minBlockWidth = Number(Layout.DEFAULT_MIN_BLOCK_WIDTH) || 12;
-      var extra = stretch || {};
-      var laneExtra = Math.max(0, Number(extra.laneExtra) || 0);
-
       /* 1) 所有类别的事项拼成一列（输入序 = 类别序，只影响完全同时段时的先后） */
       var blocks = [];
       ordered.forEach(function (g, gi) {
@@ -629,7 +648,7 @@
       for (var L2 = 0; L2 < laneCount; L2 += 1) {
         var laneH = groupLaneHeightFor('', laneItems[L2],
           groupWrapWidth(geometry, laneItems[L2], minBlockWidth), geometry);
-        laneH = Math.max(LANE_HEIGHT_MIN, Number(laneH) || LANE_HEIGHT_MIN) + laneExtra;
+        laneH = Math.max(LANE_HEIGHT_MIN, Number(laneH) || LANE_HEIGHT_MIN);
         laneTops[L2] = y;
         laneHeights[L2] = laneH;
         y += laneH;
@@ -899,11 +918,17 @@
 
       var groups = Layout.layoutDayGroups(timed, categoryOrder(), { pinFirst: urgentCategoryId() });
       var laid = layoutGroups(geometry, groups, rate);
-      /* 装不下就先长高面板（读 clientHeight 会顺带把新高度落到布局里），再分配富余 */
+      /* 装不下就先长高面板（读 clientHeight 会顺带把新高度落到布局里） */
       fitPanelToContent(laid.height);
-      /* 2026-10-30（用户口径）：时间轴是页面主体 —— 桌面端把卡片富余高度摊进道高 */
-      var stretched = stretchTimeline(geometry, laid, groups, rate);
-      if (stretched) laid = stretched;
+      /* 2026-11-04（用户口径）：块撑不满时间轴高度时整体垂直居中。
+         桌面档轨道仍铺满滚动区（整点竖线 /「现在」线贯通），块群在轨道里居中；
+         窄屏轨道由内容撑高，不做「按自身高度回写」（否则一轮轮长高）。 */
+      var rulerH = (els.ruler && els.ruler.offsetHeight) || 0;
+      var availH = Math.max(0, (els.scroll ? els.scroll.clientHeight : 0) - rulerH);
+      var contentHeight = Math.max(laid.height, LANE_HEIGHT_MIN);
+      if ((Number(root.innerWidth) || 0) >= 1024 && availH > contentHeight) contentHeight = availH;
+      var blockHeights = blockHeightsFor(laid);
+      var centerShift = centerShiftFor(laid, blockHeights, contentHeight);
 
       /* ADR-19：inner 宽 = 类别名列宽 + 轴长（美化迭代 10：labelWidth 恒 0）。
          空日程时 computeAxisGeometry 返回 null，Number(null) === 0 能骗过 isFinite，
@@ -923,8 +948,6 @@
 
       var hasTimed = timed.length > 0 && !!geometry;
       /* 迭代 4（S24 / AC-20.1）：时间轴区不再有任何"没有排定时间的事项"占位文案。 */
-
-      var contentHeight = Math.max(laid.height, LANE_HEIGHT_MIN);
 
       if (!hasTimed) {
         /* 空态（BR-28 / AC-20.1）：时间轴区内不出现任何占位文案，只保留整日刻度与网格线。
@@ -956,13 +979,11 @@
       });
 
       var toPin = [];
-      laid.groups.forEach(function (group) {
+      laid.groups.forEach(function (group, gi) {
         var cat = cats[group.categoryId] || { name: '未分类', color: '#94a3b8' };
         var laneHeight = Math.max(LANE_HEIGHT_MIN, Number(group.laneHeight) || LANE_HEIGHT_MIN);
         var groupHeight = Math.max(Number(group.height) || laneHeight, laneHeight);
-        /* 道内块高的**上限**；逐块再按自身内容收紧（见 blockHeightFor） */
-        var laneBlockH = Math.max(BLOCK_HEIGHT_MIN, laneHeight - BLOCK_GAP);
-        var groupTop = Math.round(Number(group.top) || 0);
+        var groupTop = Math.round(Number(group.top) || 0) + centerShift;
 
         var box = el('div', {
           class: 'tl-typegroup',
@@ -972,14 +993,13 @@
         setPx(box, 'top', groupTop);
         setPx(box, 'height', groupHeight);
 
-        group.items.forEach(function (item) {
+        group.items.forEach(function (item, ii) {
           var occ = item.occ;
           var expanded = isExpanded(occ.key);
           /* 2026-10-20（用户反馈）：块高按自身内容走，道高只是上限；
-             2026-10-31：上限改为**本道自己的**高度（逐道定高后每道不同）。 */
-          var laneCap = Number(item.laneBlockH);
-          if (!isFinite(laneCap) || laneCap <= 0) laneCap = laneBlockH;
-          var blockHeight = blockHeightFor(item, laneCap);
+             2026-10-31：上限改为**本道自己的**高度（逐道定高后每道不同）。
+             2026-11-04：渲染高由 blockHeightsFor 预计算（居中要按它量块群上下沿）。 */
+          var blockHeight = blockHeights[gi][ii];
           var node = buildCard(occ, {
             variant: 'block',
             cats: cats,
@@ -1350,6 +1370,59 @@
         if (nodes[i].getAttribute && nodes[i].getAttribute('data-occ-key') === key) return nodes[i];
       }
       return null;
+    }
+
+    /**
+     * 2026-11-05（用户口径）：从设置的类别清单跳过来时，把目标事项摆到看得见的位置。
+     * 定时块先把所在道横向滚到视口中部（并发多时时间轴宽于视口），再纵向滚到视口中部；
+     * 未排时段直接滚卡片。高亮 1.8 秒后褪去，不留常驻标记。
+     * @returns {boolean} 找到了目标节点
+     */
+    function revealOccurrence(key) {
+      if (!key) return false;
+      var node = blockNodeFor(key);
+      var untimed = false;
+      if (!node && els.untimedList) {
+        var cards = els.untimedList.querySelectorAll('.untimed-item');
+        for (var i = 0; i < cards.length; i += 1) {
+          if (cards[i].getAttribute && cards[i].getAttribute('data-occ-key') === key) {
+            node = cards[i];
+            untimed = true;
+            break;
+          }
+        }
+      }
+      if (!node) return false;
+
+      if (!untimed && els.scroll
+          && typeof node.getBoundingClientRect === 'function'
+          && typeof els.scroll.getBoundingClientRect === 'function') {
+        var nr = node.getBoundingClientRect();
+        var sr = els.scroll.getBoundingClientRect();
+        if (nr.width > 0) {
+          var delta = (nr.left + nr.width / 2) - (sr.left + sr.width / 2);
+          els.scroll.scrollLeft = Math.max(0, Math.round(els.scroll.scrollLeft + delta));
+        }
+      }
+      if (typeof node.scrollIntoView === 'function') {
+        try {
+          node.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
+        } catch (e) {
+          try { node.scrollIntoView({ block: 'center', inline: 'nearest' }); }
+          catch (e2) { try { node.scrollIntoView(); } catch (e3) { /* 无滚动能力 */ } }
+        }
+      }
+
+      if (node.classList) {
+        node.classList.remove('is-revealed');
+        void node.offsetWidth;          /* 重触发动画（同一节点连续跳两次时） */
+        node.classList.add('is-revealed');
+        clearTimeout(revealTimer);
+        revealTimer = setTimeout(function () {
+          if (node.classList) node.classList.remove('is-revealed');
+        }, 1800);
+      }
+      return true;
     }
 
     /* ---- 跟随指针的时间胶囊（与「现在」胶囊同一套鼠尾草配色） ---- */
@@ -3050,6 +3123,8 @@
       banner: banner,
       openEdit: openEdit,
       renderTimeline: renderTimeline,
+      /** 2026-11-05：类别清单跳转后在日视图里定位并高亮目标事项 */
+      revealOccurrence: revealOccurrence,
       /** 事项完成台实例（冒烟断言与后续扩展用；模块缺失时为 null） */
       finishDock: function () { return dock; },
       /** 倒计时实例（五十一轮，冒烟断言用；模块缺失时为 null） */

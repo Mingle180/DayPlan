@@ -657,6 +657,123 @@
     return expandSeries(fake, range);
   }
 
+  /* ------------------------------------------------------------------ *
+   * 类别清单（2026-11-05 用户口径）
+   *
+   * 「设置 → 类别」点开一个类别，列出它下面**每个事项一条**；重复事项只取
+   * 距今天最近的一次（用户选择了「每个事项一条」，避免每天 / 每周重复把列表撑爆）。
+   * 排序：日期升序 → 当天时间升序 → 未定时间排当天末尾 → key。
+   * 返回 { rows, nearestKey }：每行附 distanceMinutes（距「今天 nowMinutes」的绝对分钟差），
+   * nearestKey 是距离最小的那一行，供列表初始滚动到「距今最近的一项」。
+   * ------------------------------------------------------------------ */
+
+  /** 任一种重复规则在 420 天内至少命中一次（年 / 农历年最大间隔 < 400 天）。 */
+  var NEAREST_WINDOW_DAYS = 420;
+
+  /** 重复事项距 todayISO 最近的一次：先看未来一年，再看过去一年，都空时退到规则首 / 尾附近。 */
+  function nearestSeriesOccurrence(series, todayISO) {
+    var forward = expandSeries(series, {
+      from: todayISO, to: dt.addDays(todayISO, NEAREST_WINDOW_DAYS), max: 500
+    }).occurrences;
+    var backward = expandSeries(series, {
+      from: dt.addDays(todayISO, -NEAREST_WINDOW_DAYS), to: todayISO, max: 500
+    }).occurrences;
+    var picks = [];
+    if (forward.length) picks.push(forward[0]);
+    if (backward.length) picks.push(backward[backward.length - 1]);
+    if (!picks.length) {
+      var repeat = series.repeat || {};
+      /* 规则整体落在窗口之外：还没开始 → 第一次；已经结束 → 最后一次。 */
+      var startsLater = dt.isValidDate(repeat.startDate) && repeat.startDate > todayISO;
+      if (!startsLater && dt.isValidDate(repeat.endDate)) {
+        var tail = expandSeries(series, {
+          from: dt.addDays(repeat.endDate, -NEAREST_WINDOW_DAYS), to: repeat.endDate, max: 500
+        }).occurrences;
+        if (tail.length) picks.push(tail[tail.length - 1]);
+      }
+      if (!picks.length && dt.isValidDate(repeat.startDate)) {
+        var head = expandSeries(series, {
+          from: repeat.startDate, to: dt.addDays(repeat.startDate, NEAREST_WINDOW_DAYS), max: 1
+        }).occurrences;
+        if (head.length) picks.push(head[0]);
+      }
+    }
+    if (!picks.length) return null;
+    var best = picks[0];
+    var bestGap = Math.abs(dt.diffDays(best.date, todayISO));
+    for (var i = 1; i < picks.length; i++) {
+      var gap = Math.abs(dt.diffDays(picks[i].date, todayISO));
+      /* 同等距离保留未来那次（picks[0] 是未来侧）——用户更可能关心接下来要做的。 */
+      if (gap < bestGap) { best = picks[i]; bestGap = gap; }
+    }
+    return best;
+  }
+
+  /**
+   * 类别清单。
+   * @param {object} doc 完整文档
+   * @param {string} categoryId
+   * @param {{todayISO?:string, nowMinutes?:number, hideDone?:boolean}} [opts]
+   * @returns {{rows:Array, nearestKey:string|null, today:string}}
+   */
+  function categoryListing(doc, categoryId, opts) {
+    opts = opts || {};
+    var todayISO = dt.isValidDate(opts.todayISO) ? opts.todayISO : dt.todayISO();
+    var nowMinutes = (typeof opts.nowMinutes === 'number' && isFinite(opts.nowMinutes))
+      ? opts.nowMinutes : (function () {
+        var now = new Date();
+        return now.getHours() * 60 + now.getMinutes();
+      })();
+    var items = doc && Array.isArray(doc.items) ? doc.items : [];
+    var rows = [];
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      if (!it || it.categoryId !== categoryId) continue;
+      var occ = null;
+      if (it.kind === 'single') {
+        if (!dt.isValidDate(it.date)) continue;
+        occ = singleToOccurrence(it);
+      } else if (it.kind === 'series') {
+        occ = nearestSeriesOccurrence(it, todayISO);
+      }
+      if (!occ) continue;
+      if (opts.hideDone && occ.done) continue;
+      /* 发生的 time 是 { start, end }（单次事项直接沿用同一形状）；未定时间为 null。 */
+      var startText = occ.time && typeof occ.time === 'object' ? occ.time.start
+        : (typeof occ.time === 'string' ? occ.time : null);
+      var minutes = startText ? dt.minutesOf(startText) : null;
+      var distance = Math.abs(dt.diffDays(occ.date, todayISO) * 1440
+        + (minutes === null ? 12 * 60 : minutes) - nowMinutes);
+      rows.push({
+        key: occ.key,
+        itemId: occ.seriesId,
+        kind: occ.kind,
+        date: occ.date,
+        time: minutes === null ? null : startText,
+        sortMinutes: minutes === null ? 24 * 60 : minutes,
+        title: occ.title,
+        done: !!occ.done,
+        repeatLabel: occ.repeatLabel || null,
+        showRepeat: !!occ.showRepeat,
+        distanceMinutes: distance
+      });
+    }
+    rows.sort(function (a, b) {
+      if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+      if (a.sortMinutes !== b.sortMinutes) return a.sortMinutes - b.sortMinutes;
+      return a.key < b.key ? -1 : (a.key > b.key ? 1 : 0);
+    });
+    var nearestKey = null;
+    var best = Infinity;
+    var bestDate = null;
+    for (var r = 0; r < rows.length; r++) {
+      var d = rows[r].distanceMinutes;
+      var preferFuture = d === best && bestDate !== null && bestDate < todayISO && rows[r].date >= todayISO;
+      if (d < best || preferFuture) { best = d; bestDate = rows[r].date; nearestKey = rows[r].key; }
+    }
+    return { rows: rows, nearestKey: nearestKey, today: todayISO };
+  }
+
   return {
     MAX_OCCURRENCES_PER_QUERY: MAX_OCCURRENCES_PER_QUERY,
     LUNAR_MIN_YEAR: LUNAR_MIN_YEAR,
@@ -680,6 +797,7 @@
     monthMarkers: monthMarkers,
     buildOccurrence: buildOccurrence,
     singleToOccurrence: singleToOccurrence,
+    categoryListing: categoryListing,
     repeatLabel: repeatLabel,
     lunarDayCN: lunarDayCN,
     probeSeries: probeSeries,
