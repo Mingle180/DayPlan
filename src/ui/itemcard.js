@@ -13,7 +13,9 @@
  *   "week"  → div.wk-item      内含 div.wk-time / div.wk-title
  *
  * 展开态（ctx.expanded === true）：在根元素内追加 div.item-detail，依序为
- *   div.item-note → div.item-actions（紧急 / 修改 / 删除 / [复原] / 收起）。
+ *   div.item-note → div.item-actions（紧急 / 修改 / 删除 / [复原]）。
+ *   紧急按钮：非紧急事项显示「紧急」；后来转入的紧急显示「取消紧急」；
+ *   **创建时就选紧急**的事项没有原类别可还原，不渲染该按钮。
  *   复原仅 occ.dirty === true 时渲染。
  *
  * 迭代 4（AC-27.5）：不再渲染 ★/☆ 与 .item-star；紧急项在折叠态显示
@@ -146,6 +148,19 @@
   }
 
   function isUrgent(occ) { return !!occ && occ.categoryId === urgentCategoryId(); }
+
+  /**
+   * 「取消紧急」只对**后来转入紧急**的事项开放：store 转入时记下 meta.previousCategoryId，
+   * recurrence 把它带到发生的 urgentPreviousCategoryId 上。创建时就选紧急的事项没有原类别，
+   * 不提供撤销按钮（仍可点「修改」改类别）。
+   */
+  function canCancelUrgent(occ) {
+    if (!occ) return false;
+    /* recurrence 明确给出 null：创建时就选紧急，没有可还原的原类别 → 不提供撤销。
+       字段缺失（旧数据 / 独立使用本组件的调用方）保持原行为，仍显示按钮。 */
+    if (occ.urgentPreviousCategoryId === null) return false;
+    return true;
+  }
 
   /**
    * 类别色 -> 色板三件套（DM-25 / 2026-10-30）。
@@ -399,7 +414,9 @@
   var DAY_NARROW_W = 120;       /* 日视图「较窄」口径：低于此宽度的块竖排按钮 */
 
   function actionCount(occ, ctx) {
-    return shouldOfferRestore(occ, ctx) ? 4 : 3;
+    /* 2 = 修改 / 删除；紧急按钮只在「非紧急」或「可撤销的紧急」时出现。 */
+    var count = 2 + ((!isUrgent(occ) || canCancelUrgent(occ)) ? 1 : 0);
+    return shouldOfferRestore(occ, ctx) ? count + 1 : count;
   }
 
   /**
@@ -497,19 +514,22 @@
     }
 
     // 1) 紧急（迭代 4 / AC-27.5）：文案跟随类别名（设置里可改名），优先回调 ctx.onToggleUrgent
-    actions.appendChild(el('button', {
-      class: 'btn' + (urgent ? ' is-on' : ''),
-      type: 'button',
-      text: urgent ? '取消' + urgentLabel : urgentLabel,
-      title: urgent ? '取消' + urgentLabel + '（还原原类别）' : '列入' + urgentLabel,
-      'aria-label': urgent ? '取消' + urgentLabel : '列入' + urgentLabel,
-      onclick: function (e) {
-        e.stopPropagation();
-        var handler = (typeof ctx.onToggleUrgent === 'function') ? ctx.onToggleUrgent
-          : (typeof ctx.onToggleStar === 'function' ? ctx.onToggleStar : null); // 过渡兼容
-        if (handler) handler(occ);
-      }
-    }));
+    //    创建时就是紧急的事项没有「原类别」可还原，不再提供「取消紧急」。
+    if (!urgent || canCancelUrgent(occ)) {
+      actions.appendChild(el('button', {
+        class: 'btn' + (urgent ? ' is-on' : ''),
+        type: 'button',
+        text: urgent ? '取消' + urgentLabel : urgentLabel,
+        title: urgent ? '取消' + urgentLabel + '（还原原类别）' : '列入' + urgentLabel,
+        'aria-label': urgent ? '取消' + urgentLabel : '列入' + urgentLabel,
+        onclick: function (e) {
+          e.stopPropagation();
+          var handler = (typeof ctx.onToggleUrgent === 'function') ? ctx.onToggleUrgent
+            : (typeof ctx.onToggleStar === 'function' ? ctx.onToggleStar : null); // 过渡兼容
+          if (handler) handler(occ);
+        }
+      }));
+    }
 
     // 2) 修改（迭代 6 / F-37）：先收起本卡的展开态，再打开编辑表单 ——
     //    否则 fixed 展开浮层会压住随后弹出的编辑弹窗（用户截图 D6）

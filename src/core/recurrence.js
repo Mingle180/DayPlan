@@ -306,6 +306,11 @@
    */
   function buildOccurrence(series, dateISO, ex) {
     var label = repeatLabel(series.repeat, series.meta);
+    /* 「取消紧急」只对**后来转入紧急**的事项开放（BR-38）：创建时就选紧急的没有原类别，
+       这里把原类别带到发生上，供卡片决定是否渲染该按钮。 */
+    var prevCat = null;
+    if (ex && ex.categoryId !== undefined) prevCat = ex.meta ? ex.meta.previousCategoryId : null;
+    else if (series.meta) prevCat = series.meta.previousCategoryId;
     var occ = {
       key: series.id + '@' + dateISO,
       seriesId: series.id,
@@ -316,9 +321,11 @@
       time: series.time || null,
       note: typeof series.note === 'string' ? series.note : '',
       order: typeof series.order === 'number' ? series.order : 0,
+      createdAt: typeof series.createdAt === 'string' ? series.createdAt : '',
       done: !!series.done,
       starred: !!series.starred,
       dirty: false,
+      urgentPreviousCategoryId: (typeof prevCat === 'string' && prevCat) ? prevCat : null,
       // 周计划（ADR-11 / DM-6.3）：meta.origin 仅影响文案与标识，不影响展开
       repeatLabel: label,
       /* 四十五轮：是否在事项上显示重复类型与起止日期。缺省显示（兼容旧数据 /
@@ -350,11 +357,14 @@
       time: item.time || null,
       note: typeof item.note === 'string' ? item.note : '',
       order: typeof item.order === 'number' ? item.order : 0,
+      createdAt: typeof item.createdAt === 'string' ? item.createdAt : '',
       done: !!item.done,
       starred: !!item.starred,
       dirty: false,
       repeatLabel: null,
       showRepeat: false,
+      urgentPreviousCategoryId: (item.meta && typeof item.meta.previousCategoryId === 'string' && item.meta.previousCategoryId)
+        ? item.meta.previousCategoryId : null,
       origin: item.meta ? item.meta.origin : undefined
     };
   }

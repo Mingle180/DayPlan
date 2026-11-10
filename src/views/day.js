@@ -883,6 +883,33 @@
       sc.classList.add('is-vscroll');
     }
 
+    /* 反向兜底（2026-11-09 用户反馈「时间轴没有上下顶满」）：
+       轨道高是渲染那一刻按滚动区量出来的；面板随后长高（底行异步渲染 / 右栏图片加载 /
+       换窗或缩放）时滚动区变高而轨道不变，整点竖线与「现在」线就停在半空、卡底留一条
+       没有网格的纸色。这里补「不足」：把轨道补到滚动区底，块群整体下移 gap/2 保持居中。
+       窄屏滚动区由内容撑高，富余只有内边距（≤8px），不会触发，也就不会自增高。 */
+    var gapFillRounds = 0;
+    function fillTimelineGap() {
+      var sc = els.scroll;
+      if (!sc || !els.track) return;
+      if (!(els.track.offsetHeight > 0)) return;
+      /* 纵向滚动兜底开着时，底部横向滚动条会被算成富余，补高只会越补越挤 */
+      if (sc.classList && sc.classList.contains('is-vscroll')) return;
+      var gap = (sc.getBoundingClientRect().bottom || 0) - (els.track.getBoundingClientRect().bottom || 0);
+      if (!(gap > 8)) { gapFillRounds = 0; return; }
+      if (gapFillRounds >= 2) return;
+      gapFillRounds += 1;
+      els.track.style.height = Math.round((els.track.offsetHeight || 0) + gap) + 'px';
+      /* 展开卡由 pin 覆盖层按原块位置跟位，挪组会让覆盖层与占位错开 */
+      if (els.track.querySelector('.tl-block.is-expanded')) return;
+      var shift = gap / 2;
+      var groups = els.track.querySelectorAll('.tl-typegroup');
+      for (var i = 0; i < groups.length; i += 1) {
+        var top = parseFloat(groups[i].style.top);
+        if (isFinite(top)) groups[i].style.top = Math.round(top + shift) + 'px';
+      }
+    }
+
     function renderTimeline() {
       var doc = currentDoc();
       var cats = categoryMap();
@@ -964,6 +991,7 @@
         els.track.style.height = contentHeight + 'px';
         renderGridlines(null, rate);
         ensureTimelineFits();
+        fillTimelineGap();
         updateNowLine();
         return;
       }
@@ -1078,8 +1106,10 @@
         }
       }
 
-      /* 兜底：轨道比可视区高时先垫高面板，仍装不下就让时间轴纵向可滚 —— 不许裁掉底部事项 */
+      /* 兜底：轨道比可视区高时先垫高面板，仍装不下就让时间轴纵向可滚 —— 不许裁掉底部事项；
+         轨道比可视区矮时补满，避免卡底留一条没有网格的纸色 */
       ensureTimelineFits();
+      fillTimelineGap();
       updateNowLine();
       /* 垫面板 / 加滚动条都可能改写容器的矩形：收进容器的展开卡再量一次 */
       if (pinner) pinner.sync();
@@ -3071,7 +3101,12 @@
       }, 160);
     }
     if (typeof root.addEventListener === 'function') root.addEventListener('resize', scheduleReflow);
-    var viewportPoll = setInterval(scheduleReflow, 400);
+    /* 窗口不可见时 Chromium 会冻结 rAF / ResizeObserver 回调，补满只能等下一次重绘；
+       这条 400ms 轮询在恢复可见后立刻补上，不必等用户改窗或切日期。 */
+    var viewportPoll = setInterval(function () {
+      scheduleReflow();
+      fitTimelineNow();
+    }, 400);
     if (viewportPoll && typeof viewportPoll.unref === 'function') viewportPoll.unref();
 
     /* 2026-10-31（用户反馈「刷新之后还是会被遮挡」）：
@@ -3082,6 +3117,12 @@
        这里直接盯住滚动区与面板本身，尺寸一变就在下一帧复检（幂等，装得下就什么都不做）。 */
     var fitRaf = 0;
     var fitObserver = null;
+    function fitTimelineNow() {
+      if (els.panel && els.panel.hidden) return;
+      if (els.panel && !els.panel.isConnected) return;
+      ensureTimelineFits();
+      fillTimelineGap();
+    }
     function scheduleFitCheck() {
       if (fitRaf) return;
       var raf = (typeof root.requestAnimationFrame === 'function')
@@ -3089,9 +3130,7 @@
         : function (fn) { return setTimeout(fn, 16); };
       fitRaf = raf(function () {
         fitRaf = 0;
-        if (els.panel && els.panel.hidden) return;
-        if (els.panel && !els.panel.isConnected) return;
-        ensureTimelineFits();
+        fitTimelineNow();
       });
     }
     if (typeof root.ResizeObserver === 'function') {

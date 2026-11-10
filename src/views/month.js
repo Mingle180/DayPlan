@@ -1892,7 +1892,13 @@
     /** 重绘（数据或设置变化时由 app 调用）：窗口与滚动位置不变。 */
     function refresh() {
       invalidateMarkers();
+      /* 重建列表会清空 innerHTML，桌面端 scrollTop 随之归零（手机端滚的是页面）。
+         先记住当前位置，重建后原样恢复 —— 否则新建月计划后会跳到窗口首列（2024-01）。 */
+      var internal = internalScrolls();
+      var top = internal ? (scrollEl.scrollTop || 0) : pageScrollTop();
       render();
+      if (internal) setScrollTop(top);
+      else if (top > 0) scrollPageTo(top);
     }
 
     /**

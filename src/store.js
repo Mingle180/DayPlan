@@ -501,9 +501,18 @@
       return i < 0 ? null : clone(state.categories[i]);
     }
 
-    function nextOrderFor(draft, date) {
+    function nextOrderFor(draft, date, untimed) {
       var max = -1;
       draft.items.forEach(function (it) {
+        /* 未排事项：把同一天的单次事项与**起算日不晚于当日**的重复事项都算进基准，
+           新建事项才能稳定落到队尾。只认 startDate=当日 会漏掉更早起算、被手动排过序的
+           重复事项，新建事项就会插到它们中间。 */
+        if (untimed) {
+          if (it.kind === 'single' && it.date === date) max = Math.max(max, it.order || 0);
+          if (it.kind === 'series' && it.repeat && it.repeat.startDate &&
+            it.repeat.startDate <= date) max = Math.max(max, it.order || 0);
+          return;
+        }
         if (it.kind === 'single' && it.date === date) max = Math.max(max, it.order || 0);
         if (it.kind === 'series' && it.repeat && it.repeat.startDate === date) max = Math.max(max, it.order || 0);
       });
@@ -524,7 +533,7 @@
       mutate(function (draft) {
         if (typeof item.order !== 'number' || !isFinite(item.order)) {
           var anchor = item.kind === 'single' ? item.date : (item.repeat && item.repeat.startDate);
-          item.order = nextOrderFor(draft, anchor);
+          item.order = nextOrderFor(draft, anchor, !item.time);
         }
         draft.items.push(item);
       });
