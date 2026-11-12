@@ -675,7 +675,11 @@
       card.appendChild(el('div', { class: 'wk-time', text: occ.time ? occ.time.start + '–' + occ.time.end : '' }));
       card.appendChild(el('div', { class: 'wk-title', text: occ.title || '' }));
       /* 迭代 4（S31.4 / AC-27.5）：星标 UI 下线，降级卡也不渲染 ★ */
-      card.addEventListener('click', function () { setExpanded(occ, !isExpanded(occ)); });
+      /* 第四十二轮 F-94：降级卡同样单击直达编辑 */
+      card.addEventListener('click', function () {
+        if (dragSuppressUntil && Date.now() < dragSuppressUntil) return;
+        openEdit(occ);
+      });
       return card;
     }
 
@@ -711,7 +715,11 @@
             onToggleDone: function (o) { toggleDone(o); },
             /* 迭代 4（S31 / AC-27.5）：itemcard 的按钮为「紧急 / 取消紧急」 */
             onToggleUrgent: function (o) { toggleUrgent(o); },
-            onEdit: function (o) { openEdit(o); },
+            onEdit: function (o) {
+              /* 拖到周网格后浏览器可能补发 click：忽略这一次，避免误开编辑弹窗 */
+              if (dragSuppressUntil && Date.now() < dragSuppressUntil) return;
+              openEdit(o);
+            },
             onRemove: function (o) { removeOccurrence(o); },
             onRestoreDefault: function (o) { restoreDefault(o); },
             /* 迭代 7（F-45 第 6 条 / R-23）：只设紧急未做其他改动 → 不渲染「复原」 */
@@ -1673,7 +1681,11 @@
       M.toast('已恢复为规则默认');
     }
 
-    function removeOccurrence(occ) {
+    /** @param {function} [onDeleted] 真正删除成功后回调（编辑弹窗据此关闭） */
+    function removeOccurrence(occ, onDeleted) {
+      var done = function () {
+        if (typeof onDeleted === 'function') onDeleted();
+      };
       var item = findItemFor(occ);
       if (!item) return;
       var snapshot = null;
@@ -1687,6 +1699,7 @@
           snapshot = JSON.stringify(item);
           store.removeItem(item.id);
           afterWrite();
+          done();
           M.toast('已删除', {
             actionLabel: '撤销',
             onAction: function () { store.addItem(JSON.parse(snapshot)); afterWrite(); }
@@ -1698,6 +1711,7 @@
         if (scope === 'only') {
           store.addSeriesException(item.id, occ.date, { deleted: true });
           afterWrite();
+          done();
           M.toast('已删除此次', {
             actionLabel: '撤销',
             onAction: function () { store.removeSeriesException(item.id, occ.date); afterWrite(); }
@@ -1712,6 +1726,7 @@
           if (!ok) return;
           store.splitSeriesAt(item.id, occ.date, 'delete');
           afterWrite();
+          done();
           M.toast('已删除此次及以后的重复');
         });
       });
@@ -1746,9 +1761,19 @@
       }
       if (!form || !form.element) { M.toast('编辑表单尚未就绪'); return; }
 
-      M.open({
+      var handle = null;
+      /* 第四十二轮 F-95：删除入口并入编辑弹窗 */
+      var delBtn = el('button', {
+        class: 'btn btn-danger', type: 'button', text: '删除',
+        onclick: function () {
+          removeOccurrence(occ, function () { if (handle) handle.close('delete'); });
+        }
+      });
+
+      handle = M.open({
         title: '编辑事项',
         body: form.element,
+        footer: [delBtn],
         submitLabel: '保存',
         wide: true,
         onSubmit: function (ctx) {

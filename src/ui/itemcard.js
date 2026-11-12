@@ -578,12 +578,17 @@
     if (typeof ctx.onToggleExpand === 'function') ctx.onToggleExpand(occ, next);
   }
 
-  /** 单击非紧急角标、非展开区 → onToggleExpand(occ, !ctx.expanded)（契约 4）。 */
+  /** 单击非紧急角标、非展开区 → 直接打开编辑表单（第四十二轮 F-94：取代点击展开）。 */
   function onRootClick(occ, ctx, expanded, e) {
     var t = e.target;
     if (closestIn(t, '.item-detail')) return;                       // 展开区按钮各自处理
     if (closestIn(t, '.item-urgent-tag')) return;                   // 紧急角标区域
     if (closestIn(t, '.ui-actions')) return;                        // 兼容旧结构（条13 起已不渲染 ▲▼）
+    if (typeof ctx.onEdit === 'function') {
+      ctx.onEdit(occ);
+      return;
+    }
+    /* 未接 onEdit 的降级卡（测试/垫片）保持旧语义 */
     toggleExpand(occ, ctx, !expanded);
   }
 
@@ -599,8 +604,8 @@
 
   /**
    * 键盘（契约 5）：
-   *   Enter / Space 展开（焦点在根元素时；展开区内控件自行处理）
-   *   Esc 收起，并把焦点还给根元素
+   *   Enter / Space 打开编辑表单（焦点在根元素时；展开区内控件自行处理）
+   *   Esc 收起（仅历史展开态），并把焦点还给根元素
    */
   function onRootKeydown(root, occ, ctx, expanded, e) {
     /* 迭代 10 条13：▲▼ 按钮下线后，无时卡片的次序改由列表内拖动 ——
@@ -617,7 +622,8 @@
     if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
       if (e.target !== root) return;
       e.preventDefault();
-      if (!expanded) toggleExpand(occ, ctx, true);
+      if (typeof ctx.onEdit === 'function') ctx.onEdit(occ);
+      else if (!expanded) toggleExpand(occ, ctx, true);
       return;
     }
     if (e.key === 'Escape' || e.key === 'Esc') {
@@ -857,6 +863,8 @@
 
     node.setAttribute('role', 'button');
     node.setAttribute('tabindex', '0');
+    /* 第四十二轮 F-94：单击/回车打开编辑弹窗，不再切换展开态 */
+    if (typeof ctx.onEdit === 'function') node.setAttribute('aria-haspopup', 'dialog');
     node.setAttribute('aria-expanded', expanded ? 'true' : 'false');
     /* 迭代 6（F-39）：勾选框下线后，完成状态仍要能被辅助技术读到 → role=button + aria-pressed */
     node.setAttribute('aria-pressed', occ.done ? 'true' : 'false');

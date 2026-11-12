@@ -540,7 +540,8 @@ html[data-theme='dark'] .lower-row > .finish-dock { background: var(--surface-2)
   transition: box-shadow var(--ease);
 }
 @media (hover: hover) {
-  .cd-item:hover { box-shadow: var(--shadow); z-index: 3; }
+  /* 第四十二轮（用户口径）：倒计时条目同样不上浮 */
+  .cd-item:hover { z-index: 3; }
 }
 .cd-item:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .cd-item.is-dragging { opacity: .45; }
@@ -1053,8 +1054,9 @@ body.is-panning * { cursor: grabbing !important; user-select: none !important; }
   gap: 2px;
   transition: box-shadow var(--ease), transform var(--ease);
 }
+/* 第四十二轮（用户口径）：取消事项块悬停上浮 —— 不再放大、不再抬阴影 */
 @media (hover: hover) {
-  .tl-block:hover { box-shadow: var(--shadow); transform: scale(1.02); z-index: 4; }
+  .tl-block:hover { z-index: 4; }
 }
 .tl-block:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; z-index: 4; }
 /* 美化迭代 10：标题行 = [省略号] + 标题（不省略、可换行）；右侧 36px 让给右上角的两字胶囊 */
@@ -1277,7 +1279,7 @@ body.is-panning * { cursor: grabbing !important; user-select: none !important; }
   gap: 8px;
   padding: 8px 12px;
   /* 2026-10-21 十四轮（用户反馈）：未排事项改成带阴影的白色块；
-     悬停与 .tl-block 同款抬升（--shadow-block → --shadow + scale(1.02)）。 */
+     第四十二轮起悬停不再上浮（保持静态阴影）。 */
   background: var(--surface);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
@@ -1288,7 +1290,8 @@ body.is-panning * { cursor: grabbing !important; user-select: none !important; }
 }
 /* 悬停高亮整行：内层 .ui-main 不再单独高亮（否则只有文字区变色） */
 @media (hover: hover) {
-  .untimed-item:hover { box-shadow: var(--shadow); transform: scale(1.02); z-index: 4; }
+  /* 第四十二轮（用户口径）：取消悬停上浮（原 scale(1.02) + 抬阴影） */
+  .untimed-item:hover { z-index: 4; }
   .untimed-item:hover .ui-main { background: none; }
 }
 .untimed-item.is-done { opacity: .5; }
@@ -1404,7 +1407,8 @@ body.is-panning * { cursor: grabbing !important; user-select: none !important; }
   transition: box-shadow var(--ease), background var(--ease);
 }
 @media (hover: hover) {
-  .wp-item:hover { box-shadow: var(--shadow); z-index: 3; }
+  /* 第四十二轮（用户口径）：计划条目同样不上浮 */
+  .wp-item:hover { z-index: 3; }
 }
 .wp-item:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .wp-item.is-dragging { opacity: .45; }
