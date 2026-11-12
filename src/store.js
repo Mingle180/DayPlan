@@ -509,8 +509,10 @@
            重复事项，新建事项就会插到它们中间。 */
         if (untimed) {
           if (it.kind === 'single' && it.date === date) max = Math.max(max, it.order || 0);
+          /* DM-28：计划模板（addToDays===false）不占未排队位，不计入基准 */
           if (it.kind === 'series' && it.repeat && it.repeat.startDate &&
-            it.repeat.startDate <= date) max = Math.max(max, it.order || 0);
+            it.repeat.startDate <= date &&
+            !(it.meta && it.meta.addToDays === false)) max = Math.max(max, it.order || 0);
           return;
         }
         if (it.kind === 'single' && it.date === date) max = Math.max(max, it.order || 0);

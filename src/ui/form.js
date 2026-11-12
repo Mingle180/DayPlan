@@ -1198,11 +1198,13 @@
     var weekStart = D.isValidDate(opts.weekStart)
       ? opts.weekStart
       : D.startOfWeek(D.isValidDate(opts.date) ? opts.date : D.todayISO());
+    var item = opts.item || null;
 
     /** DM-6.3 / ADR-11：周计划的规则形状（不新增 rule type） */
     function fixedRepeat() {
       var repeat = { type: 'daily', interval: 1, startDate: weekStart, endDate: D.addDays(weekStart, 7) };
-      if (skipLongCheck.checked) {
+      /* DM-28：模板（不添加到每天）不写排除键——不上日历，排除无意义 */
+      if (addToDaysCheck.checked && skipLongCheck.checked) {
         repeat.excludeHolidays = true;
         repeat.excludeWeekends = true;
       }
@@ -1214,12 +1216,19 @@
     var form = el('div', { class: 'item-form week-plan-form' });
     /* 三十四轮：周计划固定 7 天，可选「不含节假日和周末」（同时写两个 repeat 键） */
     var skipLongCheck = el('input', { type: 'checkbox', 'aria-label': '不含节假日和周末' });
+    if (item && item.repeat && (item.repeat.excludeHolidays === true || item.repeat.excludeWeekends === true)) {
+      skipLongCheck.checked = true;
+    }
+    /* 三十九轮（F-87.2）：添加到每天——新建默认不勾选；编辑旧数据缺失视为开 */
+    var addToDaysCheck = el('input', { type: 'checkbox', 'aria-label': '添加到每天' });
+    addToDaysCheck.checked = item ? !(item.meta && item.meta.addToDays === false) : false;
 
     /* ---------------- 标题（必填） ---------------- */
     var titleInput = el('input', {
       type: 'text', maxlength: String(S.TITLE_MAX),
       'aria-label': '标题'
     });
+    if (item) titleInput.value = item.title || '';
     var titleErr = el('div', { class: 'field-error' });
     form.appendChild(el('div', { class: 'field' }, [
       el('label', { class: 'field-label', text: '标题' }), titleInput, titleErr
@@ -1227,7 +1236,7 @@
 
     /* ---------------- 类别（迭代 8 / F-54：删除「列入紧急」，类别下拉是唯一入口） ----------------
      * 用户裁定：已有紧急周计划在编辑保存时按类别下拉的结果走（不再保留旧紧急态）。 */
-    var defaultCategoryId = opts.defaultCategoryId || (categories[0] && categories[0].id) || URGENT_ID;
+    var defaultCategoryId = (item && item.categoryId) || opts.defaultCategoryId || (categories[0] && categories[0].id) || URGENT_ID;
     var catOptions = ensureUrgentOption(categories);
     var catSelect = el('select', { 'aria-label': '类别' });
     catOptions.forEach(function (c) {
@@ -1236,7 +1245,7 @@
       catSelect.appendChild(o);
     });
     var preUrgentCategoryId = isUrgentId(defaultCategoryId)
-      ? ((opts.item && opts.item.meta && opts.item.meta.previousCategoryId) || firstNonUrgentId(catOptions) || defaultCategoryId)
+      ? ((item && item.meta && item.meta.previousCategoryId) || firstNonUrgentId(catOptions) || defaultCategoryId)
       : defaultCategoryId;
     catSelect.addEventListener('change', function () {
       if (catSelect.value !== URGENT_ID) preUrgentCategoryId = catSelect.value;
@@ -1247,8 +1256,8 @@
 
     /* ---------------- 时段（可选；开启时默认 09:00–10:00） ---------------- */
     var timeToggle = el('input', { type: 'checkbox', 'aria-label': '设置起止时间' });
-    var startCtlW = timeFieldControl({ value: '09:00', 'aria-label': '开始时间' });
-    var endCtlW = timeFieldControl({ value: '10:00', 'aria-label': '结束时间' });
+    var startCtlW = timeFieldControl({ value: (item && item.time && item.time.start) || '09:00', 'aria-label': '开始时间' });
+    var endCtlW = timeFieldControl({ value: (item && item.time && item.time.end) || '10:00', 'aria-label': '结束时间' });
     var startInput = startCtlW.input;
     var endInput = endCtlW.input;
     var timeRow = el('div', { class: 'field-row' }, [
@@ -1261,7 +1270,7 @@
       timeRow.style.display = timeToggle.checked ? '' : 'none';
       if (!timeToggle.checked) timeErr.textContent = '';
     }
-    timeToggle.checked = false; // 「可选」= 默认不设时段；开启后取 09:00–10:00
+    timeToggle.checked = !!(item && item.time); // 「可选」= 默认不设时段；开启后取 09:00–10:00
     timeToggle.addEventListener('change', syncTimeVisibility);
     syncTimeVisibility();
     form.appendChild(el('div', { class: 'fieldset' }, [
@@ -1271,11 +1280,19 @@
       timeRow, timeErr
     ]));
 
+    /* ---------------- 添加到每天（三十九轮 / F-87.2） ---------------- */
+    form.appendChild(el('div', { class: 'fieldset week-plan-adddays' }, [
+      el('div', { class: 'inline' }, [
+        el('label', { class: 'switch' }, [addToDaysCheck, el('span', { text: '添加到每天' })])
+      ])
+    ]));
+
     /* ---------------- 备注（≤ 500 字） ---------------- */
     var noteInput = el('textarea', {
       maxlength: String(S.NOTE_MAX), 'aria-label': '备注'
     });
-    noteInput.value = typeof opts.note === 'string' ? opts.note : '';
+    noteInput.value = (item && typeof item.note === 'string') ? item.note
+      : (typeof opts.note === 'string' ? opts.note : '');
     form.appendChild(el('div', { class: 'field' }, [
       el('label', { class: 'field-label', text: '备注' }), noteInput
     ]));
@@ -1284,11 +1301,23 @@
      * 刻意只渲染纯文本（div）：DOM 内没有重复方式 select / radio / button，
      * 也没有单日日期输入，用户无法更改重复方式。 */
     var weekRepeatText = el('div', { class: 'readonly-text', text: '每天（该周 7 天）', 'aria-label': '重复方式（只读）' });
-    skipLongCheck.addEventListener('change', function () {
+    var skipField = el('div', { class: 'field week-plan-skip' }, [
+      el('label', { class: 'switch' }, [skipLongCheck, el('span', { text: '不含节假日和周末' })])
+    ]);
+    function syncRepeatText() {
+      if (!addToDaysCheck.checked) {
+        weekRepeatText.textContent = '暂不添加到每天（拖到某天后生效）';
+        skipField.hidden = true;
+        return;
+      }
+      skipField.hidden = false;
       weekRepeatText.textContent = skipLongCheck.checked
         ? '每天（该周 7 天，跳过节假日和周末）'
         : '每天（该周 7 天）';
-    });
+    }
+    skipLongCheck.addEventListener('change', syncRepeatText);
+    addToDaysCheck.addEventListener('change', syncRepeatText);
+    syncRepeatText();
     form.appendChild(el('div', { class: 'fieldset week-plan-repeat' }, [
       el('div', { class: 'field' }, [
         el('label', { class: 'field-label', text: '重复' }),
@@ -1298,21 +1327,20 @@
         el('label', { class: 'field-label', text: '日期范围' }),
         el('div', { class: 'readonly-text', text: rangeLabel, 'aria-label': '日期范围（只读）' })
       ]),
-      el('div', { class: 'field week-plan-skip' }, [
-        el('label', { class: 'switch' }, [skipLongCheck, el('span', { text: '不含节假日和周末' })])
-      ])
+      skipField
     ]));
 
     /* ---------------- 取值 / 校验 ---------------- */
     function collect() {
       /* 迭代 8 / F-54：紧急与否**只看类别下拉**（与建事项表单同口径；不再有勾选框） */
       var urgentNow = isUrgentId(catSelect.value);
-      var meta = metaFor(opts.item, urgentNow, urgentNow
+      var meta = metaFor(item, urgentNow, urgentNow
         ? (preUrgentCategoryId || firstNonUrgentId(catOptions) || defaultCategoryId)
         : null);
       // 周计划 meta（DM-6.3）：origin / weekStart 由表单补齐，调用方覆盖时以调用方为准
       meta.origin = 'weekPlan';
       meta.weekStart = weekStart;
+      meta.addToDays = addToDaysCheck.checked;
       return {
         title: titleInput.value.trim(),
         categoryId: catSelect.value,
@@ -1387,11 +1415,15 @@
     if (item && item.repeat && (item.repeat.excludeHolidays === true || item.repeat.excludeWeekends === true)) {
       skipLongCheck.checked = true;
     }
+    /* 三十九轮（F-87.2）：添加到每天——新建默认不勾选；编辑旧数据缺失视为开 */
+    var addToDaysCheck = el('input', { type: 'checkbox', 'aria-label': '添加到每天' });
+    addToDaysCheck.checked = item ? !(item.meta && item.meta.addToDays === false) : false;
 
     /** 三十四轮：整月 daily 序列；排除项同时落到两个键上。 */
     function fixedRepeat() {
       var repeat = { type: 'daily', interval: 1, startDate: monthStart, endDate: monthEnd };
-      if (skipLongCheck.checked) {
+      /* DM-28：模板（不添加到每天）不写排除键 */
+      if (addToDaysCheck.checked && skipLongCheck.checked) {
         repeat.excludeHolidays = true;
         repeat.excludeWeekends = true;
       }
@@ -1454,6 +1486,13 @@
       timeRow, timeErr
     ]));
 
+    /* ---------------- 添加到每天（三十九轮 / F-87.2） ---------------- */
+    form.appendChild(el('div', { class: 'fieldset month-plan-adddays' }, [
+      el('div', { class: 'inline' }, [
+        el('label', { class: 'switch' }, [addToDaysCheck, el('span', { text: '添加到每天' })])
+      ])
+    ]));
+
     /* ---------------- 备注 ---------------- */
     var noteInput = el('textarea', { maxlength: String(S.NOTE_MAX), 'aria-label': '备注' });
     noteInput.value = (item && typeof item.note === 'string') ? item.note
@@ -1468,12 +1507,22 @@
       text: '每天（该月 ' + dayCount + ' 天）',
       'aria-label': '重复方式（只读）'
     });
+    var skipField = el('div', { class: 'field month-plan-skip' }, [
+      el('label', { class: 'switch' }, [skipLongCheck, el('span', { text: '不含节假日和周末' })])
+    ]);
     function syncRepeatText() {
+      if (!addToDaysCheck.checked) {
+        monthRepeatText.textContent = '暂不添加到每天（拖到某天后生效）';
+        skipField.hidden = true;
+        return;
+      }
+      skipField.hidden = false;
       monthRepeatText.textContent = skipLongCheck.checked
         ? '每天（该月 ' + dayCount + ' 天，跳过节假日和周末）'
         : '每天（该月 ' + dayCount + ' 天）';
     }
     skipLongCheck.addEventListener('change', syncRepeatText);
+    addToDaysCheck.addEventListener('change', syncRepeatText);
     syncRepeatText();
     form.appendChild(el('div', { class: 'fieldset month-plan-repeat' }, [
       el('div', { class: 'field' }, [
@@ -1483,9 +1532,7 @@
         el('label', { class: 'field-label', text: '日期范围' }),
         el('div', { class: 'readonly-text', text: rangeLabel, 'aria-label': '日期范围（只读）' })
       ]),
-      el('div', { class: 'field month-plan-skip' }, [
-        el('label', { class: 'switch' }, [skipLongCheck, el('span', { text: '不含节假日和周末' })])
-      ])
+      skipField
     ]));
 
     /* ---------------- 取值 / 校验 ---------------- */
@@ -1496,6 +1543,7 @@
         : null);
       meta.origin = 'monthPlan';
       meta.month = monthStart.slice(0, 7);
+      meta.addToDays = addToDaysCheck.checked;
       return {
         title: titleInput.value.trim(),
         categoryId: catSelect.value,

@@ -1533,6 +1533,8 @@
     function autoScrollTick() {
       autoScrollRaf = 0;
       if (!dragPointer || !els.scroll) return;
+      /* 四十一轮 / F-93：拉边期间指针贴边才自动滚动（够到被挡住的时段）；
+         中部 speed=0 → 不滚，维持四十轮「严格静止」。 */
       if (Date.now() < axisAnimatingUntil) {
         autoScrollRaf = rafCall(autoScrollTick);
         return;
@@ -1717,8 +1719,25 @@
           anchorMinute = info.minute;
           anchorX = info.screenX;
         } else if (clientX !== null && clientX !== undefined) {
-          anchorMinute = minuteAtClientX(clientX);
-          anchorX = clientX;
+          /* 四十轮 F-92：拉边展开锚定实区边界（lastEnd/firstStart）而非指针分钟，与周视图
+             expandWeekAxisCore 同口径——指针深入折叠带时既有块屏幕位置仍严格静止；展开后轴
+             1:1 稳定，手柄仍按指针分钟跟随（applyResizeVisual），两者不冲突。 */
+          var ax = axis || {};
+          var lead = Number(ax.leadLength) || 0;
+          var real = Number(ax.realLength) || 0;
+          var trail = Number(ax.trailLength) || 0;
+          var tx = trackX(clientX);
+          var tl = els.track ? els.track.getBoundingClientRect().left : 0;
+          if (trail > 0 && tx > lead + real) {
+            anchorMinute = Number(ax.lastEnd);
+            anchorX = tl + lead + real;
+          } else if (lead > 0 && tx < lead) {
+            anchorMinute = Number(ax.firstStart);
+            anchorX = tl + lead;
+          } else {
+            anchorMinute = minuteAtClientX(clientX);
+            anchorX = clientX;
+          }
         }
       } else if (bandMode && idleBandAnchor) {
         anchorMinute = idleBandAnchor.minute;
@@ -1731,7 +1750,8 @@
       idleDragExpanded = on;
       renderTimeline();
       anchorScrollTo(anchorMinute, anchorX);
-      animateAxisFrom(snap);
+      /* 四十轮 / F-92：拉边期间不做 FLIP 位移帧，既有内容严格静止 */
+      if (!resizeState) animateAxisFrom(snap);
       if (!on) idleBandAnchor = null;
       if (resizeState) {
         var next = blockNodeFor(resizeState.occ.key);
@@ -1946,7 +1966,8 @@
       dragSuppressUntil = Date.now() + 800;
       showPill(e.clientX, e.clientY,
         D.formatMinutes(edge === 'start' ? startMin : endMin));
-      startAutoScroll();
+      /* 四十轮 F-92 + 四十一轮 F-93：打锁冻结适配/居中；边缘自动滚动仅指针贴边时生效 */
+      if (els.scroll && els.scroll.setAttribute) els.scroll.setAttribute('data-scroll-lock', '1');
       document.addEventListener('pointermove', onResizeMove, true);
       document.addEventListener('pointerup', onResizeEnd, true);
       document.addEventListener('pointercancel', onResizeCancel, true);
@@ -1960,6 +1981,7 @@
       e.preventDefault();
       dragPointer = { x: e.clientX, y: e.clientY, mode: 'resize' };
       updateResizeAt(e.clientX, e.clientY);
+      startAutoScroll();
     }
 
     function applyResizeVisual(block, s, e) {
@@ -1997,6 +2019,9 @@
       var st = resizeState;
       if (!st) return;
       resizeState = null;
+      /* 四十轮 / F-92：解锁，松手后补一次适配（拉边期间被冻结） */
+      if (els.scroll && els.scroll.removeAttribute) els.scroll.removeAttribute('data-scroll-lock');
+      scheduleFitCheck();
       document.removeEventListener('pointermove', onResizeMove, true);
       document.removeEventListener('pointerup', onResizeEnd, true);
       document.removeEventListener('pointercancel', onResizeCancel, true);
@@ -2122,12 +2147,14 @@
         if (document.documentElement && document.documentElement.classList) {
           document.documentElement.classList.remove('is-touch-dragging');
         }
+        /* F-89：收尾无条件清预览（含未激活 / 取消路径）；只清预览不动折叠轴，
+           下面还要按展开态反算分钟。 */
+        clearDropPreview();
         if (!td.active) return;
         var x = td.x;
         var y = td.y;
         var minute = minuteAtClientX(x);
         var onTimeline = commit && pointerOverScroll(x, y, 24);
-        clearDropPreview();
         if (onTimeline) {
           idleDragExpanded = false;
           scheduleOccurrence(td.occ.key, minute, x);
@@ -2446,6 +2473,34 @@
       } catch (e) {
         M.toast('调整次序失败：' + e.message);
       }
+    }
+
+    /* 四十轮 / F-91：时间轴事项拖回未排区 → 取消时间（single 写 null；series 仅此次例外）。 */
+    function untimeOccurrence(occ, slot) {
+      var doc = currentDoc();
+      var item = doc.items.filter(function (i) { return i.id === occ.seriesId; })[0];
+      if (!item || !occ.time) return;
+      var prevTime = { start: occ.time.start, end: occ.time.end };
+      var isSeries = item.kind === 'series';
+      try {
+        if (isSeries) store.addSeriesException(item.id, occ.date, { time: null });
+        else store.updateItem(item.id, { time: null });
+      } catch (e) {
+        M.toast('取消时间失败：' + e.message);
+        return;
+      }
+      afterWrite();   /* 重算发生 → 该事项进未排队列 */
+      if (slot && typeof slot.index === 'number') moveUntimedToSlot(occ.seriesId, slot.index, slot.ids);
+      M.toast('已移到未排时段', {
+        actionLabel: '撤销',
+        onAction: function () {
+          try {
+            if (isSeries) store.addSeriesException(item.id, occ.date, { time: prevTime });
+            else store.updateItem(item.id, { time: prevTime });
+          } catch (e) { /* 忽略 */ }
+          afterWrite();
+        }
+      });
     }
 
     function removeOccurrence(occ) {
@@ -2953,15 +3008,27 @@
           if (e && e.preventDefault) e.preventDefault();
           if (e && e.stopPropagation) e.stopPropagation();
         }, true);
+
+        /* F-89 兜底：无论拖拽源节点是否还在 DOM，document 捕获都清一次预览。
+           drop 捕获只清预览（不动折叠轴）—— 时间轴 drop 还要按「展开态」反算分钟，
+           提前收拢轴会改写落点；折叠收拢放到 dragend（drop 之后）再做。 */
+        document.addEventListener('drop', function () {
+          clearDropPreview();
+        }, true);
+        document.addEventListener('dragend', function () {
+          clearDropPreview();
+          collapseIdleAfterDrag();
+        }, true);
       }
 
       /* 列表内拖动排序：dragover 按指针几何标落点（卡片空隙 / 列表空白也能落），
          drop 重排并落盘。落点线是全列表唯一一条，避免移动过程中的闪烁。 */
       if (els.untimedList) {
         els.untimedList.addEventListener('dragover', function (e) {
-          if (!dragKey || !dragFromList) return;
+          if (!dragKey) return;
           /* 必须 preventDefault：指针在卡片之间或列表空白处时，浏览器默认也不允许 drop */
           e.preventDefault();
+          if (e.stopPropagation) e.stopPropagation();
           try { if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'; } catch (err) { /* 忽略 */ }
           showSortLine(sortSlot(e.clientY));
         });
@@ -2974,17 +3041,29 @@
         });
 
         els.untimedList.addEventListener('drop', function (e) {
-          if (!dragKey || !dragFromList) return;
+          if (!dragKey) return;
           e.preventDefault();
+          /* 挡住 body 完成台兜底 drop（它会用 dataTransfer 回读 key 误投完成台） */
+          if (e.stopPropagation) e.stopPropagation();
           var slot = sortSlot(e.clientY);
           hideSortLine();
           var fromKey = dragKey;
+          var wasFromList = dragFromList;
           dragKey = null;
           dragFromList = false;
-          var fromSeries = null;
-          (state.occurrences || []).forEach(function (o) { if (o.key === fromKey) fromSeries = o.seriesId; });
-          if (!fromSeries) return;
-          moveUntimedToSlot(fromSeries, slot.index, slot.ids);
+          /* F-89：从时间轴拖回未排区松手 —— 写操作会重渲染摘除源节点，dragend 不再冒泡，
+             必须在这里显式清掉绿色预览块与时刻 pill，否则残留。 */
+          clearDropPreview();
+          collapseIdleAfterDrag();
+          var occ = null;
+          (state.occurrences || []).forEach(function (o) { if (o.key === fromKey) occ = o; });
+          if (!occ) return;
+          if (wasFromList) {
+            moveUntimedToSlot(occ.seriesId, slot.index, slot.ids);
+            return;
+          }
+          /* 四十轮 / F-91：timed 块拖回未排 → 取消时间 */
+          untimeOccurrence(occ, slot);
         });
       }
 
@@ -3006,6 +3085,9 @@
             try { key = e.dataTransfer.getData('text/plain'); } catch (err) { key = null; }
           }
           dragKey = null;
+          /* F-89：拖进完成台同样会重渲染摘除源节点，显式清掉时间轴预览块。 */
+          clearDropPreview();
+          collapseIdleAfterDrag();
           if (!key || !dock) return;
           var occ = null;
           (state.occurrences || []).forEach(function (o) { if (o.key === key) occ = o; });
@@ -3013,6 +3095,21 @@
           if (!dock.add(occ)) M.toast(occ.done ? '已完成的事项不需要再计时' : '这件已经在完成台里了');
         });
       }
+    }
+
+    /* ---------------- 三十九轮（F-88）：时间表空白鼠标拖拽平移 ---------------- */
+
+    function setupPan() {
+      var BP = root.DayPlan ? root.DayPlan.blankPan : null;
+      if (!BP || typeof BP.attach !== 'function' || !els.scroll) return;
+      /* 日视图只横向平移时间轴；事项块 / 拉边手柄 / 展开卡 / 刻度尺 / 控件上按下不启动 */
+      BP.attach({
+        container: els.scroll,
+        scrollX: els.scroll,
+        scrollY: null,
+        exclude: '.tl-block, .tl-resize, .tl-resize-pad, .item-detail, .timeline-ruler, button, input, select, textarea, a',
+        onSuppress: function (ms) { dragSuppressUntil = Date.now() + ms; }
+      });
     }
 
     /* ---------------- 五十一轮：倒计时 ---------------- */
@@ -3074,6 +3171,7 @@
     /* 迭代 10 批次 5（条9）：完成台必须在首次渲染前就位（visible() 依赖它判断「已空出」） */
     setupFinishDock();
     setupDrag();
+    setupPan();
     setupRailCover();
     setupCountdown();
 
@@ -3120,6 +3218,8 @@
     function fitTimelineNow() {
       if (els.panel && els.panel.hidden) return;
       if (els.panel && !els.panel.isConnected) return;
+      /* 四十轮 / F-92：拉边期间冻结适配/居中，既有内容不跳 */
+      if (els.scroll && els.scroll.getAttribute && els.scroll.getAttribute('data-scroll-lock') === '1') return;
       ensureTimelineFits();
       fillTimelineGap();
     }

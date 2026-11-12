@@ -326,8 +326,26 @@
       })
       : null;
     /* 迭代 10 批次 4（条8）：左侧周表 + 右侧「当周记录」（独立白底、与周表等高相对静止） */
-    var railEl = el('aside', { class: 'side-rail', id: 'week-rail', 'aria-label': '当周记录' }, [
+    /* 三十九轮（F-87）：图片区与当周记录之间插入「本周计划」显示区 */
+    var plansListEl = el('ul', { class: 'week-plans-list', id: 'week-plans-list' });
+    var plansEmptyEl = el('p', { class: 'empty-hint', id: 'week-plans-empty', text: '本周还没有计划', hidden: true });
+    var plansSectionEl = el('section', { class: 'week-plans-section', 'aria-label': '本周计划' }, [
+      el('div', { class: 'section-head' }, [
+        el('h2', { text: '本周计划' }),
+        el('span', { class: 'finish-dock-tools' }, [
+          el('button', {
+            class: 'btn btn-ghost btn-icon', type: 'button', id: 'btn-new-week-plan-rail',
+            title: '新建周计划', 'aria-label': '新建周计划', text: '+',
+            onclick: function () { openNewWeekPlan(); }
+          })
+        ])
+      ]),
+      plansListEl,
+      plansEmptyEl
+    ]);
+    var railEl = el('aside', { class: 'side-rail', id: 'week-rail', 'aria-label': '本周计划与当周记录' }, [
       railCover ? railCover.element : null,
+      plansSectionEl,
       el('section', { class: 'notes-section', 'aria-label': '当周记录' }, [
         el('div', { class: 'section-head' }, [
           el('h2', { text: '当周记录' }),
@@ -857,24 +875,69 @@
     /** 进入折叠带时临时关掉折叠：整条轴变 1:1，指针下面的精度才够用。 */
     function expandWeekResizeAxis(st, boundary) {
       if (!st || axisResizeExpanded || !boundary) return;
-      axisResizeExpanded = true;
       var key = occKey(st.occ);
-      render();
-      var col = weekColumnNode(st.occ.date);
-      if (col) st.col = col;
-      st.geom = lastGeom;
-      st.card = col ? weekCardByKey(col, key) : null;
-      if (st.col && st.geom) {
-        var screenY = (Number(st.col.getBoundingClientRect().top) || 0) + st.geom.getY(boundary.minute);
+      var r = expandWeekAxisCore(boundary, st.occ.date, render);
+      st.col = r.col;
+      st.geom = r.geom;
+      st.card = r.col ? weekCardByKey(r.col, key) : null;
+      if (st.card) {
+        if (st.card.classList) st.card.classList.add('is-resizing');
+        applyWeekResizeVisual(st.card, st.geom, st);
+      }
+    }
+
+    /**
+     * 折叠带临时展开的核心（四十轮 / F-90 / F-92）：置展开旗标 → 重渲染 → 按边界线屏幕 Y
+     * 补偿 scrollTop，使实区事项块屏幕位置不变。rerender 由调用方给：拉边用整视图 render()，
+     * 计划拖拽用 renderGrid()（右栏拖拽源行不被摘除，HTML5 拖拽不中断）。
+     */
+    function expandWeekAxisCore(boundary, dateISO, rerender) {
+      axisResizeExpanded = true;
+      rerender();
+      var col = weekColumnNode(dateISO);
+      var geom = lastGeom;
+      if (col && geom && boundary) {
+        var screenY = (Number(col.getBoundingClientRect().top) || 0) + geom.getY(boundary.minute);
         var delta = screenY - boundary.screenY;
         if (isFinite(delta) && Math.abs(delta) >= 0.5) {
           scrollEl.scrollTop = Math.max(0, (Number(scrollEl.scrollTop) || 0) + delta);
         }
       }
-      if (st.card) {
-        if (st.card.classList) st.card.classList.add('is-resizing');
-        applyWeekResizeVisual(st.card, st.geom, st);
-      }
+      return { col: col, geom: geom };
+    }
+
+    /** 计划拖拽预览块（四十轮 / F-90）：未排→时间轴同款绿色幽灵。 */
+    function showPlanGhost(col, t) {
+      if (!col || !lastGeom || !t) return;
+      if (!planDropGhost) planDropGhost = el('div', { class: 'wk-drop-ghost', 'aria-hidden': 'true' });
+      if (planDropGhost.parentNode !== col) col.appendChild(planDropGhost);
+      var top = lastGeom.getY(t.startMinute);
+      var bottom = lastGeom.getY(t.endMinute);
+      planDropGhost.style.top = Math.round(top) + 'px';
+      planDropGhost.style.height = Math.max(2, Math.round(bottom - top) - WEEK_BLOCK_GAP) + 'px';
+      planDropGhost.hidden = false;
+    }
+
+    function clearPlanPreview() {
+      if (planDropGhost && planDropGhost.parentNode) planDropGhost.parentNode.removeChild(planDropGhost);
+      hideWeekPill();
+      clearPlanDropTarget();
+    }
+
+    /** 指针 Y → 该列分钟（与拉边 weekMinuteAtClientY 同源几何）。 */
+    function planMinuteAt(col, clientY) {
+      var rect = (col && typeof col.getBoundingClientRect === 'function')
+        ? col.getBoundingClientRect() : { top: 0 };
+      var pxPerHour = (lastGeom && isFinite(lastGeom.pxPerHour)) ? lastGeom.pxPerHour : DEFAULT_WEEK_PX_PER_HOUR;
+      return Layout.axisMinuteAt(lastGeom ? lastGeom.raw : null, clientY - (Number(rect.top) || 0),
+        { pxPerHour: pxPerHour });
+    }
+
+    /** 拖拽期间折回临时展开的轴（只重渲染网格）。 */
+    function foldPlanAxis() {
+      if (!axisResizeExpanded) return;
+      axisResizeExpanded = false;
+      renderGrid(docOf(), state.monday);
     }
 
     function applyWeekResizeVisual(card, geom, st) {
@@ -938,6 +1001,8 @@
       weekScrollRaf = 0;
       var st = resizeState;
       if (!st) return;
+      /* 四十一轮 / F-93：拉边期间指针贴边才自动滚动（够到被挡住的时段）；
+         中部 speed=0 → 不滚，维持四十轮「严格静止」。 */
       var r = scrollEl.getBoundingClientRect();
       var edge = WEEK_RESIZE_EDGE;
       var speed = 0;
@@ -1078,7 +1143,8 @@
       }
       suppressWeekClick();
       showWeekPill(e.clientX, e.clientY, D.formatMinutes(edge === 'start' ? startMin : endMin));
-      startWeekAutoScroll();
+      /* 四十轮 F-92 + 四十一轮 F-93：打锁标记拉边中；边缘自动滚动仅指针贴边时生效 */
+      if (scrollEl && scrollEl.setAttribute) scrollEl.setAttribute('data-scroll-lock', '1');
       var doc = root.document;
       if (doc) {
         doc.addEventListener('pointermove', onWeekResizeMove, true);
@@ -1094,6 +1160,7 @@
         e.pointerId !== resizeState.pointerId) return;
       if (e.preventDefault) e.preventDefault();
       updateWeekResizeAt(e.clientX, e.clientY);
+      startWeekAutoScroll();
     }
 
     function updateWeekResizeAt(clientX, clientY) {
@@ -1122,6 +1189,8 @@
       var st = resizeState;
       if (!st) return;
       resizeState = null;
+      /* 四十轮 / F-92：解锁 */
+      if (scrollEl && scrollEl.removeAttribute) scrollEl.removeAttribute('data-scroll-lock');
       var doc = root.document;
       if (doc) {
         doc.removeEventListener('pointermove', onWeekResizeMove, true);
@@ -1380,6 +1449,7 @@
       var thisMonday = D.startOfWeek(D.todayISO());
       if (btnThis) btnThis.hidden = !!(thisMonday && monday === thisMonday);
       renderGrid(doc, monday);
+      renderPlans(doc, monday);
       if (railCover) railCover.render();
       loadNotes();
       lastRenderStamp = dataStamp(doc);
@@ -1813,6 +1883,11 @@
       if (!repeat || !repeat.startDate) {
         repeat = { type: 'daily', interval: 1, startDate: monday, endDate: D.addDays(monday, 7) };
       }
+      /* 三十九轮：合并表单 meta（addToDays / previousCategoryId 不再被整包覆盖），origin/weekStart 以本视图为准 */
+      var meta = {};
+      Object.keys(v.meta || {}).forEach(function (k) { meta[k] = v.meta[k]; });
+      meta.origin = 'weekPlan';
+      meta.weekStart = monday;
       store.addItem({
         kind: 'series',
         title: v.title,
@@ -1822,9 +1897,299 @@
         /* DM-18.4：不写 starred —— 紧急状态由 categoryId（表单的类别下拉/紧急勾选）表达 */
         repeat: repeat,
         exceptions: {},
-        meta: { origin: 'weekPlan', weekStart: monday }
+        meta: meta
       });
-      M.toast('已创建周计划（本周 7 天）');
+      M.toast(meta.addToDays === false ? '已创建周计划（在右侧计划区，拖到某天生效）' : '已创建周计划（本周 7 天）');
+    }
+
+    /* ------------------------------------------------------------------ *
+     * 7.6 本周计划显示区（三十九轮 / F-87）
+     *   右栏图片区与当周记录之间；本周周计划 + 相交月份的月计划逐条列出。
+     *   行可点开编辑弹窗；HTML5 拖到左侧某天生成独立单次副本（源不消失、允许重复）。
+     * ------------------------------------------------------------------ */
+
+    /** 本周计划清单：周计划（weekStart=本周一）在前、月计划（月份与本周相交）在后，组内按 order / createdAt。 */
+    function weekPlansOf(doc, monday) {
+      var items = (doc && doc.items) || [];
+      var months = {};
+      weekDays(monday).forEach(function (iso) { months[iso.slice(0, 7)] = true; });
+      var week = [];
+      var month = [];
+      items.forEach(function (it) {
+        if (!it || it.kind !== 'series' || !it.meta) return;
+        if (it.meta.origin === 'weekPlan' && it.meta.weekStart === monday) week.push(it);
+        else if (it.meta.origin === 'monthPlan' && months[it.meta.month]) month.push(it);
+      });
+      function byOrder(a, b) {
+        var ao = numOr(a.order, 0);
+        var bo = numOr(b.order, 0);
+        if (ao !== bo) return ao - bo;
+        var ac = String(a.createdAt || '');
+        var bc = String(b.createdAt || '');
+        if (ac !== bc) return ac < bc ? -1 : 1;
+        return String(a.id) < String(b.id) ? -1 : 1;
+      }
+      week.sort(byOrder);
+      month.sort(byOrder);
+      return week.concat(month);
+    }
+
+    function planTimeText(time) {
+      if (!time || !time.start) return '';
+      return time.start + (time.end ? '–' + time.end : '');
+    }
+
+    function planRowNode(plan, cats) {
+      var cat = (cats && cats[plan.categoryId]) || { name: '未分类', color: DEFAULT_CAT_COLOR };
+      var isMonth = plan.meta.origin === 'monthPlan';
+      var tone = toneOf ? toneOf(cat.color) : null;
+      var row = el('li', {
+        class: 'wp-item', role: 'button', tabindex: '0', draggable: 'true',
+        'data-plan-id': plan.id,
+        'data-plan-kind': isMonth ? 'monthPlan' : 'weekPlan',
+        style: '--cat:' + catAccent(cat.color) + (tone ? ';--cat-bg:' + tone.background : ''),
+        'aria-label': (isMonth ? '月计划：' : '周计划：') + plan.title
+      });
+      var main = el('div', { class: 'wp-main' }, [
+        el('span', { class: 'wp-cat', 'aria-hidden': 'true' }),
+        el('span', { class: 'wp-title', text: plan.title })
+      ]);
+      var timeText = planTimeText(plan.time);
+      if (timeText) main.appendChild(el('span', { class: 'wp-time', text: timeText }));
+      main.appendChild(el('span', { class: 'wp-chip', text: isMonth ? '月计划' : '周计划' }));
+      row.appendChild(main);
+      if (plan.note) row.appendChild(el('div', { class: 'wp-note', text: plan.note }));
+      row.addEventListener('click', function () {
+        if (dragSuppressUntil && Date.now() < dragSuppressUntil) return;
+        editWeekPlan(plan.id);
+      });
+      row.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          editWeekPlan(plan.id);
+        }
+      });
+      return row;
+    }
+
+    function renderPlans(doc, monday) {
+      if (!plansListEl) return;
+      var cats = {};
+      ((doc && doc.categories) || []).forEach(function (c) { cats[c.id] = c; });
+      var plans = weekPlansOf(doc, monday);
+      plansListEl.innerHTML = '';
+      plans.forEach(function (plan) { plansListEl.appendChild(planRowNode(plan, cats)); });
+      if (plansEmptyEl) plansEmptyEl.hidden = plans.length > 0;
+    }
+
+    /** 点行 → 编辑弹窗（周 / 月表单按 origin 分流）；页脚「删除」走二次确认。 */
+    function editWeekPlan(planId) {
+      var Form = root.DayPlan ? root.DayPlan.form : null;
+      var doc = docOf();
+      var plan = findItemFor({ seriesId: planId });
+      if (!plan || !Form) return;
+      var isMonth = plan.meta && plan.meta.origin === 'monthPlan';
+      var form = null;
+      try {
+        form = isMonth
+          ? Form.createMonthPlanForm({
+            ym: plan.meta.month, item: plan,
+            categories: doc.categories || [], defaultCategoryId: defaultCategoryIdOf(doc)
+          })
+          : Form.createWeekPlanForm({
+            weekStart: (plan.meta && plan.meta.weekStart) || state.monday, item: plan,
+            categories: doc.categories || [], defaultCategoryId: defaultCategoryIdOf(doc)
+          });
+      } catch (e) { form = null; }
+      if (!form || !form.element) { M.toast('计划表单尚未就绪'); return; }
+
+      var handle = null;
+      var delBtn = el('button', {
+        class: 'btn btn-danger', type: 'button', text: '删除',
+        onclick: function () {
+          M.confirm({
+            title: isMonth ? '删除月计划' : '删除周计划',
+            message: '确定删除「' + plan.title + '」？' +
+              (plan.meta && plan.meta.addToDays === false
+                ? '已拖到各天的副本会保留。'
+                : '该计划已同步到每天的事项会一并移除，已拖出的副本保留。'),
+            confirmLabel: '删除', danger: true
+          }).then(function (ok) {
+            if (!ok) return;
+            try { store.removeItem(plan.id); } catch (e) { M.toast(e.message); return; }
+            if (handle) handle.close('delete');
+            afterWrite();
+            M.toast('已删除');
+          });
+        }
+      });
+      handle = M.open({
+        title: isMonth ? '编辑本月计划' : '编辑周计划',
+        body: form.element,
+        footer: [delBtn],
+        submitLabel: '保存',
+        wide: true,
+        onSubmit: function (ctx) {
+          var check = form.validate();
+          if (!check.ok) { ctx.setError(check.message); return false; }
+          var v = check.values || (typeof form.getValues === 'function' ? form.getValues() : null);
+          if (!v) { ctx.setError('表单取值失败'); return false; }
+          try {
+            store.updateItem(plan.id, {
+              title: v.title,
+              categoryId: v.categoryId,
+              time: v.time || null,
+              note: v.note || '',
+              repeat: v.repeat,
+              meta: v.meta
+            });
+          } catch (e) {
+            ctx.setError(errText(e));
+            return false;
+          }
+          afterWrite();
+          M.toast('已保存');
+        }
+      });
+      if (typeof form.focus === 'function') form.focus();
+    }
+
+    /* ---- 显示区 → 左网格的拖拽（独立副本，源不消失、允许重复） ---- */
+
+    var dragPlanId = null;
+    var planDropGhost = null;   /* 四十轮 / F-90：拖拽落点预览块 */
+
+    function clearPlanDropTarget() {
+      if (!gridEl || typeof gridEl.querySelectorAll !== 'function') return;
+      var marked = gridEl.querySelectorAll('.wk-col.is-drop-target');
+      for (var i = 0; i < marked.length; i += 1) marked[i].classList.remove('is-drop-target');
+    }
+
+    function planColOf(target) {
+      var n = target;
+      while (n && n !== gridEl) {
+        if (n.classList && n.classList.contains('wk-col')) return n;
+        n = n.parentNode;
+      }
+      return null;
+    }
+
+    function setupPlanDrag() {
+      if (!plansListEl || !gridEl) return;
+
+      plansListEl.addEventListener('dragstart', function (e) {
+        var row = e.target && e.target.closest ? e.target.closest('.wp-item') : null;
+        if (!row) return;
+        dragPlanId = row.getAttribute('data-plan-id');
+        dragSuppressUntil = Date.now() + 500;
+        row.classList.add('is-dragging');
+        try {
+          if (e.dataTransfer) {
+            e.dataTransfer.effectAllowed = 'copy';
+            e.dataTransfer.setData('application/x-dayplan-weekplan', dragPlanId);
+            e.dataTransfer.setData('text/plain', dragPlanId);
+          }
+        } catch (err) { /* 忽略 */ }
+      });
+
+      plansListEl.addEventListener('dragend', function (e) {
+        var row = e.target && e.target.closest ? e.target.closest('.wp-item') : null;
+        if (row) row.classList.remove('is-dragging');
+        clearPlanPreview();
+        foldPlanAxis();
+        dragPlanId = null;
+      });
+
+      gridEl.addEventListener('dragover', function (e) {
+        if (!dragPlanId) return;
+        var col = planColOf(e.target);
+        if (!col) return;
+        e.preventDefault();
+        try { if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; } catch (err) { /* 忽略 */ }
+        if (!col.classList.contains('is-drop-target')) {
+          clearPlanDropTarget();
+          col.classList.add('is-drop-target');
+        }
+        var y = e.clientY;
+        if (typeof y !== 'number' || !isFinite(y) || !lastGeom) { hideWeekPill(); return; }
+        var iso = col.getAttribute('data-date');
+        /* 指针进折叠带 → 临时展开整轴（只重渲染网格，右栏源行不摘除 → 拖拽不中断） */
+        var boundary = weekResizeBoundary({ geom: lastGeom, col: col }, y);
+        if (boundary && !axisResizeExpanded) {
+          expandWeekAxisCore(boundary, iso, function () { renderGrid(docOf(), state.monday); });
+          col = weekColumnNode(iso) || col;
+        }
+        var t = Layout.scheduleTime(planMinuteAt(col, y), 60, { step: weekDragStep() });
+        showPlanGhost(col, t);
+        showWeekPill(e.clientX, y, t.start + '–' + t.end);
+      });
+
+      gridEl.addEventListener('dragleave', function (e) {
+        if (!dragPlanId) return;
+        var to = e.relatedTarget;
+        if (to && gridEl.contains && gridEl.contains(to)) return;
+        clearPlanPreview();
+        foldPlanAxis();
+      });
+
+      gridEl.addEventListener('drop', function (e) {
+        if (!dragPlanId) return;
+        var col = planColOf(e.target);
+        if (!col) return;
+        e.preventDefault();
+        if (e.stopPropagation) e.stopPropagation();
+        var planId = dragPlanId;
+        var iso = col.getAttribute('data-date');
+        var y = e.clientY;
+        dragPlanId = null;
+        clearPlanPreview();
+        dragSuppressUntil = Date.now() + 500;
+        var plan = findItemFor({ seriesId: planId });
+        if (!plan || !iso) { foldPlanAxis(); return; }
+        /* 落点 = 指针居中、默认 1h（与未排→时间轴同口径）；坐标缺失回落源时段 */
+        var time = plan.time || null;
+        if (typeof y === 'number' && isFinite(y) && lastGeom) {
+          var t = Layout.scheduleTime(planMinuteAt(col, y), 60, { step: weekDragStep() });
+          time = { start: t.start, end: t.end };
+        }
+        axisResizeExpanded = false;   /* 写入后整轴折回 */
+        try {
+          /* 独立副本：不带 origin / addToDays，与源计划无联动；order 由 store 自动分配 */
+          store.addItem({
+            kind: 'single',
+            date: iso,
+            title: plan.title,
+            categoryId: plan.categoryId,
+            time: time,
+            note: plan.note || '',
+            done: false,
+            meta: { sourcePlanId: plan.id }
+          });
+        } catch (err) {
+          M.toast('添加失败：' + errText(err));
+          return;
+        }
+        afterWrite();
+        M.toast('已添加到 ' + Number(iso.slice(5, 7)) + '月' + Number(iso.slice(8, 10)) + '日');
+      });
+    }
+
+    /* ------------------------------------------------------------------ *
+     * 7.7 时间表空白鼠标拖拽平移（三十九轮 / F-88，斜向）
+     * ------------------------------------------------------------------ */
+
+    function setupPan() {
+      var BP = root.DayPlan ? root.DayPlan.blankPan : null;
+      if (!BP || typeof BP.attach !== 'function' || !scrollEl) return;
+      /* 横向跟随内层 .week-grid-scroll，纵向跟随外层 .week-scroll → 斜向同帧移动；
+         事项块 / 拉边手柄 / 展开卡 / 列头 / 控件上按下不启动。 */
+      BP.attach({
+        container: scrollEl,
+        scrollX: gridScrollEl,
+        scrollY: scrollEl,
+        exclude: '.wk-item, .wk-resize, .item-detail, .wk-head, button, input, select, textarea, a',
+        onSuppress: function (ms) { dragSuppressUntil = Date.now() + ms; }
+      });
     }
 
     /* ------------------------------------------------------------------ *
@@ -1833,6 +2198,8 @@
 
     state.monday = D.startOfWeek(D.todayISO()) || D.todayISO();
     state.hideDone = readHideDone();
+    setupPlanDrag();
+    setupPan();
     render();
 
     return {

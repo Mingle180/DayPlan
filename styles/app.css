@@ -931,6 +931,9 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
   border-radius: var(--radius);
   background: var(--surface-2);
   padding-bottom: 4px;
+  /* 三十九轮 / F-88（LA-41.3）：空白区可鼠标拖拽平移 → grab；
+     事项块 / 手柄 / 刻度表头各自保留原光标（见下方各自规则）。 */
+  cursor: grab;
 }
 /* 2026-10-31（用户反馈）：并发事项多到装不下时，底部的整条道曾被 overflow-y:hidden
    静默裁掉（看也看不见、滚也滚不到）。day.js 量出「轨道 > 可视区」且面板已经垫不动时
@@ -940,6 +943,10 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
+/* 三十九轮 / F-88（LA-41.3）：平移进行中整页 grabbing + 禁选，松手即恢复。
+   !important 压过事项块 / 手柄 / 表头的原光标（仅平移这一瞬态生效）。 */
+body.is-panning,
+body.is-panning * { cursor: grabbing !important; user-select: none !important; }
 .timeline-inner {
   position: relative;
   /* 迭代 4（ADR-19）：宽度由 JS 设为 CAT_LABEL_WIDTH + geometry.axisLength（不再用 --px-per-hour × 24） */
@@ -952,6 +959,8 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
   background: var(--glass);
   -webkit-backdrop-filter: var(--glass-blur);
   backdrop-filter: var(--glass-blur);
+  /* F-88：刻度表头不参与平移（JS 排除），保留原默认光标，不随空白区变 grab。 */
+  cursor: default;
   /* 迭代 4（US-25）：整日 repeating-linear-gradient 底纹已删除 —— 压缩轴下它是错的；
      刻度与整点竖线改由 JS 按 computeAxisGeometry().getX() 逐条放置（.tl-gridline）。 */
 }
@@ -1351,6 +1360,95 @@ html[data-theme='dark'] .btn-add-round { border-color: rgba(255, 255, 255, .16);
   color: var(--text-3);
   font-size: 13px;
 }
+
+/* ------------------------------------------------------------------ *
+ * 本周计划显示区（三十九轮 / F-87）：周视图右栏，图片区与当周记录之间。
+ * 视觉参照未排时段区（白卡行 + 类别色点 + 类型胶囊），但右栏 overflow-y:auto，
+ * 悬停只加深阴影、不做 scale（放大撑出横向滚动条，F-49.1 同款教训）。
+ * ------------------------------------------------------------------ */
+.week-plans-section {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-height: 0;
+  /* 计划多时在列表内部滚动，给当周记录留位（与倒计时同一组百分比口径） */
+  max-height: calc((100% - 14px) * 1 / 2);
+}
+.week-plans-section .section-head { align-items: center; }
+.week-plans-list {
+  list-style: none;
+  /* 投影通道：滚动容器按 padding 盒裁子元素投影，留 10/12px 再用负外边距抵回（同倒计时列表） */
+  margin: -8px -10px;
+  padding: 10px 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.wp-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-block);
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: box-shadow var(--ease), background var(--ease);
+}
+@media (hover: hover) {
+  .wp-item:hover { box-shadow: var(--shadow); z-index: 3; }
+}
+.wp-item:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.wp-item.is-dragging { opacity: .45; }
+.wp-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.wp-cat { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--cat, var(--text-3)); }
+.wp-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 600;
+  font-size: 13.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wp-time { flex: none; font-size: 11px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.wp-chip {
+  flex: 0 0 auto;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: var(--cat, var(--text-2));
+  background: var(--cat-bg, var(--surface-2));
+  white-space: nowrap;
+  pointer-events: none;
+}
+.wp-note {
+  font-size: 11.5px;
+  color: var(--text-2);
+  padding-left: 16px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+/* 暗色：类型胶囊与时段块同一口径 —— 深墨半透明底 + 类别色混暖白字（同 .ui-chip 暗色） */
+html[data-theme='dark'] .wp-chip {
+  color: color-mix(in srgb, var(--cat, var(--text-2)) 60%, #f1e8d8);
+  background: rgba(27, 23, 18, .35);
+  box-shadow: inset 0 0 0 1px rgba(238, 226, 203, .12);
+}
+/* 拖到左网格某天的落点高亮 */
+.wk-col.is-drop-target { background: var(--primary-weak); }
 
 /* 记录栏 */
 /* 迭代 10 批次 4（条8）：去掉区域级横向灰线（原 border-top），改由侧栏自身的白底与留白分区 */
@@ -2292,6 +2390,23 @@ html[data-theme='dark'] .tl-drag-pill { background: #6c785c; color: #f4eddf; }
 }
 .tl-drop-ghost[hidden] { display: none; }
 html[data-theme='dark'] .tl-drop-ghost {
+  background: rgba(156, 174, 135, .18);
+  border-color: rgba(156, 174, 135, .55);
+}
+
+/* 四十轮 / F-90：周计划拖到左列的落点预览块（与日视图 .tl-drop-ghost 同款） */
+.wk-drop-ghost {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  z-index: 5;
+  border-radius: 8px;
+  background: rgba(113, 128, 101, .16);
+  border: 1px dashed rgba(93, 103, 79, .55);
+  pointer-events: none;
+}
+.wk-drop-ghost[hidden] { display: none; }
+html[data-theme='dark'] .wk-drop-ghost {
   background: rgba(156, 174, 135, .18);
   border-color: rgba(156, 174, 135, .55);
 }

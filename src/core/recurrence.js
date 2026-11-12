@@ -386,6 +386,8 @@
     if (!dt.isValidDate(range.from)) throw fail('range.from 非法：' + range.from);
     if (!dt.isValidDate(range.to)) throw fail('range.to 非法：' + range.to);
     if (!repeat.startDate || !dt.isValidDate(repeat.startDate)) throw fail('重复规则 startDate 非法：' + repeat.startDate);
+    /* DM-28（三十九轮）：addToDays===false 的计划是模板，不展开到任何一天；缺失 / true 照常 */
+    if (series.meta && series.meta.addToDays === false) return { occurrences: [], truncated: false };
     var max = defaultMax(range.max);
     var from = effectiveStart(repeat, range.from);
     var to = effectiveEnd(repeat, range.to);
@@ -496,6 +498,8 @@
       if (it.kind === 'single') {
         if (it.date === dateISO) out.push(singleToOccurrence(it));
       } else if (it.kind === 'series') {
+        /* DM-28：模板（addToDays===false）不产生发生，先于 seriesMayHit 跳过 */
+        if (it.meta && it.meta.addToDays === false) continue;
         if (!seriesMayHit(it.repeat, dateISO)) continue;
         var ex = (it.exceptions || {})[dateISO] || null;
         if (ex && ex.deleted === true) continue;

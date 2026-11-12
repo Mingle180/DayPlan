@@ -9,7 +9,8 @@
 
 .week-view { display: flex; flex-direction: column; gap: 14px; }
 /* 迭代 8（F-52）：整周总宽可超过容器 → 横向滚动区（与日视图的横向滚动同性质） */
-.week-grid-scroll { overflow-x: auto; overflow-y: hidden; }
+/* 三十九轮 / F-88（LA-41.3）：空白可鼠标拖拽平移（含斜向）→ grab。 */
+.week-grid-scroll { overflow-x: auto; overflow-y: hidden; cursor: grab; }
 .week-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 /* 迭代 10 批次 4（条8）：标题「日期-日期」字号加大，且与日视图标题同大（22px） */
 .week-title { font-size: 22px; font-weight: 600; margin: 0; letter-spacing: -.2px; font-variant-numeric: tabular-nums; }
@@ -27,6 +28,7 @@
   /* 迭代 10 反馈：表格底色与日视图 .timeline-scroll 同款浅灰（原为毛玻璃近透明） */
   background: var(--surface-2);
   box-shadow: var(--shadow);
+  cursor: grab; /* F-88：纵向空白平移 */
 }
 /* 列宽由 JS 以内联 grid-template-columns 写入（迭代 8 / F-52 起为内容驱动的像素宽：
  * 38px 轴列（四十九轮由 52 收窄到刚好容纳 10px 的 HH:mm）+ 每天「各构成类别列宽之和」；
@@ -54,9 +56,10 @@
 @media (hover: hover) {
   .wk-head:hover { background: var(--surface-3); }
 }
-/* 列体：空白处可点（US-22.2 进入日视图），故整列 cursor:pointer；
- * 事项块自身仍是折叠/展开（JS 阻止冒泡）。 */
-.wk-col { position: relative; border-left: 1px solid var(--border); cursor: pointer; }
+/* 列体：空白处可鼠标拖拽平移（三十九轮 / F-88 / LA-41.3）→ grab；
+ * 单击空白仍进日视图（US-22.2，JS 不变；平移结束后 250ms 内 click 被抑制）。
+ * 「进入日视图」的明确 pointer affordance 保留在表头 .wk-head；事项块自身仍是折叠/展开。 */
+.wk-col { position: relative; border-left: 1px solid var(--border); cursor: grab; }
 @media (hover: hover) {
   .wk-col:hover { background: rgba(120, 120, 128, .06); }
 }

@@ -788,6 +788,39 @@ html[data-theme='dark'] .ui-chip {
 html[data-theme='dark'] .empty-hint { background: rgba(238, 226, 203, .03); }
 
 /* ------------------------------------------------------------------ *
+ * 本周计划显示区（三十九轮 / F-87）：一张纸卡 + 细分隔线的行（同未排时段口径）
+ * ------------------------------------------------------------------ */
+.week-plans-section {
+  --ico: var(--ico-calendar);
+  position: relative;
+  padding: 14px 16px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-paper);
+  max-height: calc((100% - 16px) * 1 / 2);
+}
+html[data-theme='dark'] .week-plans-section { background: var(--surface); }
+/* 行无独立投影，收回 app.css 的投影通道（margin/padding 归零） */
+.week-plans-list { gap: 0; margin: 0; padding: 0; }
+.wp-item {
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  box-shadow: none;
+  padding: 9px 6px;
+}
+.week-plans-list > .wp-item:last-child { border-bottom: 0; }
+@media (hover: hover) {
+  .wp-item:hover { box-shadow: none; background: color-mix(in srgb, var(--surface-2) 55%, transparent); }
+  html[data-theme='dark'] .wp-item:hover { background: rgba(238, 226, 203, .05); }
+}
+.wp-title { font-family: var(--font-serif); font-size: 13.5px; font-weight: 600; letter-spacing: .2px; }
+.wp-cat { width: 7px; height: 7px; opacity: .8; }
+.wp-note { font-size: 11.5px; color: var(--text-2); }
+
+/* ------------------------------------------------------------------ *
  * 事项完成台（含空状态插画：猫在书堆上）
  * ------------------------------------------------------------------ */
 
