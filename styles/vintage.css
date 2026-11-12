@@ -653,16 +653,25 @@ html[data-theme='dark'] .tl-block {
   box-shadow: 0 1px 1px rgba(0, 0, 0, .18), 0 3px 7px rgba(0, 0, 0, .16);
   color: var(--text);
 }
+/* 四十三轮（用户口径）：左侧竖条改成铅笔笔触 —— 参考图裁出的白+alpha PNG 当遮罩，
+   底色仍取类别强调色（--event-accent）；mask-size 100% 100% 让笔触随块高自适应拉伸。 */
 .tl-block::before {
   content: "";
   position: absolute;
-  left: 4px;
-  top: 7px;
-  bottom: 7px;
-  width: 4px;
-  border-radius: 2px;
-  background: var(--event-accent, var(--cat, var(--text-3)));
-  opacity: .8;
+  left: 2px;
+  top: 4px;
+  bottom: 4px;
+  width: 9px;
+  background-color: var(--event-accent, var(--cat, var(--text-3)));
+  -webkit-mask-image: url("../assets/textures/pencil-stroke.png");
+  mask-image: url("../assets/textures/pencil-stroke.png");
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+  opacity: .85;
   pointer-events: none;
 }
 .tl-block.is-narrow,
@@ -1353,13 +1362,20 @@ html[data-theme='dark'] .wk-col { border-color: rgba(238, 226, 203, .1); }
 .wk-item::before {
   content: "";
   position: absolute;
-  left: 4px;
-  top: 5px;
-  bottom: 5px;
-  width: 3px;
-  border-radius: 2px;
-  background: var(--event-accent, var(--cat, var(--text-3)));
-  opacity: .8;
+  left: 2px;
+  top: 4px;
+  bottom: 4px;
+  width: 7px;
+  background-color: var(--event-accent, var(--cat, var(--text-3)));
+  -webkit-mask-image: url("../assets/textures/pencil-stroke.png");
+  mask-image: url("../assets/textures/pencil-stroke.png");
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+  opacity: .85;
   pointer-events: none;
 }
 /* 微块 / 省略态 / 展开态：不给竖条留位，与日视图隐藏竖条同口径 */

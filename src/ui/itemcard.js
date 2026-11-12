@@ -578,12 +578,53 @@
     if (typeof ctx.onToggleExpand === 'function') ctx.onToggleExpand(occ, next);
   }
 
+  /* 第四十三轮（用户口径）：手机端单击=标记完成，双击=打开编辑。
+     第一击先挂起 TAP_DELAY_MS；窗口内第二击取消挂起并直达编辑，
+     超过窗口才把第一击落成「标记完成」。
+     挂起态按根节点区分：换一张卡单击时，先把上一张的完成立即落地。
+     ctx.tapDelayMs=0 供同步测试直接走单击分支。 */
+  var TAP_DELAY_MS = 300;
+  var pendingTap = null;
+
+  function clearPendingTap() {
+    if (pendingTap && pendingTap.timer) clearTimeout(pendingTap.timer);
+    pendingTap = null;
+  }
+
+  function firePendingTap() {
+    var p = pendingTap;
+    pendingTap = null;
+    if (p && typeof p.ctx.onToggleDone === 'function') p.ctx.onToggleDone(p.occ);
+  }
+
   /** 单击非紧急角标、非展开区 → 直接打开编辑表单（第四十二轮 F-94：取代点击展开）。 */
-  function onRootClick(occ, ctx, expanded, e) {
+  function onRootClick(node, occ, ctx, expanded, e) {
     var t = e.target;
     if (closestIn(t, '.item-detail')) return;                       // 展开区按钮各自处理
     if (closestIn(t, '.item-urgent-tag')) return;                   // 紧急角标区域
     if (closestIn(t, '.ui-actions')) return;                        // 兼容旧结构（条13 起已不渲染 ▲▼）
+    if (closestIn(t, '.tl-resize') || closestIn(t, '.tl-resize-pad')
+      || closestIn(t, '.wk-resize')) return;                        // 拉边手柄：拖动结束后补发的 click
+    if (touchMode(ctx)) {
+      if (pendingTap && pendingTap.node === node) {
+        clearPendingTap();
+        if (typeof ctx.onEdit === 'function') ctx.onEdit(occ);
+        else toggleExpand(occ, ctx, !expanded);
+        return;
+      }
+      if (pendingTap) firePendingTap();
+      var delay = (typeof ctx.tapDelayMs === 'number')
+        ? Math.max(0, ctx.tapDelayMs) : TAP_DELAY_MS;
+      if (delay === 0) {
+        if (typeof ctx.onToggleDone === 'function') ctx.onToggleDone(occ);
+        return;
+      }
+      var timer = setTimeout(function () {
+        if (pendingTap && pendingTap.timer === timer) firePendingTap();
+      }, delay);
+      pendingTap = { node: node, occ: occ, ctx: ctx, timer: timer };
+      return;
+    }
     if (typeof ctx.onEdit === 'function') {
       ctx.onEdit(occ);
       return;
@@ -873,7 +914,7 @@
     node.setAttribute('title', titleFor(occ, ctx));
     node.setAttribute('aria-label', labelFor(occ, cat, ctx));
 
-    node.addEventListener('click', function (e) { onRootClick(occ, ctx, expanded, e); });
+    node.addEventListener('click', function (e) { onRootClick(node, occ, ctx, expanded, e); });
     /* 迭代 6（F-39）：右键切换完成（取代勾选框） */
     node.addEventListener('contextmenu', function (e) { onRootContextMenu(occ, ctx, e); });
     node.addEventListener('keydown', function (e) { onRootKeydown(node, occ, ctx, expanded, e); });

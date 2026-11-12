@@ -622,11 +622,12 @@
    * 每条发生上再写一遍「每天（… 起）（至 …）」纯属噪音 —— 用户口径
    * 「仅显示『周计划』『月计划』即可」。计划类型本身就是这条发生的重复说明，
    * 完整规则仍在计划表单 / 月计划面板里可见，故这里直接短路。
+   * 2026-11-12 四十三轮（用户口径）：发生上的胶囊文案再缩短为「本周」「本月」。
    */
   function repeatLabel(repeat, meta) {
     if (!repeat) return '';
-    if (meta && meta.origin === 'weekPlan') return '周计划';
-    if (meta && meta.origin === 'monthPlan') return '月计划';
+    if (meta && meta.origin === 'weekPlan') return '本周';
+    if (meta && meta.origin === 'monthPlan') return '本月';
     var head = '';
     if (repeat.type === 'daily') {
       var iv = Math.max(1, Math.floor(repeat.interval || 1));

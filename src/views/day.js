@@ -1208,7 +1208,7 @@
       var list = Order.sortUntimed(p.untimed).filter(visible);
 
       els.untimedList.innerHTML = '';
-      els.untimedTitle.textContent = '未排时段';
+      els.untimedTitle.textContent = '清单';
 
       var hiddenCount = p.untimed.filter(function (o) { return o.done; }).length;
       var showHiddenNotice = !!(state.hideDone && hiddenCount && list.length === 0);
@@ -2263,6 +2263,8 @@
     }
 
     function toggleDone(occ) {
+      /* 拖拽刚结束时浏览器可能补发 click：与 onEdit 同口径忽略，避免手机端误标完成 */
+      if (dragSuppressUntil && Date.now() < dragSuppressUntil) return;
       var doc = currentDoc();
       var item = doc.items.filter(function (i) { return i.id === occ.seriesId; })[0];
       if (!item) return;
@@ -2498,7 +2500,7 @@
       }
       afterWrite();   /* 重算发生 → 该事项进未排队列 */
       if (slot && typeof slot.index === 'number') moveUntimedToSlot(occ.seriesId, slot.index, slot.ids);
-      M.toast('已移到未排时段', {
+      M.toast('已移到清单', {
         actionLabel: '撤销',
         onAction: function () {
           try {

@@ -326,12 +326,12 @@
       })
       : null;
     /* 迭代 10 批次 4（条8）：左侧周表 + 右侧「当周记录」（独立白底、与周表等高相对静止） */
-    /* 三十九轮（F-87）：图片区与当周记录之间插入「本周计划」显示区 */
+    /* 三十九轮（F-87）：图片区与当周记录之间插入「计划」显示区 */
     var plansListEl = el('ul', { class: 'week-plans-list', id: 'week-plans-list' });
     var plansEmptyEl = el('p', { class: 'empty-hint', id: 'week-plans-empty', text: '本周还没有计划', hidden: true });
-    var plansSectionEl = el('section', { class: 'week-plans-section', 'aria-label': '本周计划' }, [
+    var plansSectionEl = el('section', { class: 'week-plans-section', 'aria-label': '计划' }, [
       el('div', { class: 'section-head' }, [
-        el('h2', { text: '本周计划' }),
+        el('h2', { text: '计划' }),
         el('span', { class: 'finish-dock-tools' }, [
           el('button', {
             class: 'btn btn-ghost btn-icon', type: 'button', id: 'btn-new-week-plan-rail',
@@ -343,7 +343,7 @@
       plansListEl,
       plansEmptyEl
     ]);
-    var railEl = el('aside', { class: 'side-rail', id: 'week-rail', 'aria-label': '本周计划与当周记录' }, [
+    var railEl = el('aside', { class: 'side-rail', id: 'week-rail', 'aria-label': '计划与当周记录' }, [
       railCover ? railCover.element : null,
       plansSectionEl,
       el('section', { class: 'notes-section', 'aria-label': '当周记录' }, [
@@ -1611,6 +1611,8 @@
     }
 
     function toggleDone(occ) {
+      /* 拖拽刚结束时浏览器可能补发 click：与 onEdit 同口径忽略，避免手机端误标完成 */
+      if (dragSuppressUntil && Date.now() < dragSuppressUntil) return;
       var item = findItemFor(occ);
       if (!item) return;
       if (item.kind === 'single') {
@@ -1973,7 +1975,7 @@
         'data-plan-id': plan.id,
         'data-plan-kind': isMonth ? 'monthPlan' : 'weekPlan',
         style: '--cat:' + catAccent(cat.color) + (tone ? ';--cat-bg:' + tone.background : ''),
-        'aria-label': (isMonth ? '月计划：' : '周计划：') + plan.title
+        'aria-label': (isMonth ? '本月：' : '本周：') + plan.title
       });
       var main = el('div', { class: 'wp-main' }, [
         el('span', { class: 'wp-cat', 'aria-hidden': 'true' }),
@@ -1981,7 +1983,7 @@
       ]);
       var timeText = planTimeText(plan.time);
       if (timeText) main.appendChild(el('span', { class: 'wp-time', text: timeText }));
-      main.appendChild(el('span', { class: 'wp-chip', text: isMonth ? '月计划' : '周计划' }));
+      main.appendChild(el('span', { class: 'wp-chip', text: isMonth ? '本月' : '本周' }));
       row.appendChild(main);
       if (plan.note) row.appendChild(el('div', { class: 'wp-note', text: plan.note }));
       row.addEventListener('click', function () {

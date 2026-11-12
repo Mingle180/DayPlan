@@ -140,6 +140,22 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* 第四十三轮（用户口径）：非可编辑文字一律不可选中（避免拖拽 / 双击时选中界面文字）；
+   输入控件与可编辑区仍可正常选中、复制、粘贴。 */
+body {
+  -webkit-user-select: none;
+  user-select: none;
+}
+input,
+textarea,
+select,
+[contenteditable=''],
+[contenteditable='true'],
+[contenteditable='plaintext-only'] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 button { font: inherit; color: inherit; text-align: center; }
 
 .muted { color: var(--text-3); font-size: 12px; }
@@ -1058,6 +1074,12 @@ body.is-panning * { cursor: grabbing !important; user-select: none !important; }
 @media (hover: hover) {
   .tl-block:hover { z-index: 4; }
 }
+/* 第四十三轮（用户口径）：手机端双击进编辑 —— 关掉双击缩放，
+   否则第二击会被浏览器吞进缩放判定，单击的延时窗口也会被拉长。 */
+.tl-block,
+.wk-item,
+.untimed-item,
+.wp-item { touch-action: manipulation; }
 .tl-block:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; z-index: 4; }
 /* 美化迭代 10：标题行 = [省略号] + 标题（不省略、可换行）；右侧 36px 让给右上角的两字胶囊 */
 .tl-block .tl-titlerow {
