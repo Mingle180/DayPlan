@@ -1457,8 +1457,12 @@
      *   钉住量到「表高 − 表头高」为止，再往下表头随表体下底边一起上移（该挡就挡）。
      * 只管竖直：横滚仍由 .week-grid-scroll 原样带动表头，列始终对齐。
      * 真实版与教程同源：gBCR 在教程里被 shim 换算成「相对应用根、未缩放」，与 translate 同一坐标世界。
+     * 快滑跟进（2026-11-13 跟进）：几何（gridOffset/maxShift/表头节点）缓存于 measureSticky，
+     *   滚动当帧 applySticky 只读 scrollTop/pageYOffset 同步写 transform（零强制布局、不等 rAF），
+     *   每帧至多一次重量自纠；旧版逐帧 getComputedStyle 祖先 walk + rAF 延迟在快滑时拖影跟不上。
      * ------------------------------------------------------------------ */
     var stickyRaf = 0;
+    var stickyGeom = null;
     function stickyCells() {
       if (!gridEl) return [];
       var out = [];
@@ -1494,27 +1498,66 @@
       }
       return 0;
     }
-    function syncStickyHead() {
-      stickyRaf = 0;
-      if (!gridEl) return;
+    function stickyDocScroll() {
+      if (typeof root.pageYOffset === 'number') return root.pageYOffset;
+      var de = root.document && root.document.documentElement;
+      var body = root.document && root.document.body;
+      return Number(de && de.scrollTop) || Number(body && body.scrollTop) || 0;
+    }
+    /* 量一次几何（getComputedStyle 祖先 walk + 多次 gBCR，会触发强制布局，较贵）。
+       缓存「网格在滚动坐标里的顶偏移 gridOffset、可钉量 maxShift、表头节点」：滚动当帧只读
+       scrollTop / pageYOffset 就能算位移，不再逐帧 walk / gBCR。快滑时主线程不被强制布局拖慢，
+       表头才能严格跟上。仅在 render / resize / 每帧至多一次的 scroll 回调里重量。 */
+    function measureSticky() {
+      if (!gridEl) { stickyGeom = null; return; }
       var cells = stickyCells();
-      if (!cells.length) return;
+      if (!cells.length) { stickyGeom = null; return; }
       var gr = gridEl.getBoundingClientRect();
-      var shift = 0;
-      if (gr.width > 0 && gr.height > 0) {
-        var rowH = cells[0].getBoundingClientRect().height;
-        var desired = stickyPinLine(weekVScroller()) - gr.top;
-        var maxShift = Math.max(0, gr.height - rowH);
-        shift = Math.max(0, Math.min(desired, maxShift));
-      }
+      if (!(gr.width > 0 && gr.height > 0)) { stickyGeom = null; return; }
+      var rowH = cells[0].getBoundingClientRect().height;
+      var sc = weekVScroller();
+      var pinLine = stickyPinLine(sc);
+      var gridOffset = sc
+        ? gr.top - sc.getBoundingClientRect().top + (Number(sc.scrollTop) || 0)
+        : gr.top + stickyDocScroll() - pinLine;
+      stickyGeom = { scroller: sc, cells: cells, gridOffset: gridOffset, maxShift: Math.max(0, gr.height - rowH) };
+    }
+    /* 当帧位移：只读滚动量（零强制布局），用缓存几何立即写 transform。
+       shift = clamp(滚动量 − gridOffset, 0, maxShift)，与旧 gBCR 公式 pinLine − gridTop 恒等。 */
+    function applySticky() {
+      var g = stickyGeom;
+      if (!gridEl || !g) return;
+      var scrolled = g.scroller ? (Number(g.scroller.scrollTop) || 0) : stickyDocScroll();
+      var shift = Math.max(0, Math.min(scrolled - g.gridOffset, g.maxShift));
       var floating = shift > 0.5;
       var t = floating ? 'translateY(' + Math.round(shift) + 'px)' : '';
-      for (var i = 0; i < cells.length; i += 1) cells[i].style.transform = t;
+      for (var i = 0; i < g.cells.length; i += 1) g.cells[i].style.transform = t;
       if (gridEl.classList) gridEl.classList.toggle('is-floating', floating);
     }
+    /* render / resize 收尾：重量几何 + 立即应用（表头刚重建时同一帧钉住，避免闪未吸顶帧）。 */
+    function syncStickyHead() {
+      measureSticky();
+      applySticky();
+    }
+    /* scroll：先用缓存几何当帧同步写 transform（紧跟每一次滚动事件，不等 rAF，快滑不拖影），
+       再每帧至多一次重量几何自纠（祖先高度 / 顶线变化时下一帧修正）。 */
+    function onStickyScroll() {
+      applySticky();
+      if (stickyRaf) return;
+      stickyRaf = weekRaf(function () {
+        stickyRaf = 0;
+        measureSticky();
+        applySticky();
+      });
+    }
+    /* resize：几何变了，rAF 合并一次重量 + 应用。 */
     function scheduleSticky() {
       if (stickyRaf) return;
-      stickyRaf = weekRaf(syncStickyHead);
+      stickyRaf = weekRaf(function () {
+        stickyRaf = 0;
+        measureSticky();
+        applySticky();
+      });
     }
 
     function render() {
@@ -2301,9 +2344,10 @@
     render();
 
     /* 周几表头竖直吸顶：捕获阶段监听任意滚动（文档 / 内层 .week-scroll / 教程应用根），
-       scroll 不冒泡但会走捕获，故一处监听即可覆盖所有纵滚来源；resize 时重算顶线与表高。 */
+       scroll 不冒泡但会走捕获，故一处监听即可覆盖所有纵滚来源；resize 时重算顶线与表高。
+       scroll 走 onStickyScroll（当帧同步写 + 每帧一次重量自纠），快滑严格跟上。 */
     if (root.document && typeof root.document.addEventListener === 'function') {
-      root.document.addEventListener('scroll', scheduleSticky, true);
+      root.document.addEventListener('scroll', onStickyScroll, true);
     }
     if (typeof root.addEventListener === 'function') {
       root.addEventListener('resize', scheduleSticky);
