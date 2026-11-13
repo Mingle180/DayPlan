@@ -9,6 +9,9 @@
 
   var FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
   var openStack = [];
+  /* 锁滚动时冻结的 <body> 与冻结前的文档滚动位置（解锁后原位恢复）。 */
+  var lockedBody = null;
+  var lockedScrollY = 0;
 
   function el(tag, attrs, children) {
     var node = document.createElement(tag);
@@ -74,17 +77,48 @@
   }
 
   /* 2026-10-28（用户反馈）：弹窗（新建事项/设置等）打开时，滑动会带动下层被
-     遮住的页面一起滚（触摸滚动链）。弹窗在栈上就给根元素挂 has-modal 锁住
-     文档滚动；弹窗内部的滚动不受影响，全部关闭后自动解锁。 */
+     遮住的页面一起滚（触摸滚动链）。弹窗在栈上就锁住文档滚动，全部关闭后解锁。
+
+     2026-11-13（用户反馈·创建月计划跳到 2024）：原先只给 html/body 挂
+     has-modal → overflow:hidden。手机端文档滚动条挂在 <html> 上，一旦
+     overflow:hidden，浏览器会把文档 scrollTop 归零且解锁后不恢复——于是
+     打开「创建本月计划」表单的瞬间页面就跳回最顶（2024-01）。改为 iOS 式
+     body 冻结：锁定时把 body position:fixed + top:-scrollY 钉在原位（画面
+     不闪不跳），解锁时撤掉内联样式再 scrollTo 回原位置。
+
+     仅当真正的文档滚动条挂在 <html>（真实发布版）时才冻结。教程里
+     document.documentElement 被补丁指向 #tut-app-root（DIV），DIV 在
+     overflow:hidden 下会保留 scrollTop，无需冻结，也不会误滚外层教程页。 */
   function syncScrollLock() {
     var locked = openStack.length > 0;
+    var docEl = document.documentElement;
+    var body = document.body;
+    var realDoc = !!(docEl && docEl.tagName === 'HTML');
     try {
       if (locked) {
-        document.documentElement.classList.add('has-modal');
-        if (document.body) document.body.classList.add('has-modal');
+        if (realDoc && body && !lockedBody) {
+          lockedScrollY = window.pageYOffset || docEl.scrollTop || 0;
+          lockedBody = body;
+          body.style.position = 'fixed';
+          body.style.top = (-lockedScrollY) + 'px';
+          body.style.left = '0';
+          body.style.right = '0';
+          body.style.width = '100%';
+        }
+        docEl.classList.add('has-modal');
+        if (body) body.classList.add('has-modal');
       } else {
-        document.documentElement.classList.remove('has-modal');
-        if (document.body) document.body.classList.remove('has-modal');
+        docEl.classList.remove('has-modal');
+        if (body) body.classList.remove('has-modal');
+        if (lockedBody) {
+          lockedBody.style.position = '';
+          lockedBody.style.top = '';
+          lockedBody.style.left = '';
+          lockedBody.style.right = '';
+          lockedBody.style.width = '';
+          lockedBody = null;
+          window.scrollTo(0, lockedScrollY);
+        }
       }
     } catch (e) { /* 极老环境没有 classList：退化为原行为，只多一层穿透滚动 */ }
   }

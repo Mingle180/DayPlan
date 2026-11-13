@@ -617,7 +617,7 @@
       if (hd) bits.push((hd.type === 'workday' ? '班 ' : '休 ') + hd.name);
 
       var cell = el('div', {
-        class: 'wk-head' + (iso === today ? ' is-today' : ''),
+        class: 'wk-head' + (iso === today ? ' is-today' : '') + (idx === 6 ? ' wk-head-end' : ''),
         'data-date': iso,
         title: bits.join(' · '),
         'aria-label': bits.join('，')
@@ -1393,10 +1393,11 @@
 
       /* 8 列 × 2 行：表头行 + 轴/列行 */
       gridEl.innerHTML = '';
-      /* 左上角：与 .wk-head 同款粘性表头外观（不共用 wk-head 类，便于「7 列表头」计数） */
+      /* 左上角：与 .wk-head 同款表头外观（不共用 wk-head 类，便于「7 列表头」计数）。
+         竖直吸顶改由 JS translate 驱动（syncStickyHead），故用 relative 而非被 overflow 困住的 sticky。 */
       gridEl.appendChild(el('div', {
         class: 'wk-corner', 'aria-hidden': 'true',
-        style: 'position:sticky;top:0;z-index:6;background:var(--surface-2);' +
+        style: 'position:relative;z-index:6;background:var(--surface-2);' +
           'border-bottom:1px solid var(--border-strong);'
       }));
       days.forEach(function (iso, idx) {
@@ -1448,6 +1449,74 @@
       sc.scrollLeft = Math.max(0, Math.round(center - Number(sc.clientWidth) / 2));
     }
 
+    /* ------------------------------------------------------------------ *
+     * 周几表头竖直吸顶（item 4 / 2026-11-13）
+     * 原生 sticky 被 .week-grid-scroll 的 overflow-y:hidden 困住（它是最近滚动容器，
+     * 却只横滚、永不纵滚），表头随文档 / 外层 .week-scroll 一起滑走。改用 JS 竖直 translate：
+     *   表头正常可见 → shift=0，跟整表滑；本该滑出顶线但表体仍有可见部分 → 钉在顶线；
+     *   钉住量到「表高 − 表头高」为止，再往下表头随表体下底边一起上移（该挡就挡）。
+     * 只管竖直：横滚仍由 .week-grid-scroll 原样带动表头，列始终对齐。
+     * 真实版与教程同源：gBCR 在教程里被 shim 换算成「相对应用根、未缩放」，与 translate 同一坐标世界。
+     * ------------------------------------------------------------------ */
+    var stickyRaf = 0;
+    function stickyCells() {
+      if (!gridEl) return [];
+      var out = [];
+      var corner = gridEl.querySelector('.wk-corner');
+      if (corner) out.push(corner);
+      var heads = gridEl.querySelectorAll('.wk-head');
+      for (var i = 0; i < heads.length; i += 1) out.push(heads[i]);
+      return out;
+    }
+    /* 真正纵滚的容器：桌面是内层 .week-scroll；手机（max-height:none）落到文档 / 教程应用根。 */
+    function weekVScroller() {
+      var stop = root.document ? root.document.body : null;
+      var n = gridEl ? gridEl.parentNode : null;
+      while (n && n !== stop) {
+        if (n.nodeType === 1) {
+          var oy = root.getComputedStyle(n).overflowY;
+          if ((oy === 'auto' || oy === 'scroll') && n.scrollHeight > n.clientHeight + 1) return n;
+        }
+        n = n.parentNode;
+      }
+      return null;
+    }
+    /* 顶线：内层滚动容器取其视口顶；文档滚动则取 sticky 顶栏下沿（无顶栏取 0）。 */
+    function stickyPinLine(sc) {
+      if (sc) return sc.getBoundingClientRect().top;
+      var bar = root.document ? root.document.querySelector('.app-header') : null;
+      if (bar) {
+        var pos = root.getComputedStyle(bar).position;
+        if (pos === 'sticky' || pos === 'fixed') {
+          var br = bar.getBoundingClientRect();
+          if (br && br.height > 0) return br.bottom;
+        }
+      }
+      return 0;
+    }
+    function syncStickyHead() {
+      stickyRaf = 0;
+      if (!gridEl) return;
+      var cells = stickyCells();
+      if (!cells.length) return;
+      var gr = gridEl.getBoundingClientRect();
+      var shift = 0;
+      if (gr.width > 0 && gr.height > 0) {
+        var rowH = cells[0].getBoundingClientRect().height;
+        var desired = stickyPinLine(weekVScroller()) - gr.top;
+        var maxShift = Math.max(0, gr.height - rowH);
+        shift = Math.max(0, Math.min(desired, maxShift));
+      }
+      var floating = shift > 0.5;
+      var t = floating ? 'translateY(' + Math.round(shift) + 'px)' : '';
+      for (var i = 0; i < cells.length; i += 1) cells[i].style.transform = t;
+      if (gridEl.classList) gridEl.classList.toggle('is-floating', floating);
+    }
+    function scheduleSticky() {
+      if (stickyRaf) return;
+      stickyRaf = weekRaf(syncStickyHead);
+    }
+
     function render() {
       var doc = docOf();
       var monday = state.monday || D.startOfWeek(D.todayISO()) || D.todayISO();
@@ -1461,6 +1530,8 @@
       if (railCover) railCover.render();
       loadNotes();
       lastRenderStamp = dataStamp(doc);
+      /* 表头刚被重建（transform 清空）：同一帧内按当前滚动量重新钉住，避免闪一下未吸顶的表头。 */
+      syncStickyHead();
     }
 
     /** 轻量数据指纹：meta.updatedAt + 事项数（外部写入后据此判断视图是否过期） */
@@ -2228,6 +2299,15 @@
     setupPlanDrag();
     setupPan();
     render();
+
+    /* 周几表头竖直吸顶：捕获阶段监听任意滚动（文档 / 内层 .week-scroll / 教程应用根），
+       scroll 不冒泡但会走捕获，故一处监听即可覆盖所有纵滚来源；resize 时重算顶线与表高。 */
+    if (root.document && typeof root.document.addEventListener === 'function') {
+      root.document.addEventListener('scroll', scheduleSticky, true);
+    }
+    if (typeof root.addEventListener === 'function') {
+      root.addEventListener('resize', scheduleSticky);
+    }
 
     return {
       element: rootEl,

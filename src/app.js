@@ -61,6 +61,7 @@
       banners: document.getElementById('banners'),
       settingsBtn: document.getElementById('btn-settings'),
       saveBtn: document.getElementById('btn-cloud-save'),
+      brandBtn: document.getElementById('btn-brand-tutorial'),
       viewSwitch: document.getElementById('view-switch'),
       monthRoot: document.getElementById('view-month-root'),
       weekRoot: document.getElementById('view-week-root'),
@@ -1518,8 +1519,15 @@
       });
     }
 
-    /* 2026-10-31（用户口径）：原 logo 按钮（#brand-about → 关于弹窗）已删除，
-       顶栏左上是纯展示的字标图片。设置入口见 els.settingsBtn。 */
+    /* 2026-11-13（用户口径）：点击左上角字标进入使用教程（单文件版，打开时按
+       设备自动分流电脑/手机版）。教程内嵌运行时 window.__tutMode 已被外壳置位，
+       此时点击不再跳转，避免教程里的演示字标把用户带出教程。 */
+    if (els.brandBtn) {
+      els.brandBtn.addEventListener('click', function () {
+        if (root.__tutMode) return;
+        root.location.href = 'docs/tutorial/tutorial-single.html';
+      });
+    }
 
     /* 迭代 10 批次 2（条6）：分段控件白块拖动。
        - 白块（.view-switch-thumb）跟手移动，拖动中不高亮目标档；

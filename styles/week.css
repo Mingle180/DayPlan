@@ -35,10 +35,11 @@
  * 总宽可超过容器 → 由 .week-scroll 横向滚动）。
  * 下面的静态规则只是 JS 未运行时的兜底（等宽 84px 起），运行时始终被内联样式覆盖。 */
 .week-grid { display: grid; grid-template-columns: 38px repeat(7, minmax(84px, 1fr)); }
-/* 规范 12 / LA-3：表头毛玻璃置顶（内容从其下滚过时呈毛玻璃通透） */
+/* 规范 12 / LA-3：表头毛玻璃置顶（内容从其下滚过时呈毛玻璃通透）。
+ * 2026-11-13（item 4）：竖直吸顶改由 JS translate 驱动（week.js syncStickyHead）——
+ * 原生 sticky 被 .week-grid-scroll 的 overflow-y:hidden 困住永不生效，故改用 relative + translate。 */
 .week-grid .wk-head {
-  position: sticky;
-  top: 0;
+  position: relative;
   z-index: 6;
   background: var(--glass);
   -webkit-backdrop-filter: var(--glass-blur);
@@ -49,6 +50,15 @@
   font-size: 12px;
   cursor: pointer;
 }
+/* item 4：表头悬浮时保持时间表上边的圆角，并抬到事项 / 展开卡之上（拉边 9 / 浮层 60 仍更高）。
+   底边细线来自 vintage 的 border-bottom，作为与表体的分隔；这里只补圆角与一道柔和投影。 */
+.week-grid.is-floating .wk-corner,
+.week-grid.is-floating .wk-head {
+  z-index: 8;
+  box-shadow: 0 5px 12px -6px rgba(60, 45, 25, .28);
+}
+.week-grid.is-floating .wk-corner { border-top-left-radius: var(--radius); }
+.week-grid.is-floating .wk-head-end { border-top-right-radius: var(--radius); }
 /* 迭代 10 批次 2（条3）：表头只留星期（日期/农历下线，完整日期在 title/aria-label） */
 .wk-head .wk-dow { font-weight: 600; }
 /* 2026-10-21 用户口径：今天不再铺浅蓝底，只把「周几」标红 */

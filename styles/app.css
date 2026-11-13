@@ -187,7 +187,17 @@ button { font: inherit; color: inherit; text-align: center; }
 
 /* 2026-10-31（用户口径）：顶栏左上是样图第一幅水彩字标（.brand-mark），
    原 32×32 logo 按钮块、日期条（.today-chip）与其「关于」弹窗入口一并删除。
-   字标是纯图片（pointer-events: none），不承担任何交互。 */
+   2026-11-13（用户口径）：字标重新承担交互——外包 .brand-link 按钮，点击进
+   入使用教程（按设备自动分流）。图片本身仍 pointer-events:none，点击落在按钮上。 */
+.brand-link {
+  display: block;
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  line-height: 0;
+}
 .brand-mark {
   display: block;
   flex: none;
