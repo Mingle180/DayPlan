@@ -1,7 +1,7 @@
 /**
  * DayPlan · 云端文档 <-> 本机文档（纯函数，无 DOM / 存储 / 网络依赖）
  *
- * 云端只保存「内容」：九个内容字段 + 一次保存的时间戳。
+ * 云端只保存「内容」：十一个内容字段 + 一次保存的时间戳。
  * `settings` 是设备本地偏好（默认类别、视图密度），`meta.createdAt` 是账号数据的
  * 出生时间——两者都不上云，回读时沿用本机。
  *
@@ -25,7 +25,8 @@
 
   var CLOUD_FIELDS = [
     'schemaVersion', 'app', 'categories', 'items',
-    'notes', 'weekNotes', 'monthPlans', 'countdowns', 'finishDock'
+    'notes', 'weekNotes', 'covers', 'weekCovers',
+    'monthPlans', 'countdowns', 'finishDock'
   ];
   var ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/;
 

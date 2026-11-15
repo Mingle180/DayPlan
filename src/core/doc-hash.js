@@ -2,7 +2,7 @@
  * DayPlan · 文档内容指纹（纯函数，无 DOM / 存储 / 网络依赖）
  *
  * 只回答一个问题：两份文档的**内容**是否一致。
- * 因此指纹只覆盖会同步的九个字段，`settings`（设备本地偏好）与
+ * 因此指纹只覆盖会同步的十一个字段，`settings`（设备本地偏好）与
  * `meta.updatedAt`（每次落盘都会变的元数据）都不参与。
  *
  * 用途：判断本机相对「上次保存到云端的版本」有没有改动。
@@ -20,10 +20,11 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  /** 会同步的内容字段（与云端 payload 的十字段去掉 updatedAt 一致）。 */
+  /** 会同步的内容字段（与云端 payload 的十二字段去掉 updatedAt 一致）。 */
   var CONTENT_FIELDS = [
     'schemaVersion', 'app', 'categories', 'items',
-    'notes', 'weekNotes', 'monthPlans', 'countdowns', 'finishDock'
+    'notes', 'weekNotes', 'covers', 'weekCovers',
+    'monthPlans', 'countdowns', 'finishDock'
   ];
 
   function isPlainObject(v) {
@@ -68,7 +69,7 @@
     return s;
   }
 
-  /** 内容投影：缺失的 countdowns / finishDock 一律视为空数组（与云端写入口径一致）。 */
+  /** 内容投影：缺失的 countdowns / finishDock 视为空数组、covers / weekCovers 视为空对象（与云端写入口径一致）。 */
   function contentProjection(doc) {
     if (!isPlainObject(doc)) return null;
     var out = {};
@@ -79,11 +80,13 @@
     }
     if (out.countdowns === undefined || out.countdowns === null) out.countdowns = [];
     if (out.finishDock === undefined || out.finishDock === null) out.finishDock = [];
+    if (out.covers === undefined || out.covers === null) out.covers = {};
+    if (out.weekCovers === undefined || out.weekCovers === null) out.weekCovers = {};
     return out;
   }
 
   /**
-   * @param {object} doc 整份文档或云端 payload（只取九个内容字段）
+   * @param {object} doc 整份文档或云端 payload（只取十一个内容字段）
    * @returns {string} 稳定指纹；非对象返回空串
    */
   function contentHash(doc) {
