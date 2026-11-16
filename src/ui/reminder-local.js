@@ -72,6 +72,15 @@
         var delay = r.fireAtMs - nowMs;
         timer = setTimeout(function () {
           timer = null;
+          /* 2026-11-16（用户反馈·已通知事项十几小时后再通知一次）：电脑休眠 /
+             手机标签页冻结会让 setTimeout 在醒来时补跑。补跑时若已远超 10 分钟
+             补发窗口，就不该再通知——那正是「当时已由推送 / 另一标签页提醒过，
+             十几个小时后又被本机兜底喊一次」的来源。 */
+          if (Date.now() - r.fireAtMs > MISSED_WINDOW_MS) {
+            fired[key] = true;
+            refresh();
+            return;
+          }
           fired[key] = true;
           notify(r);
           refresh();

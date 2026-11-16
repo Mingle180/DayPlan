@@ -2055,7 +2055,13 @@ button { font: inherit; color: inherit; text-align: center; }
 .dp-select-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: -1px; }
 .dp-select-label { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .dp-select-caret { color: var(--text-3); font-size: 10px; flex: none; }
-.dp-select-pop { min-width: 180px; padding: 6px; }
+.dp-select-pop {
+  min-width: 180px; padding: 6px;
+  /* 2026-11-16（F-105.1）：长列表（时区 20 项）在浮层内部滚动，不撑破视口 */
+  max-height: min(320px, 405px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 .dp-select-item {
   display: block;
   width: 100%;
@@ -2462,6 +2468,9 @@ button { font: inherit; color: inherit; text-align: center; }
   visibility: visible;
   transition-delay: 0s;
 }
+/* 2026-11-16（用户反馈·F-105.1）：下拉浮层展开期间放开折叠体裁剪，否则列表
+   下半截和阴影被 .settings-body 下缘切掉；浮层关闭 / 收起动画仍走 hidden。 */
+.settings-body.is-pop-open { overflow: visible; }
 
 /* 云端（18 号契约）：账号行 + 版本列表 */
 .settings-row { display: flex; align-items: center; gap: 8px; }
@@ -7686,7 +7695,13 @@ button { font: inherit; color: inherit; text-align: center; }
 .dp-select-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: -1px; }
 .dp-select-label { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .dp-select-caret { color: var(--text-3); font-size: 10px; flex: none; }
-.dp-select-pop { min-width: 180px; padding: 6px; }
+.dp-select-pop {
+  min-width: 180px; padding: 6px;
+  /* 2026-11-16（F-105.1）：长列表（时区 20 项）在浮层内部滚动，不撑破视口 */
+  max-height: min(320px, 384px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 .dp-select-item {
   display: block;
   width: 100%;
@@ -8112,6 +8127,9 @@ button { font: inherit; color: inherit; text-align: center; }
   visibility: visible;
   transition-delay: 0s;
 }
+/* 2026-11-16（用户反馈·F-105.1）：下拉浮层展开期间放开折叠体裁剪，否则列表
+   下半截和阴影被 .settings-body 下缘切掉；浮层关闭 / 收起动画仍走 hidden。 */
+.settings-body.is-pop-open { overflow: visible; }
 
 /* 云端（18 号契约）：账号行 + 版本列表 */
 .settings-row { display: flex; align-items: center; gap: 8px; }
@@ -32420,11 +32438,49 @@ body.tut-landing {
     var closer = P.createOutsideCloser({
       ignore: [wrap, button, pop],
       isOpen: function () { return !pop.hidden; },
-      onOutside: function () {
-        pop.hidden = true;
-        if (closer) closer.unbind();
-      }
+      onOutside: function () { closePop(); }
     });
+
+    /* 2026-11-16（用户反馈·F-105.1）：设置里的下拉浮层原先被折叠体 .settings-body
+       的 overflow:hidden 连同阴影一起裁掉（时区列表只露出 6 项）。展开期间给最近
+       的折叠体挂 is-pop-open 放开裁剪，关闭即摘除——折叠动画本身仍保持 hidden。 */
+    var popHost = null;
+    function setPopHost(on) {
+      if (on) {
+        var host = typeof wrap.closest === 'function' ? wrap.closest('.settings-body') : null;
+        if (host) { host.classList.add('is-pop-open'); popHost = host; }
+      } else if (popHost) {
+        popHost.classList.remove('is-pop-open');
+        popHost = null;
+      }
+    }
+
+    function closePop() {
+      pop.hidden = true;
+      pop.style.top = '';
+      pop.style.bottom = '';
+      setPopHost(false);
+      if (closer) closer.unbind();
+    }
+
+    /* 浮层向下会越出视口时翻到按钮上方；高度上限交给 .dp-select-pop 的 max-height，
+       20 项在浮层内部滚动，末项始终可达。 */
+    function openPop() {
+      renderList();
+      pop.hidden = false;
+      setPopHost(true);
+      pop.style.top = '';
+      pop.style.bottom = '';
+      var btnRect = button.getBoundingClientRect();
+      var popRect = pop.getBoundingClientRect();
+      var vh = (window.__tutAppH||window.innerHeight) || (document.getElementById('tut-app-root')||document.documentElement).clientHeight || 0;
+      if (vh && btnRect.bottom + 6 + popRect.height > vh - 8
+        && btnRect.top - 6 - popRect.height >= 8) {
+        pop.style.top = 'auto';
+        pop.style.bottom = 'calc(100% + 6px)';
+      }
+      if (closer) closer.bind();
+    }
 
     function syncButton() {
       label.textContent = optionText(select.value);
@@ -32447,8 +32503,7 @@ body.tut-landing {
             syncButton();
             changeNow(select);
           }
-          pop.hidden = true;
-          if (closer) closer.unbind();
+          closePop();
         });
         pop.appendChild(item);
       });
@@ -32456,14 +32511,7 @@ body.tut-landing {
 
     button.addEventListener('click', function (e) {
       e.stopPropagation();
-      if (pop.hidden) {
-        renderList();
-        pop.hidden = false;
-        if (closer) closer.bind();
-      } else {
-        pop.hidden = true;
-        if (closer) closer.unbind();
-      }
+      if (pop.hidden) openPop(); else closePop();
     });
     /* 值被程序改写（校验回填）时按钮文案跟随 */
     select.addEventListener('change', syncButton);
@@ -34289,6 +34337,15 @@ body.tut-landing {
         var delay = r.fireAtMs - nowMs;
         timer = setTimeout(function () {
           timer = null;
+          /* 2026-11-16（用户反馈·已通知事项十几小时后再通知一次）：电脑休眠 /
+             手机标签页冻结会让 setTimeout 在醒来时补跑。补跑时若已远超 10 分钟
+             补发窗口，就不该再通知——那正是「当时已由推送 / 另一标签页提醒过，
+             十几个小时后又被本机兜底喊一次」的来源。 */
+          if (Date.now() - r.fireAtMs > MISSED_WINDOW_MS) {
+            fired[key] = true;
+            refresh();
+            return;
+          }
           fired[key] = true;
           notify(r);
           refresh();

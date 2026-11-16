@@ -1779,7 +1779,13 @@ html.has-modal body {
 .dp-select-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: -1px; }
 .dp-select-label { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .dp-select-caret { color: var(--text-3); font-size: 10px; flex: none; }
-.dp-select-pop { min-width: 180px; padding: 6px; }
+.dp-select-pop {
+  min-width: 180px; padding: 6px;
+  /* 2026-11-16（F-105.1）：长列表（时区 20 项）在浮层内部滚动，不撑破视口 */
+  max-height: min(320px, 48vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 .dp-select-item {
   display: block;
   width: 100%;
@@ -2205,6 +2211,9 @@ html.has-modal body {
   visibility: visible;
   transition-delay: 0s;
 }
+/* 2026-11-16（用户反馈·F-105.1）：下拉浮层展开期间放开折叠体裁剪，否则列表
+   下半截和阴影被 .settings-body 下缘切掉；浮层关闭 / 收起动画仍走 hidden。 */
+.settings-body.is-pop-open { overflow: visible; }
 
 /* 云端（18 号契约）：账号行 + 版本列表 */
 .settings-row { display: flex; align-items: center; gap: 8px; }

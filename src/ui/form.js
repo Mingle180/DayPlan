@@ -335,11 +335,49 @@
     var closer = P.createOutsideCloser({
       ignore: [wrap, button, pop],
       isOpen: function () { return !pop.hidden; },
-      onOutside: function () {
-        pop.hidden = true;
-        if (closer) closer.unbind();
-      }
+      onOutside: function () { closePop(); }
     });
+
+    /* 2026-11-16（用户反馈·F-105.1）：设置里的下拉浮层原先被折叠体 .settings-body
+       的 overflow:hidden 连同阴影一起裁掉（时区列表只露出 6 项）。展开期间给最近
+       的折叠体挂 is-pop-open 放开裁剪，关闭即摘除——折叠动画本身仍保持 hidden。 */
+    var popHost = null;
+    function setPopHost(on) {
+      if (on) {
+        var host = typeof wrap.closest === 'function' ? wrap.closest('.settings-body') : null;
+        if (host) { host.classList.add('is-pop-open'); popHost = host; }
+      } else if (popHost) {
+        popHost.classList.remove('is-pop-open');
+        popHost = null;
+      }
+    }
+
+    function closePop() {
+      pop.hidden = true;
+      pop.style.top = '';
+      pop.style.bottom = '';
+      setPopHost(false);
+      if (closer) closer.unbind();
+    }
+
+    /* 浮层向下会越出视口时翻到按钮上方；高度上限交给 .dp-select-pop 的 max-height，
+       20 项在浮层内部滚动，末项始终可达。 */
+    function openPop() {
+      renderList();
+      pop.hidden = false;
+      setPopHost(true);
+      pop.style.top = '';
+      pop.style.bottom = '';
+      var btnRect = button.getBoundingClientRect();
+      var popRect = pop.getBoundingClientRect();
+      var vh = window.innerHeight || document.documentElement.clientHeight || 0;
+      if (vh && btnRect.bottom + 6 + popRect.height > vh - 8
+        && btnRect.top - 6 - popRect.height >= 8) {
+        pop.style.top = 'auto';
+        pop.style.bottom = 'calc(100% + 6px)';
+      }
+      if (closer) closer.bind();
+    }
 
     function syncButton() {
       label.textContent = optionText(select.value);
@@ -362,8 +400,7 @@
             syncButton();
             changeNow(select);
           }
-          pop.hidden = true;
-          if (closer) closer.unbind();
+          closePop();
         });
         pop.appendChild(item);
       });
@@ -371,14 +408,7 @@
 
     button.addEventListener('click', function (e) {
       e.stopPropagation();
-      if (pop.hidden) {
-        renderList();
-        pop.hidden = false;
-        if (closer) closer.bind();
-      } else {
-        pop.hidden = true;
-        if (closer) closer.unbind();
-      }
+      if (pop.hidden) openPop(); else closePop();
     });
     /* 值被程序改写（校验回填）时按钮文案跟随 */
     select.addEventListener('change', syncButton);
