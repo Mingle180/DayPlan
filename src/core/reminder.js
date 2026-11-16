@@ -4,10 +4,11 @@
  * 契约：docs/spec/19-notifications.md。
  * 只做「算时间 / 物化提醒行 / 生成稳定签名」，不碰 DOM、不碰网络、不碰存储。
  *
- * 时间口径：
- *   · 文档里存的是本地墙钟（YYYY-MM-DD + HH:mm / YYYY-MM-DDTHH:mm）；
- *   · 云端 reminders.fire_at 存 UTC ISO 字符串，由本机时区换算得出；
- *   · 设备换时区后，下一次打开或保存会按新时区重算并覆盖（旧时区期间保持原值）。
+ * 时间口径（F-105）：
+ *   · 文档里存的是墙钟（YYYY-MM-DD + HH:mm / YYYY-MM-DDTHH:mm），按活动时区理解；
+ *   · 活动时区由用户在设置里选定（默认北京），经 datetime.setTimeZone 注入；
+ *   · 云端 reminders.fire_at 存 UTC ISO 字符串，由活动时区换算得出；
+ *   · 换时区后，下一次打开或保存会按新时区重算并覆盖（旧时区期间保持原值）。
  */
 (function (root, factory) {
   var isNode = typeof module === 'object' && module.exports;
@@ -33,19 +34,16 @@
   function pad2(n) { return (n < 10 ? '0' : '') + n; }
 
   function localDateISO(ms) {
+    var w = dt && typeof dt.msToWall === 'function' ? dt.msToWall(ms) : null;
+    if (w) return w.date;
     var d = new Date(ms);
     return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
   }
 
-  /** "YYYY-MM-DD" + "HH:mm" → 本地墙钟毫秒；非法返回 null */
+  /** "YYYY-MM-DD" + "HH:mm" → 墙钟毫秒（按活动时区）；非法返回 null */
   function localMs(dateISO, time) {
-    if (!dt || !dt.isValidDate(dateISO) || !dt.isValidTime(time)) return null;
-    var ymd = dateISO.split('-');
-    var hm = time.split(':');
-    var d = new Date(Number(ymd[0]), Number(ymd[1]) - 1, Number(ymd[2]),
-      Number(hm[0]), Number(hm[1]), 0, 0);
-    var t = d.getTime();
-    return isFinite(t) ? t : null;
+    if (!dt || typeof dt.wallToMs !== 'function') return null;
+    return dt.wallToMs(dateISO, time);
   }
 
   /** 倒计时目标 "YYYY-MM-DDTHH:mm" → 本地墙钟毫秒；非法返回 null */
@@ -112,15 +110,16 @@
     return new Date(base - off * MINUTE_MS).toISOString();
   }
 
-  /** 物化后的本地展示文案：「11月3日 08:30」；跨年时带年份。 */
+  /** 物化后的本地展示文案：「11月3日 08:30」；跨年时带年份（按活动时区）。 */
   function formatFireAt(iso, nowMs) {
     var t = Date.parse(iso);
     if (!isFinite(t)) return '';
-    var d = new Date(t);
-    var now = new Date(isFinite(nowMs) ? nowMs : Date.now());
-    var head = (d.getFullYear() !== now.getFullYear() ? d.getFullYear() + '年' : '')
-      + (d.getMonth() + 1) + '月' + d.getDate() + '日 ';
-    return head + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+    var w = dt && typeof dt.msToWall === 'function' ? dt.msToWall(t) : null;
+    var nw = dt && typeof dt.msToWall === 'function'
+      ? dt.msToWall(isFinite(nowMs) ? nowMs : Date.now()) : null;
+    if (!w || !nw) return '';
+    var head = (w.year !== nw.year ? w.year + '年' : '') + w.month + '月' + w.day + '日 ';
+    return head + pad2(w.hour) + ':' + pad2(w.minute);
   }
 
   /** 「提前 1 天 2 小时」「准时」——表单里的一行说明。 */

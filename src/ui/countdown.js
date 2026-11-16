@@ -29,22 +29,13 @@
 
   var TARGET_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;
 
-  /** 本地墙钟 "YYYY-MM-DDTHH:mm" → 毫秒；非法（含 13 月、24 时等回卷值）返回 null */
+  /** 墙钟 "YYYY-MM-DDTHH:mm" → 毫秒（按活动时区）；非法（含 13 月、24 时等回卷值）返回 null */
   function parseTargetAt(targetAt) {
     if (typeof targetAt !== 'string') return null;
     var m = TARGET_RE.exec(targetAt);
     if (!m) return null;
-    var y = Number(m[1]);
-    var mo = Number(m[2]);
-    var d = Number(m[3]);
-    var h = Number(m[4]);
-    var mi = Number(m[5]);
-    var dt = new Date(y, mo - 1, d, h, mi, 0, 0);
-    /* 与 schema.isCountdownTargetAt 同口径：Date 会把越界值滚进下个月 / 下一天，必须逐字段回读校验 */
-    if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d
-      || dt.getHours() !== h || dt.getMinutes() !== mi) return null;
-    var t = dt.getTime();
-    return isFinite(t) ? t : null;
+    /* 与 schema.isCountdownTargetAt 同口径：wallToMs 经 isValidDate/isValidTime 拦截越界回卷值 */
+    return root.DayPlan.datetime.wallToMs(m[1] + '-' + m[2] + '-' + m[3], m[4] + ':' + m[5]);
   }
 
   /**
@@ -225,11 +216,8 @@
     /* ---------------- 新建 / 编辑 ---------------- */
 
     function defaultTarget() {
-      var d = new Date(Date.now() + 60 * MINUTE_MS);
-      return {
-        date: d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()),
-        time: pad2(d.getHours()) + ':' + pad2(d.getMinutes())
-      };
+      var w = D.msToWall(Date.now() + 60 * MINUTE_MS);
+      return { date: w.date, time: w.time };
     }
 
     function openForm(id) {

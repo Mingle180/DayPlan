@@ -18,12 +18,13 @@
 
   function formatTime(iso) {
     if (!iso) return '时间未知';
-    var d = new Date(iso);
-    if (isNaN(d.getTime())) return String(iso);
-    var now = new Date();
-    var datePart = (d.getFullYear() === now.getFullYear() ? '' : d.getFullYear() + '-') +
-      D.pad2(d.getMonth() + 1) + '-' + D.pad2(d.getDate());
-    return datePart + ' ' + D.pad2(d.getHours()) + ':' + D.pad2(d.getMinutes());
+    var t = Date.parse(iso);
+    if (!isFinite(t)) return String(iso);
+    var w = D.msToWall(t);
+    var nw = D.msToWall(Date.now());
+    var datePart = (w.year === nw.year ? '' : w.year + '-') +
+      D.pad2(w.month) + '-' + D.pad2(w.day);
+    return datePart + ' ' + D.pad2(w.hour) + ':' + D.pad2(w.minute);
   }
 
   function metaText(entry) {

@@ -8,7 +8,7 @@
  *   - 刷新/重开后**保留台里的条目与计时**（2026-10-19 用户裁定，取代早先「仅内存」口径）：
  *     条目与计时状态写入 UI 状态 `dayplan.ui.v1.finishDock`；仍**不写事项字段**、不改入库数据。
  *     只存状态快照（`running` + `lastTs`），真实读数由「快照 + 时间差」推出，所以无需按 tick 写盘。
- *   - 到时：响铃「叮」并停在 0 等用户确认（不自动完成）。
+ *   - 到时：通知提醒（F-106，取代响铃）并停在 0 等用户确认（不自动完成）。
  *   - 多个事项并列、各计各的。
  *   - 倒计时默认 25 分钟；番茄钟 25/5 自动交替。
  *   - **时长只在「设置」阶段可改**（滚轮仅在设置时出现，开始计时后收起，重置后再现）：
@@ -20,7 +20,7 @@
  * 纪律：
  *   - 不依赖 DOM 之外的全局状态；所有元素都用传入的 document 创建（便于垫片环境断言）。
  *   - 计时用时间戳差值（`api.tick(nowMs)` 可注入时间），不累加 interval 次数，避免漂移。
- *   - 「叮」在 soundOn=false 时既不发声也不派发 `dayplan:ding` 事件（可被断言观测）。
+ *   - 通知在 notifyOn=false 时既不提示也不派发 `dayplan:finish-notify` 事件（可被断言观测）。
  */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -46,7 +46,7 @@
 
   var MODES = [
     { id: 'stopwatch', label: '正计时', title: '从 0 往上累计，可暂停 / 清零' },
-    { id: 'countdown', label: '倒计时', title: '设定分钟数，倒数到 0 响铃' },
+    { id: 'countdown', label: '倒计时', title: '设定分钟数，倒数到 0 通知' },
     { id: 'pomodoro', label: '番茄钟', title: '专注 / 休息自动交替' }
   ];
 
@@ -175,11 +175,11 @@
    * @param {object} opts
    *   root      完成台内容容器（必填）
    *   countEl   右上角计数元素（可选）
-   *   store     store 实例（用于记住音效开关，可选）
+   *   store     store 实例（用于记住通知开关，可选）
    *   getCat    (categoryId) => {name,color}
    *   onDockChange () => void  台内条目增减时通知视图重绘（隐藏/恢复原位置）
    *   onComplete   (occ) => void 标记该次发生为已完成
-   *   sound     初始音效开关（布尔）
+   *   notify    初始通知开关（布尔，缺省开）
    *   document  可选，默认全局 document
    */
   function create(opts) {
@@ -195,10 +195,9 @@
 
     var items = [];
     var timer = null;
-    var soundOn = opts.sound !== false;
-    var audioCtx = null;
-    /* 已响铃次数：既是运行时可观测状态，也让「静音后不再响」可被断言 */
-    var dingCount = 0;
+    var notifyOn = opts.notify !== false;
+    /* 已通知次数：既是运行时可观测状态，也让「关闭后不再提醒」可被断言 */
+    var notifyCount = 0;
 
     /* 全屏计时（2026-11-01 用户口径）：点计时条目的空白处铺满视口、居中放大读数。
        浮层只镜像该条目的实时读数，不改任何计时状态；点浮层任意处 / Esc 退出。 */
@@ -209,36 +208,37 @@
     var focusKey = null;
     var focusReturn = null;
 
-    /* ---------------- 音效 ---------------- */
+    /* ---------------- 通知（F-106，取代响铃） ---------------- */
 
-    function ding() {
-      if (!soundOn) return;
-      dingCount += 1;
+    /** 倒计时归零 / 番茄钟切换时提醒。it.phase 是番茄钟刚结束的那一段（翻转前）。 */
+    function notifyFinish(it) {
+      if (!notifyOn) return;
+      notifyCount += 1;
+      var title;
+      var body;
+      if (it.mode === 'countdown') {
+        title = '倒计时结束';
+        body = it.occ.title || '（无标题）';
+      } else if (it.phase === 'break') {
+        title = '休息结束';
+        body = '开始专注 ' + it.focusMin + ' 分钟';
+      } else {
+        title = '专注结束';
+        body = '休息 ' + it.breakMin + ' 分钟';
+      }
+      var channel = 'none';
       try {
-        var AC = root ? (root.AudioContext || root.webkitAudioContext) : null;
-        if (AC) {
-          if (!audioCtx) audioCtx = new AC();
-          if (audioCtx.state === 'suspended' && typeof audioCtx.resume === 'function') audioCtx.resume();
-          var t0 = audioCtx.currentTime;
-          [0, 0.18].forEach(function (off, i) {
-            var osc = audioCtx.createOscillator();
-            var gain = audioCtx.createGain();
-            osc.type = 'sine';
-            osc.frequency.value = i ? 1320 : 1760;
-            gain.gain.setValueAtTime(0.0001, t0 + off);
-            gain.gain.exponentialRampToValueAtTime(0.22, t0 + off + 0.012);
-            gain.gain.exponentialRampToValueAtTime(0.0001, t0 + off + 0.16);
-            osc.connect(gain);
-            gain.connect(audioCtx.destination);
-            osc.start(t0 + off);
-            osc.stop(t0 + off + 0.18);
-          });
+        var N = root.DayPlan && root.DayPlan.notify;
+        if (N && typeof N.show === 'function') {
+          channel = N.show({ title: title, body: body, tag: 'finish-' + it.key }) || 'none';
         }
-      } catch (e) { /* 环境不支持音频：静默降级 */ }
+      } catch (e) { /* 通知不可用：静默降级 */ }
       try {
         if (root && typeof root.dispatchEvent === 'function'
           && typeof root.CustomEvent === 'function') {
-          root.dispatchEvent(new root.CustomEvent('dayplan:ding', { detail: { at: Date.now() } }));
+          root.dispatchEvent(new root.CustomEvent('dayplan:finish-notify', {
+            detail: { mode: it.mode, phase: it.phase, at: Date.now(), channel: channel }
+          }));
         }
       } catch (e) { /* 忽略 */ }
     }
@@ -342,7 +342,7 @@
 
     function countdownSecOf(it) { return (it.cdH * 3600) + (it.cdM * 60) + it.cdS; }
 
-    /** 0 时长不启动：按钮同步置灰（否则一按就立刻响铃） */
+    /** 0 时长不启动：按钮同步置灰（否则一按就立刻提醒） */
     function refreshStartBtn(it) {
       if (!it.startBtn) return;
       var zero = it.mode === 'countdown' && countdownSecOf(it) <= 0;
@@ -772,7 +772,7 @@
 
     /** 倒计时/番茄钟到时 */
     function reachZero(it) {
-      ding();
+      notifyFinish(it);
       if (it.mode === 'countdown') {
         it.remainingMs = 0;
         it.running = false;
@@ -1059,13 +1059,13 @@
       },
       tick: tick,
 
-      soundEnabled: function () { return soundOn; },
-      /** 响过的「叮」次数（静音时不增加） */
-      dingCount: function () { return dingCount; },
-      setSound: function (on) {
-        soundOn = !!on;
-        try { if (store && typeof store.saveUIState === 'function') store.saveUIState({ finishSound: soundOn }); } catch (e) { /* 忽略 */ }
-        return soundOn;
+      notifyEnabled: function () { return notifyOn; },
+      /** 已发出的通知次数（关闭提醒时不增加） */
+      notifyCount: function () { return notifyCount; },
+      setNotify: function (on) {
+        notifyOn = !!on;
+        try { if (store && typeof store.saveUIState === 'function') store.saveUIState({ finishNotify: notifyOn }); } catch (e) { /* 忽略 */ }
+        return notifyOn;
       },
 
       destroy: function () {
@@ -1081,7 +1081,6 @@
         items.slice().forEach(function (it) { api.remove(it.key); });
         items = [];
         if (rootEl && doc) rootEl.innerHTML = '';
-        audioCtx = null;
       }
     };
 

@@ -1570,12 +1570,11 @@
 
     // ---------------- 倒计时（五十一轮） ----------------
 
-    /** 本地墙钟 "YYYY-MM-DDTHH:mm" → 毫秒；非法返回 null */
+    /** 墙钟 "YYYY-MM-DDTHH:mm" → 毫秒（按活动时区）；非法返回 null */
     function targetAtMs(targetAt) {
       var m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(String(targetAt || ''));
       if (!m) return null;
-      var t = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), 0, 0).getTime();
-      return isFinite(t) ? t : null;
+      return dt.wallToMs(m[1] + '-' + m[2] + '-' + m[3], m[4] + ':' + m[5]);
     }
 
     /**

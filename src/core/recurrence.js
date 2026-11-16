@@ -735,10 +735,7 @@
     opts = opts || {};
     var todayISO = dt.isValidDate(opts.todayISO) ? opts.todayISO : dt.todayISO();
     var nowMinutes = (typeof opts.nowMinutes === 'number' && isFinite(opts.nowMinutes))
-      ? opts.nowMinutes : (function () {
-        var now = new Date();
-        return now.getHours() * 60 + now.getMinutes();
-      })();
+      ? opts.nowMinutes : dt.nowMinutes();
     var items = doc && Array.isArray(doc.items) ? doc.items : [];
     var rows = [];
     for (var i = 0; i < items.length; i++) {

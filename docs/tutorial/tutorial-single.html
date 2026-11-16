@@ -12920,7 +12920,7 @@ body.tut-landing {
  *   第 2 章 拖动排期 —— 真实存在的拖拽：清单↔时间轴、拉边调时长、拖进完成台、空白平移、周计划拖到某天。
  *   第 3 章 数据与云端 —— 只介绍不实操：导出/导入、云端同步、通知的位置与用法。
  *   第 4 章 快捷键 —— 真实全局快捷键实操。
- *   第 5 章 自选图片与个性化 —— 只点一下图片知道能换（不真换图）；「显示」设置作讲解。
+ *   第 5 章 自选图片与个性化 —— 只点一下图片知道能换（不真换图）；「常规」设置作讲解。
  *
  * 判定口径与真实发布版一致：桌面鼠标单击事项 = 打开编辑；右键 = 切换完成。
  * 「手动步」= 没有 done 谓词（引擎以 !done 判定），只讲解、点「下一步」继续。
@@ -12957,7 +12957,7 @@ body.tut-landing {
   function topModal() { var b = qa('.modal-backdrop'); return b.length ? b[b.length - 1] : null; }
   function modalOpen() { return !!topModal(); }
   function modalTitle() { var m = topModal(); var t = m && m.querySelector('.modal-title'); return t ? (t.textContent || '').trim() : ''; }
-  /* 数据 / 显示章节只介绍不实操：程序把设置面板开到对应分组，聚光指给读者看。
+  /* 数据 / 常规章节只介绍不实操：程序把设置面板开到对应分组，聚光指给读者看。
      设置面板已开就不重复开（M.open 会叠层）。 */
   function openSettingsOnce() {
     if (modalTitle() === '设置') return;
@@ -13222,10 +13222,10 @@ body.tut-landing {
           done: function () { return coverTapSeen; }
         },
         {
-          title: '「显示」里有各种设置', manual: true, spot: '显示设置',
-          desc: '设置「显示」分组里除了界面主题（浅色 / 深色 / 跟随系统），还有日 / 周时间轴缩放、空闲时段紧凑、隐藏已完成、节假日与农历标注、完成台提示音等各种设置，可以根据需要自行调整。',
-          target: function () { return expandSection('显示'); },
-          enter: function () { openSettingsOnce(); expandSection('显示'); }
+          title: '「常规」里有各种设置', manual: true, spot: '常规设置',
+          desc: '设置「常规」分组里除了界面主题（浅色 / 深色 / 跟随系统），还有时区（默认北京，可改选其它常用时区）、日 / 周时间轴缩放、空闲时段紧凑、隐藏已完成、节假日与农历标注、完成台计时结束提醒等各种设置，可以根据需要自行调整。',
+          target: function () { return expandSection('常规'); },
+          enter: function () { openSettingsOnce(); expandSection('常规'); }
         }
       ]
     }
@@ -13244,7 +13244,7 @@ body.tut-landing {
  *   第 2 章 拖动排期 —— 全部拖拽手机上都能做：长按清单拖到时间轴、长按拖回清单、
  *            拉边调时长（点一下再拖）、长按拖进完成台、空白处手指滑动平移、周计划拖到某天。
  *   第 3 章 数据与云端 —— 只介绍不实操：导出/导入、云端同步、通知的位置与用法。
- *   第 4 章 自选图片与个性化 —— 只点一下图片知道能换（不真换图）；「显示」设置作讲解。
+ *   第 4 章 自选图片与个性化 —— 只点一下图片知道能换（不真换图）；「常规」设置作讲解。
  *
  * 手机版不介绍快捷键。
  * 「手动步」= 没有 done 谓词（引擎以 !done 判定），只讲解、点「下一步」继续。
@@ -13304,7 +13304,7 @@ body.tut-landing {
     }
     return null;
   }
-  /* 数据 / 显示章节只介绍不实操：程序把设置面板开到对应分组，聚光指给读者看。
+  /* 数据 / 常规章节只介绍不实操：程序把设置面板开到对应分组，聚光指给读者看。
      设置面板已开就不重复开（M.open 会叠层）。 */
   function openSettingsOnce() {
     if (modalTitle() === '设置') return;
@@ -13486,10 +13486,10 @@ body.tut-landing {
           done: function () { return coverTapSeen; }
         },
         {
-          title: '「显示」里有各种设置', manual: true, spot: '显示设置',
-          desc: '设置「显示」分组里除了界面主题（浅色 / 深色 / 跟随系统），还有日 / 周时间轴缩放、空闲时段紧凑、隐藏已完成、节假日与农历标注、完成台提示音等各种设置，可以根据需要自行调整。',
-          target: function () { return expandSection('显示'); },
-          enter: function () { openSettingsOnce(); expandSection('显示'); }
+          title: '「常规」里有各种设置', manual: true, spot: '常规设置',
+          desc: '设置「常规」分组里除了界面主题（浅色 / 深色 / 跟随系统），还有时区（默认北京，可改选其它常用时区）、日 / 周时间轴缩放、空闲时段紧凑、隐藏已完成、节假日与农历标注、完成台计时结束提醒等各种设置，可以根据需要自行调整。',
+          target: function () { return expandSection('常规'); },
+          enter: function () { openSettingsOnce(); expandSection('常规'); }
         }
       ]
     }
@@ -13681,8 +13681,15 @@ body.tut-landing {
  * DayPlan · 日期与时间工具（纯函数，无 DOM 依赖）
  *
  * 契约见 docs/spec/03-data-model.md DM-2。
- * 重要：禁止依赖 `Date.parse("YYYY-MM-DD")` 的隐式 UTC 语义，
- * 本模块所有 "YYYY-MM-DD" 一律按浏览器本地时区解释。
+ * 重要：禁止依赖 `Date.parse("YYYY-MM-DD")` 的隐式 UTC 语义。
+ *
+ * 时区口径（F-105）：文档存的是墙钟（"YYYY-MM-DD" + "HH:mm"）。「今天 / 现在几点」
+ * 与「墙钟 ↔ 瞬间毫秒」一律按**活动时区**解释，而非设备时区——网络代理改写设备
+ * 时区时不再错位。`Date.now()`（epoch 毫秒）与时区无关，仍是唯一瞬间基准。
+ * 活动时区默认等于设备本地 IANA 名；app 启动时设为 settings.timeZone（默认北京）。
+ * 活动时区 == 设备时区时走原生 Date 短路，与历史行为逐毫秒一致。
+ * 纯日历函数（parseDate/addDays/diffDays/星期等）只回读自身构造的年月日，结果与
+ * 时区无关，保持不变——日期字符串就是日历日，加减一天在任何时区都相同。
  */
 (function (root, factory) {
   var api = factory();
@@ -13703,6 +13710,107 @@ body.tut-landing {
   /** 两位补零 */
   function pad2(n) {
     return n < 10 ? '0' + n : String(n);
+  }
+
+  /* ---------------- 时区时钟（F-105） ---------------- */
+
+  var DEVICE_TZ = (function () {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || null; }
+    catch (e) { return null; }
+  })();
+  var activeTz = DEVICE_TZ;
+  var fmtCache = {};
+
+  /** 是否为 Intl 可识别的 IANA 时区名 */
+  function isValidTimeZone(tz) {
+    if (typeof tz !== 'string' || !tz) return false;
+    try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return true; }
+    catch (e) { return false; }
+  }
+
+  /** 设定活动时区；非法值回退设备本地。返回生效后的时区。 */
+  function setTimeZone(tz) {
+    activeTz = isValidTimeZone(tz) ? tz : DEVICE_TZ;
+    return activeTz;
+  }
+
+  function getTimeZone() { return activeTz; }
+
+  function formatter(tz) {
+    if (!fmtCache[tz]) {
+      fmtCache[tz] = new Intl.DateTimeFormat('en-US', {
+        timeZone: tz, hour12: false,
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit'
+      });
+    }
+    return fmtCache[tz];
+  }
+
+  /** 瞬间 ms 在 tz 里的墙钟分量 */
+  function tzParts(tz, ms) {
+    var parts = formatter(tz).formatToParts(new Date(ms));
+    var map = {};
+    for (var i = 0; i < parts.length; i += 1) map[parts[i].type] = parts[i].value;
+    var h = Number(map.hour);
+    if (h === 24) h = 0;   /* 部分引擎 hour12:false 把午夜给成 24 */
+    return {
+      year: Number(map.year), month: Number(map.month), day: Number(map.day),
+      hour: h, minute: Number(map.minute), second: Number(map.second)
+    };
+  }
+
+  /** tz 在瞬间 ms 的偏移（毫秒，东正西负；时区按分钟对齐，舍入到分） */
+  function tzOffsetMs(tz, ms) {
+    var p = tzParts(tz, ms);
+    var asUTC = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+    return Math.round((asUTC - ms) / 60000) * 60000;
+  }
+
+  /**
+   * 墙钟 "YYYY-MM-DD" + "HH:mm"（按 tz 理解）→ 瞬间毫秒；非法返回 null。
+   * tz 缺省用活动时区；等于设备时区时走原生 Date（与历史逐毫秒一致）。
+   */
+  function wallToMs(dateISO, time, tz) {
+    if (!isValidDate(dateISO) || !isValidTime(time)) return null;
+    tz = tz || activeTz;
+    var ymd = dateISO.split('-');
+    var hm = time.split(':');
+    var y = Number(ymd[0]), mo = Number(ymd[1]), d = Number(ymd[2]);
+    var h = Number(hm[0]), mi = Number(hm[1]);
+    if (!tz || tz === DEVICE_TZ) {
+      var native = new Date(y, mo - 1, d, h, mi, 0, 0).getTime();
+      return isFinite(native) ? native : null;
+    }
+    var guess = Date.UTC(y, mo - 1, d, h, mi, 0, 0);
+    var off = tzOffsetMs(tz, guess);
+    var ms = guess - off;
+    var off2 = tzOffsetMs(tz, ms);   /* 夏令时切换附近偏移会变，再校一次 */
+    if (off2 !== off) ms = guess - off2;
+    return isFinite(ms) ? ms : null;
+  }
+
+  /**
+   * 瞬间毫秒 → tz 里的墙钟 {date,time,minutes,year,month,day,hour,minute}；非法返回 null。
+   */
+  function msToWall(ms, tz) {
+    if (typeof ms !== 'number' || !isFinite(ms)) return null;
+    tz = tz || activeTz;
+    var y, mo, d, h, mi;
+    if (!tz || tz === DEVICE_TZ) {
+      var dt = new Date(ms);
+      y = dt.getFullYear(); mo = dt.getMonth() + 1; d = dt.getDate();
+      h = dt.getHours(); mi = dt.getMinutes();
+    } else {
+      var p = tzParts(tz, ms);
+      y = p.year; mo = p.month; d = p.day; h = p.hour; mi = p.minute;
+    }
+    return {
+      date: y + '-' + pad2(mo) + '-' + pad2(d),
+      time: pad2(h) + ':' + pad2(mi),
+      minutes: h * 60 + mi,
+      year: y, month: mo, day: d, hour: h, minute: mi
+    };
   }
 
   /**
@@ -13733,9 +13841,10 @@ body.tut-landing {
     return parseDate(iso) !== null;
   }
 
-  /** 今天的本地日期 "YYYY-MM-DD" */
-  function todayISO() {
-    return formatDate(new Date());
+  /** 今天的日期 "YYYY-MM-DD"（按活动时区；可显式传 tz） */
+  function todayISO(tz) {
+    var w = msToWall(Date.now(), tz);
+    return w ? w.date : formatDate(new Date());
   }
 
   /** 与基准日相减的纯日历天数（不受夏令时影响，按本地零点计算） */
@@ -13879,8 +13988,10 @@ body.tut-landing {
     return out;
   }
 
-  /** 当前时间对应的分钟数（用于"今天"指示线） */
-  function nowMinutes() {
+  /** 当前时间对应的分钟数（用于"今天"指示线；按活动时区，可显式传 tz） */
+  function nowMinutes(tz) {
+    var w = msToWall(Date.now(), tz);
+    if (w) return w.minutes;
     var now = new Date();
     return now.getHours() * 60 + now.getMinutes();
   }
@@ -13911,7 +14022,14 @@ body.tut-landing {
     isValidTime: isValidTime,
     dateRange: dateRange,
     monthGrid: monthGrid,
-    nowMinutes: nowMinutes
+    nowMinutes: nowMinutes,
+    DEVICE_TZ: DEVICE_TZ,
+    isValidTimeZone: isValidTimeZone,
+    setTimeZone: setTimeZone,
+    getTimeZone: getTimeZone,
+    tzOffsetMs: tzOffsetMs,
+    wallToMs: wallToMs,
+    msToWall: msToWall
   };
 });
 
@@ -14252,7 +14370,8 @@ body.tut-landing {
     maxLanes: 3,
     defaultCategoryId: 'cat_short_task',
     weekStartsOn: 1,
-    theme: 'auto'                     /* 'auto' | 'light' | 'dark'（美化迭代 3：设置里可选深浅色） */
+    theme: 'auto',                    /* 'auto' | 'light' | 'dark'（美化迭代 3：设置里可选深浅色） */
+    timeZone: 'Asia/Shanghai'         /* F-105：活动时区（IANA 名，默认北京）；设备本地设置，不随云端同步 */
   };
 
   /** 数值设置项的夹取范围（DM-10） */
@@ -15089,7 +15208,15 @@ body.tut-landing {
     if (!isNonEmptyString(out.defaultCategoryId)) out.defaultCategoryId = DEFAULT_SETTINGS.defaultCategoryId;
     out.weekStartsOn = clampInt(out.weekStartsOn, 1, 7, DEFAULT_SETTINGS.weekStartsOn);
     if (['auto', 'light', 'dark'].indexOf(out.theme) < 0) out.theme = DEFAULT_SETTINGS.theme;
+    if (!isValidTimeZone(out.timeZone)) out.timeZone = DEFAULT_SETTINGS.timeZone;
     return out;
+  }
+
+  /** F-105：是否为 Intl 可识别的 IANA 时区名（与 datetime.isValidTimeZone 同口径） */
+  function isValidTimeZone(tz) {
+    if (typeof tz !== 'string' || !tz) return false;
+    try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return true; }
+    catch (e) { return false; }
   }
 
   /** 兼容旧名：store.updateSettings 与既有用例使用（等价于 sanitizeSettings） */
@@ -15549,6 +15676,9 @@ body.tut-landing {
     if (settings.weekStartsOn !== undefined && settings.weekStartsOn !== null &&
         (!isFiniteNumber(settings.weekStartsOn) || settings.weekStartsOn < 1 || settings.weekStartsOn > 7)) {
       errors.push(err(path + '.weekStartsOn', 'weekStartsOn 需为 1–7'));
+    }
+    if (settings.timeZone !== undefined && settings.timeZone !== null && !isValidTimeZone(settings.timeZone)) {
+      errors.push(err(path + '.timeZone', 'timeZone 需为合法的 IANA 时区名'));
     }
     return errors;
   }
@@ -18323,10 +18453,7 @@ body.tut-landing {
     opts = opts || {};
     var todayISO = dt.isValidDate(opts.todayISO) ? opts.todayISO : dt.todayISO();
     var nowMinutes = (typeof opts.nowMinutes === 'number' && isFinite(opts.nowMinutes))
-      ? opts.nowMinutes : (function () {
-        var now = new Date();
-        return now.getHours() * 60 + now.getMinutes();
-      })();
+      ? opts.nowMinutes : dt.nowMinutes();
     var items = doc && Array.isArray(doc.items) ? doc.items : [];
     var rows = [];
     for (var i = 0; i < items.length; i++) {
@@ -18417,10 +18544,11 @@ body.tut-landing {
  * 契约：docs/spec/19-notifications.md。
  * 只做「算时间 / 物化提醒行 / 生成稳定签名」，不碰 DOM、不碰网络、不碰存储。
  *
- * 时间口径：
- *   · 文档里存的是本地墙钟（YYYY-MM-DD + HH:mm / YYYY-MM-DDTHH:mm）；
- *   · 云端 reminders.fire_at 存 UTC ISO 字符串，由本机时区换算得出；
- *   · 设备换时区后，下一次打开或保存会按新时区重算并覆盖（旧时区期间保持原值）。
+ * 时间口径（F-105）：
+ *   · 文档里存的是墙钟（YYYY-MM-DD + HH:mm / YYYY-MM-DDTHH:mm），按活动时区理解；
+ *   · 活动时区由用户在设置里选定（默认北京），经 datetime.setTimeZone 注入；
+ *   · 云端 reminders.fire_at 存 UTC ISO 字符串，由活动时区换算得出；
+ *   · 换时区后，下一次打开或保存会按新时区重算并覆盖（旧时区期间保持原值）。
  */
 (function (root, factory) {
   var isNode = typeof module === 'object' && module.exports;
@@ -18446,19 +18574,16 @@ body.tut-landing {
   function pad2(n) { return (n < 10 ? '0' : '') + n; }
 
   function localDateISO(ms) {
+    var w = dt && typeof dt.msToWall === 'function' ? dt.msToWall(ms) : null;
+    if (w) return w.date;
     var d = new Date(ms);
     return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
   }
 
-  /** "YYYY-MM-DD" + "HH:mm" → 本地墙钟毫秒；非法返回 null */
+  /** "YYYY-MM-DD" + "HH:mm" → 墙钟毫秒（按活动时区）；非法返回 null */
   function localMs(dateISO, time) {
-    if (!dt || !dt.isValidDate(dateISO) || !dt.isValidTime(time)) return null;
-    var ymd = dateISO.split('-');
-    var hm = time.split(':');
-    var d = new Date(Number(ymd[0]), Number(ymd[1]) - 1, Number(ymd[2]),
-      Number(hm[0]), Number(hm[1]), 0, 0);
-    var t = d.getTime();
-    return isFinite(t) ? t : null;
+    if (!dt || typeof dt.wallToMs !== 'function') return null;
+    return dt.wallToMs(dateISO, time);
   }
 
   /** 倒计时目标 "YYYY-MM-DDTHH:mm" → 本地墙钟毫秒；非法返回 null */
@@ -18525,15 +18650,16 @@ body.tut-landing {
     return new Date(base - off * MINUTE_MS).toISOString();
   }
 
-  /** 物化后的本地展示文案：「11月3日 08:30」；跨年时带年份。 */
+  /** 物化后的本地展示文案：「11月3日 08:30」；跨年时带年份（按活动时区）。 */
   function formatFireAt(iso, nowMs) {
     var t = Date.parse(iso);
     if (!isFinite(t)) return '';
-    var d = new Date(t);
-    var now = new Date(isFinite(nowMs) ? nowMs : Date.now());
-    var head = (d.getFullYear() !== now.getFullYear() ? d.getFullYear() + '年' : '')
-      + (d.getMonth() + 1) + '月' + d.getDate() + '日 ';
-    return head + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+    var w = dt && typeof dt.msToWall === 'function' ? dt.msToWall(t) : null;
+    var nw = dt && typeof dt.msToWall === 'function'
+      ? dt.msToWall(isFinite(nowMs) ? nowMs : Date.now()) : null;
+    if (!w || !nw) return '';
+    var head = (w.year !== nw.year ? w.year + '年' : '') + w.month + '月' + w.day + '日 ';
+    return head + pad2(w.hour) + ':' + pad2(w.minute);
   }
 
   /** 「提前 1 天 2 小时」「准时」——表单里的一行说明。 */
@@ -24935,12 +25061,11 @@ body.tut-landing {
 
     // ---------------- 倒计时（五十一轮） ----------------
 
-    /** 本地墙钟 "YYYY-MM-DDTHH:mm" → 毫秒；非法返回 null */
+    /** 墙钟 "YYYY-MM-DDTHH:mm" → 毫秒（按活动时区）；非法返回 null */
     function targetAtMs(targetAt) {
       var m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(String(targetAt || ''));
       if (!m) return null;
-      var t = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), 0, 0).getTime();
-      return isFinite(t) ? t : null;
+      return dt.wallToMs(m[1] + '-' + m[2] + '-' + m[3], m[4] + ':' + m[5]);
     }
 
     /**
@@ -28704,6 +28829,51 @@ body.tut-landing {
 </script>
 <script>
 /**
+ * DayPlan · 应用内通知出口（F-106）
+ *
+ * 统一的「系统通知优先、无权限时页内提示」通道，供本地提醒兜底与完成台共用：
+ *   · Notification.permission === 'granted' → 新系统通知，点击聚焦窗口 + onOpen + 关闭；
+ *   · 否则（拒绝 / 不支持 / 构造失败）→ modal.toast 带「查看」动作；
+ *   · 返回实际走的通道：'notification' | 'toast' | 'none'（两者都不可用）。
+ * 只在应用打开期间生效，不做关页面 / 后台承诺（那是 Web Push 的职责）。
+ */
+(function (root) {
+  'use strict';
+  if (!root.DayPlan) root.DayPlan = {};
+
+  function show(opts) {
+    opts = opts || {};
+    var title = opts.title || '提醒';
+    var body = opts.body || '';
+    var tag = opts.tag;
+    var onOpen = typeof opts.onOpen === 'function' ? opts.onOpen : function () {};
+    var open = function () { try { onOpen(); } catch (e) { /* 导航失败不影响提醒 */ } };
+
+    var N = root.Notification;
+    if (N && N.permission === 'granted') {
+      try {
+        var n = new N(title, { body: body, tag: tag });
+        n.onclick = function () {
+          try { if (root.focus) root.focus(); } catch (e) { /* 部分环境不允许 */ }
+          open();
+          try { n.close(); } catch (e) { /* 忽略 */ }
+        };
+        return 'notification';
+      } catch (e) { /* 通知构造失败 → 页内提示 */ }
+    }
+    var M = root.DayPlan.modal;
+    if (M && typeof M.toast === 'function') {
+      M.toast(body ? title + ' · ' + body : title, { actionLabel: '查看', onAction: open });
+      return 'toast';
+    }
+    return 'none';
+  }
+
+  root.DayPlan.notify = { show: show };
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+</script>
+<script>
+/**
  * DayPlan · 账号对话框（登录 / 注册 / 邮箱验证 / 找回密码）
  *
  * 契约：docs/spec/18-manual-cloud-save.md §4.2。
@@ -29144,12 +29314,13 @@ body.tut-landing {
 
   function formatTime(iso) {
     if (!iso) return '时间未知';
-    var d = new Date(iso);
-    if (isNaN(d.getTime())) return String(iso);
-    var now = new Date();
-    var datePart = (d.getFullYear() === now.getFullYear() ? '' : d.getFullYear() + '-') +
-      D.pad2(d.getMonth() + 1) + '-' + D.pad2(d.getDate());
-    return datePart + ' ' + D.pad2(d.getHours()) + ':' + D.pad2(d.getMinutes());
+    var t = Date.parse(iso);
+    if (!isFinite(t)) return String(iso);
+    var w = D.msToWall(t);
+    var nw = D.msToWall(Date.now());
+    var datePart = (w.year === nw.year ? '' : w.year + '-') +
+      D.pad2(w.month) + '-' + D.pad2(w.day);
+    return datePart + ' ' + D.pad2(w.hour) + ':' + D.pad2(w.minute);
   }
 
   function metaText(entry) {
@@ -30821,7 +30992,7 @@ body.tut-landing {
  *   - 刷新/重开后**保留台里的条目与计时**（2026-10-19 用户裁定，取代早先「仅内存」口径）：
  *     条目与计时状态写入 UI 状态 `dayplan.ui.v1.finishDock`；仍**不写事项字段**、不改入库数据。
  *     只存状态快照（`running` + `lastTs`），真实读数由「快照 + 时间差」推出，所以无需按 tick 写盘。
- *   - 到时：响铃「叮」并停在 0 等用户确认（不自动完成）。
+ *   - 到时：通知提醒（F-106，取代响铃）并停在 0 等用户确认（不自动完成）。
  *   - 多个事项并列、各计各的。
  *   - 倒计时默认 25 分钟；番茄钟 25/5 自动交替。
  *   - **时长只在「设置」阶段可改**（滚轮仅在设置时出现，开始计时后收起，重置后再现）：
@@ -30833,7 +31004,7 @@ body.tut-landing {
  * 纪律：
  *   - 不依赖 DOM 之外的全局状态；所有元素都用传入的 document 创建（便于垫片环境断言）。
  *   - 计时用时间戳差值（`api.tick(nowMs)` 可注入时间），不累加 interval 次数，避免漂移。
- *   - 「叮」在 soundOn=false 时既不发声也不派发 `dayplan:ding` 事件（可被断言观测）。
+ *   - 通知在 notifyOn=false 时既不提示也不派发 `dayplan:finish-notify` 事件（可被断言观测）。
  */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -30859,7 +31030,7 @@ body.tut-landing {
 
   var MODES = [
     { id: 'stopwatch', label: '正计时', title: '从 0 往上累计，可暂停 / 清零' },
-    { id: 'countdown', label: '倒计时', title: '设定分钟数，倒数到 0 响铃' },
+    { id: 'countdown', label: '倒计时', title: '设定分钟数，倒数到 0 通知' },
     { id: 'pomodoro', label: '番茄钟', title: '专注 / 休息自动交替' }
   ];
 
@@ -30988,11 +31159,11 @@ body.tut-landing {
    * @param {object} opts
    *   root      完成台内容容器（必填）
    *   countEl   右上角计数元素（可选）
-   *   store     store 实例（用于记住音效开关，可选）
+   *   store     store 实例（用于记住通知开关，可选）
    *   getCat    (categoryId) => {name,color}
    *   onDockChange () => void  台内条目增减时通知视图重绘（隐藏/恢复原位置）
    *   onComplete   (occ) => void 标记该次发生为已完成
-   *   sound     初始音效开关（布尔）
+   *   notify    初始通知开关（布尔，缺省开）
    *   document  可选，默认全局 document
    */
   function create(opts) {
@@ -31008,10 +31179,9 @@ body.tut-landing {
 
     var items = [];
     var timer = null;
-    var soundOn = opts.sound !== false;
-    var audioCtx = null;
-    /* 已响铃次数：既是运行时可观测状态，也让「静音后不再响」可被断言 */
-    var dingCount = 0;
+    var notifyOn = opts.notify !== false;
+    /* 已通知次数：既是运行时可观测状态，也让「关闭后不再提醒」可被断言 */
+    var notifyCount = 0;
 
     /* 全屏计时（2026-11-01 用户口径）：点计时条目的空白处铺满视口、居中放大读数。
        浮层只镜像该条目的实时读数，不改任何计时状态；点浮层任意处 / Esc 退出。 */
@@ -31022,36 +31192,37 @@ body.tut-landing {
     var focusKey = null;
     var focusReturn = null;
 
-    /* ---------------- 音效 ---------------- */
+    /* ---------------- 通知（F-106，取代响铃） ---------------- */
 
-    function ding() {
-      if (!soundOn) return;
-      dingCount += 1;
+    /** 倒计时归零 / 番茄钟切换时提醒。it.phase 是番茄钟刚结束的那一段（翻转前）。 */
+    function notifyFinish(it) {
+      if (!notifyOn) return;
+      notifyCount += 1;
+      var title;
+      var body;
+      if (it.mode === 'countdown') {
+        title = '倒计时结束';
+        body = it.occ.title || '（无标题）';
+      } else if (it.phase === 'break') {
+        title = '休息结束';
+        body = '开始专注 ' + it.focusMin + ' 分钟';
+      } else {
+        title = '专注结束';
+        body = '休息 ' + it.breakMin + ' 分钟';
+      }
+      var channel = 'none';
       try {
-        var AC = root ? (root.AudioContext || root.webkitAudioContext) : null;
-        if (AC) {
-          if (!audioCtx) audioCtx = new AC();
-          if (audioCtx.state === 'suspended' && typeof audioCtx.resume === 'function') audioCtx.resume();
-          var t0 = audioCtx.currentTime;
-          [0, 0.18].forEach(function (off, i) {
-            var osc = audioCtx.createOscillator();
-            var gain = audioCtx.createGain();
-            osc.type = 'sine';
-            osc.frequency.value = i ? 1320 : 1760;
-            gain.gain.setValueAtTime(0.0001, t0 + off);
-            gain.gain.exponentialRampToValueAtTime(0.22, t0 + off + 0.012);
-            gain.gain.exponentialRampToValueAtTime(0.0001, t0 + off + 0.16);
-            osc.connect(gain);
-            gain.connect(audioCtx.destination);
-            osc.start(t0 + off);
-            osc.stop(t0 + off + 0.18);
-          });
+        var N = root.DayPlan && root.DayPlan.notify;
+        if (N && typeof N.show === 'function') {
+          channel = N.show({ title: title, body: body, tag: 'finish-' + it.key }) || 'none';
         }
-      } catch (e) { /* 环境不支持音频：静默降级 */ }
+      } catch (e) { /* 通知不可用：静默降级 */ }
       try {
         if (root && typeof root.dispatchEvent === 'function'
           && typeof root.CustomEvent === 'function') {
-          root.dispatchEvent(new root.CustomEvent('dayplan:ding', { detail: { at: Date.now() } }));
+          root.dispatchEvent(new root.CustomEvent('dayplan:finish-notify', {
+            detail: { mode: it.mode, phase: it.phase, at: Date.now(), channel: channel }
+          }));
         }
       } catch (e) { /* 忽略 */ }
     }
@@ -31155,7 +31326,7 @@ body.tut-landing {
 
     function countdownSecOf(it) { return (it.cdH * 3600) + (it.cdM * 60) + it.cdS; }
 
-    /** 0 时长不启动：按钮同步置灰（否则一按就立刻响铃） */
+    /** 0 时长不启动：按钮同步置灰（否则一按就立刻提醒） */
     function refreshStartBtn(it) {
       if (!it.startBtn) return;
       var zero = it.mode === 'countdown' && countdownSecOf(it) <= 0;
@@ -31585,7 +31756,7 @@ body.tut-landing {
 
     /** 倒计时/番茄钟到时 */
     function reachZero(it) {
-      ding();
+      notifyFinish(it);
       if (it.mode === 'countdown') {
         it.remainingMs = 0;
         it.running = false;
@@ -31872,13 +32043,13 @@ body.tut-landing {
       },
       tick: tick,
 
-      soundEnabled: function () { return soundOn; },
-      /** 响过的「叮」次数（静音时不增加） */
-      dingCount: function () { return dingCount; },
-      setSound: function (on) {
-        soundOn = !!on;
-        try { if (store && typeof store.saveUIState === 'function') store.saveUIState({ finishSound: soundOn }); } catch (e) { /* 忽略 */ }
-        return soundOn;
+      notifyEnabled: function () { return notifyOn; },
+      /** 已发出的通知次数（关闭提醒时不增加） */
+      notifyCount: function () { return notifyCount; },
+      setNotify: function (on) {
+        notifyOn = !!on;
+        try { if (store && typeof store.saveUIState === 'function') store.saveUIState({ finishNotify: notifyOn }); } catch (e) { /* 忽略 */ }
+        return notifyOn;
       },
 
       destroy: function () {
@@ -31894,7 +32065,6 @@ body.tut-landing {
         items.slice().forEach(function (it) { api.remove(it.key); });
         items = [];
         if (rootEl && doc) rootEl.innerHTML = '';
-        audioCtx = null;
       }
     };
 
@@ -33582,22 +33752,13 @@ body.tut-landing {
 
   var TARGET_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;
 
-  /** 本地墙钟 "YYYY-MM-DDTHH:mm" → 毫秒；非法（含 13 月、24 时等回卷值）返回 null */
+  /** 墙钟 "YYYY-MM-DDTHH:mm" → 毫秒（按活动时区）；非法（含 13 月、24 时等回卷值）返回 null */
   function parseTargetAt(targetAt) {
     if (typeof targetAt !== 'string') return null;
     var m = TARGET_RE.exec(targetAt);
     if (!m) return null;
-    var y = Number(m[1]);
-    var mo = Number(m[2]);
-    var d = Number(m[3]);
-    var h = Number(m[4]);
-    var mi = Number(m[5]);
-    var dt = new Date(y, mo - 1, d, h, mi, 0, 0);
-    /* 与 schema.isCountdownTargetAt 同口径：Date 会把越界值滚进下个月 / 下一天，必须逐字段回读校验 */
-    if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d
-      || dt.getHours() !== h || dt.getMinutes() !== mi) return null;
-    var t = dt.getTime();
-    return isFinite(t) ? t : null;
+    /* 与 schema.isCountdownTargetAt 同口径：wallToMs 经 isValidDate/isValidTime 拦截越界回卷值 */
+    return root.DayPlan.datetime.wallToMs(m[1] + '-' + m[2] + '-' + m[3], m[4] + ':' + m[5]);
   }
 
   /**
@@ -33778,11 +33939,8 @@ body.tut-landing {
     /* ---------------- 新建 / 编辑 ---------------- */
 
     function defaultTarget() {
-      var d = new Date(Date.now() + 60 * MINUTE_MS);
-      return {
-        date: d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()),
-        time: pad2(d.getHours()) + ':' + pad2(d.getMinutes())
-      };
+      var w = D.msToWall(Date.now() + 60 * MINUTE_MS);
+      return { date: w.date, time: w.time };
     }
 
     function openForm(id) {
@@ -34087,7 +34245,6 @@ body.tut-landing {
     opts = opts || {};
     var store = opts.store;
     var R = root.DayPlan.reminder;
-    var M = root.DayPlan.modal;
 
     var timer = null;
     var fired = {};
@@ -34100,20 +34257,9 @@ body.tut-landing {
     function notify(row) {
       var body = row.sourceKind === 'countdown' ? '倒计时提醒' : '事项即将开始';
       var title = row.title || '提醒';
-      var open = function () { try { onOpen(row); } catch (e) { /* 导航失败不影响提醒 */ } };
-      if (root.Notification && root.Notification.permission === 'granted') {
-        try {
-          var n = new root.Notification(title, { body: body, tag: rowKey(row) });
-          n.onclick = function () {
-            try { if (root.focus) root.focus(); } catch (e) { /* 部分环境不允许 */ }
-            open();
-            try { n.close(); } catch (e) { /* 忽略 */ }
-          };
-          return;
-        } catch (e) { /* 通知构造失败 → 页内提示 */ }
-      }
-      if (M && typeof M.toast === 'function') {
-        M.toast(title + ' · ' + body, { actionLabel: '查看', onAction: open });
+      var N = root.DayPlan.notify;
+      if (N && typeof N.show === 'function') {
+        N.show({ title: title, body: body, tag: rowKey(row), onOpen: function () { onOpen(row); } });
       }
     }
 
@@ -42389,7 +42535,7 @@ body.tut-landing {
         getCat: function (id) { return categoryMap()[id]; },
         onDockChange: function () { compute(); renderAll(); },
         onComplete: completeOccurrence,
-        sound: ui.finishSound !== false
+        notify: ui.finishNotify !== false
       });
 
       /* 刷新恢复（用户裁定 2026-10-19；D9 扩 2026-10-27）：完成台条目与计时状态
@@ -43378,7 +43524,7 @@ body.tut-landing {
     catSection.body.appendChild(catMgr.element);
     body.appendChild(catSection.element);
 
-    /* ---------- 显示 ---------- */
+    /* ---------- 常规 ---------- */
     var doc = store.getState();
     /* 美化迭代 3：界面主题（浅色 / 深色 / 跟随系统），由 app.js 写 <html data-theme> */
     var themeSelect = el('select', { 'aria-label': '界面主题' });
@@ -43389,6 +43535,42 @@ body.tut-landing {
       ? doc.settings.theme : 'auto';
     themeSelect.addEventListener('change', function () {
       store.updateSettings({ theme: themeSelect.value });
+      dataChanged();
+    });
+
+    /* F-105：时区（设备本地设置，默认北京）。选定后所有事项 / 通知时间按该时区解释。
+       精选常用 IANA 时区，偏移随夏令时实时计算；当前值不在精选内（导入数据）时补一项。 */
+    var TIME_ZONES = [
+      ['Asia/Shanghai', '北京'], ['Asia/Hong_Kong', '香港'], ['Asia/Tokyo', '东京'],
+      ['Asia/Seoul', '首尔'], ['Asia/Singapore', '新加坡'], ['Asia/Bangkok', '曼谷'],
+      ['Asia/Kolkata', '加尔各答'], ['Asia/Dubai', '迪拜'], ['Europe/Moscow', '莫斯科'],
+      ['Europe/Berlin', '柏林'], ['Europe/Paris', '巴黎'], ['Europe/London', '伦敦'],
+      ['UTC', '协调世界时'], ['America/Sao_Paulo', '圣保罗'], ['America/New_York', '纽约'],
+      ['America/Chicago', '芝加哥'], ['America/Denver', '丹佛'], ['America/Los_Angeles', '洛杉矶'],
+      ['Australia/Sydney', '悉尼'], ['Pacific/Auckland', '奥克兰']
+    ];
+    function tzOffsetLabel(tz) {
+      var off = D.tzOffsetMs(tz, Date.now());
+      var sign = off < 0 ? '-' : '+';
+      var mins = Math.abs(off) / 60000;
+      var h = Math.floor(mins / 60);
+      var m = mins % 60;
+      return 'UTC' + sign + h + (m ? ':' + D.pad2(m) : '');
+    }
+    var tzSelect = el('select', { 'aria-label': '时区' });
+    TIME_ZONES.forEach(function (pair) {
+      tzSelect.appendChild(el('option', { value: pair[0], text: pair[1] + ' · ' + tzOffsetLabel(pair[0]) }));
+    });
+    var curTz = doc.settings.timeZone || 'Asia/Shanghai';
+    if (TIME_ZONES.map(function (p) { return p[0]; }).indexOf(curTz) < 0) {
+      tzSelect.appendChild(el('option', { value: curTz, text: curTz + ' · ' + tzOffsetLabel(curTz) }));
+    }
+    tzSelect.value = curTz;
+    tzSelect.addEventListener('change', function () {
+      var tz = tzSelect.value;
+      /* 先拨活动时区时钟，再持久化：store.subscribe 触发的提醒重算 / 同步即用新时区 */
+      if (opts.onTimeZoneChange) opts.onTimeZoneChange(tz);
+      store.updateSettings({ timeZone: tz });
       dataChanged();
     });
     var lunarChk = el('input', { type: 'checkbox' });
@@ -43470,14 +43652,14 @@ body.tut-landing {
       dataChanged();
     });
 
-    /* 2026-10-22 二十三轮（用户反馈）：完成台的提示音响铃开关从标题栏移入设置；
+    /* F-106：完成台计时结束 / 番茄钟切换改用通知提醒（取代响铃），开关从标题栏移入设置；
        仍写 UI 状态（非文档设置），并即时同步到已创建的完成台实例。 */
-    var finishSoundChk = el('input', { type: 'checkbox', 'aria-label': '事项完成台计时结束提示音' });
-    finishSoundChk.checked = !uiState || uiState.finishSound !== false;
-    finishSoundChk.addEventListener('change', function () {
-      var on = finishSoundChk.checked;
-      store.saveUIState({ finishSound: on });
-      if (opts.onFinishSoundChange) opts.onFinishSoundChange(on);
+    var finishNotifyChk = el('input', { type: 'checkbox', 'aria-label': '事项完成台计时结束提醒' });
+    finishNotifyChk.checked = !uiState || uiState.finishNotify !== false;
+    finishNotifyChk.addEventListener('change', function () {
+      var on = finishNotifyChk.checked;
+      store.saveUIState({ finishNotify: on });
+      if (opts.onFinishNotifyChange) opts.onFinishNotifyChange(on);
     });
 
     /* 2026-10-20（用户反馈）：
@@ -43486,7 +43668,7 @@ body.tut-landing {
        ② 两条滑条改成「标签 + 当前值」一行、滑条通铺下一行（用户要求「横向顶满」），
           并把初值同步进 --range-fill，让已划区一开始就是蓝色。
        2026-10-22 二十四轮（用户反馈）：六个开关固定三行、每行两个，行距相等；
-       「隐藏已完成」与「完成台提示音」不再整行跨列。 */
+       「隐藏已完成」与「完成台提醒」不再整行跨列。 */
     function switchField(input, text) {
       return el('div', { class: 'field' }, [
         el('label', { class: 'switch' }, [input, el('span', { text: text })])
@@ -43516,21 +43698,24 @@ body.tut-landing {
     syncRangeFill(zoomRange);
     syncRangeFill(weekRange);
 
-    var displaySection = M.foldSection('显示');
-    displaySection.body.appendChild(el('div', { class: 'field' }, [
+    var generalSection = M.foldSection('常规');
+    generalSection.body.appendChild(el('div', { class: 'field' }, [
       el('label', { class: 'field-label', text: '界面主题' }), Form.selectFieldControl(themeSelect).wrap
     ]));
-    displaySection.body.appendChild(el('div', { class: 'switch-grid' }, [
+    generalSection.body.appendChild(el('div', { class: 'field' }, [
+      el('label', { class: 'field-label', text: '时区' }), Form.selectFieldControl(tzSelect).wrap
+    ]));
+    generalSection.body.appendChild(el('div', { class: 'switch-grid' }, [
       switchField(lunarChk, '月历显示农历日期'),
       switchField(noteChk, '月历标注有记录的日子'),
       switchField(holidayChk, '标注中国大陆节假日（休 / 班）'),
       switchField(compressChk, '压缩无安排时段（首末两端，日/周视图）'),
       switchField(hideDoneChk, '隐藏已完成（日 / 周视图）'),
-      switchField(finishSoundChk, '事项完成台计时结束提示音')
+      switchField(finishNotifyChk, '事项完成台计时结束提醒')
     ]));
-    displaySection.body.appendChild(rangeField('日视图时间轴宽度', zoomRange, zoomOut));
-    displaySection.body.appendChild(rangeField('周视图时间轴高度', weekRange, weekOut));
-    body.appendChild(displaySection.element);
+    generalSection.body.appendChild(rangeField('日视图时间轴宽度', zoomRange, zoomOut));
+    generalSection.body.appendChild(rangeField('周视图时间轴高度', weekRange, weekOut));
+    body.appendChild(generalSection.element);
 
     /* ---------- 数据 ---------- */
     var exportBtn = el('button', {
@@ -43539,7 +43724,7 @@ body.tut-landing {
         try {
           var payload = store.exportDocument();
           var name = 'dayplan-' + D.todayISO().replace(/-/g, '') + '-' +
-            new Date().toTimeString().slice(0, 5).replace(':', '') + '.json';
+            D.msToWall(Date.now()).time.replace(':', '') + '.json';
           downloadJson(name, payload);
           M.toast('已导出 ' + name);
         } catch (e) {
@@ -43865,7 +44050,16 @@ body.tut-landing {
       }
       (document.getElementById('tut-app-root')||document.documentElement).setAttribute('data-theme', dark ? 'dark' : 'light');
     }
+
+    /* F-105：把活动时区拨到 settings.timeZone（默认北京）。须在 viewDate 初始化（D.todayISO）
+       与任何提醒重算之前生效；网络代理改写设备时区时，应用内时间仍按用户选定时区。 */
+    function applyTimeZone() {
+      var tz;
+      try { tz = ((store.getState() || {}).settings || {}).timeZone; } catch (e) { tz = null; }
+      D.setTimeZone(tz);
+    }
     applyTheme();
+    applyTimeZone();
     if (root.matchMedia) {
       try {
         root.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () { applyTheme(); });
@@ -43958,6 +44152,7 @@ body.tut-landing {
 
     function onDataChanged() {
       applyTheme();
+      applyTimeZone();
       Object.keys(instances).forEach(function (k) {
         var v = instances[k];
         if (v && typeof v.refresh === 'function') v.refresh();
@@ -44867,10 +45062,11 @@ body.tut-landing {
     }
 
     function clockText(iso) {
-      var d = new Date(iso);
-      if (isNaN(d.getTime())) return '';
-      return D.pad2(d.getMonth() + 1) + '-' + D.pad2(d.getDate()) + ' ' +
-        D.pad2(d.getHours()) + ':' + D.pad2(d.getMinutes());
+      var t = Date.parse(iso);
+      if (!isFinite(t)) return '';
+      var w = D.msToWall(t);
+      return D.pad2(w.month) + '-' + D.pad2(w.day) + ' ' +
+        D.pad2(w.hour) + ':' + D.pad2(w.minute);
     }
 
     /** §4.1 第 3 条：本机有未保存改动，云端那份也保存过 → 问一次。 */
@@ -45204,11 +45400,13 @@ body.tut-landing {
       registerNotificationSection: function (inst) { reminderSectionInst = inst; },
       /* 清空只影响当前作用域：云端那份不动，保存按钮的文字会变蓝提醒「还没传」。 */
       onDataCleared: function () { refreshSaveState(); },
-      /* 2026-10-22 二十三轮：响铃开关移入设置后，立即同步到已创建的完成台实例。 */
-      onFinishSoundChange: function (on) {
+      /* F-105：时区下拉改动 → 先拨活动时区时钟（settings.js 随后持久化并 dataChanged）。 */
+      onTimeZoneChange: function (tz) { D.setTimeZone(tz); },
+      /* F-106：完成台提醒开关移入设置后，立即同步到已创建的完成台实例。 */
+      onFinishNotifyChange: function (on) {
         var dv = instances.day;
         var d = dv && typeof dv.finishDock === 'function' ? dv.finishDock() : null;
-        if (d && typeof d.setSound === 'function') d.setSound(on);
+        if (d && typeof d.setNotify === 'function') d.setNotify(on);
       }
     };
 

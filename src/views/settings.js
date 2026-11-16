@@ -509,7 +509,7 @@
     catSection.body.appendChild(catMgr.element);
     body.appendChild(catSection.element);
 
-    /* ---------- 显示 ---------- */
+    /* ---------- 常规 ---------- */
     var doc = store.getState();
     /* 美化迭代 3：界面主题（浅色 / 深色 / 跟随系统），由 app.js 写 <html data-theme> */
     var themeSelect = el('select', { 'aria-label': '界面主题' });
@@ -520,6 +520,42 @@
       ? doc.settings.theme : 'auto';
     themeSelect.addEventListener('change', function () {
       store.updateSettings({ theme: themeSelect.value });
+      dataChanged();
+    });
+
+    /* F-105：时区（设备本地设置，默认北京）。选定后所有事项 / 通知时间按该时区解释。
+       精选常用 IANA 时区，偏移随夏令时实时计算；当前值不在精选内（导入数据）时补一项。 */
+    var TIME_ZONES = [
+      ['Asia/Shanghai', '北京'], ['Asia/Hong_Kong', '香港'], ['Asia/Tokyo', '东京'],
+      ['Asia/Seoul', '首尔'], ['Asia/Singapore', '新加坡'], ['Asia/Bangkok', '曼谷'],
+      ['Asia/Kolkata', '加尔各答'], ['Asia/Dubai', '迪拜'], ['Europe/Moscow', '莫斯科'],
+      ['Europe/Berlin', '柏林'], ['Europe/Paris', '巴黎'], ['Europe/London', '伦敦'],
+      ['UTC', '协调世界时'], ['America/Sao_Paulo', '圣保罗'], ['America/New_York', '纽约'],
+      ['America/Chicago', '芝加哥'], ['America/Denver', '丹佛'], ['America/Los_Angeles', '洛杉矶'],
+      ['Australia/Sydney', '悉尼'], ['Pacific/Auckland', '奥克兰']
+    ];
+    function tzOffsetLabel(tz) {
+      var off = D.tzOffsetMs(tz, Date.now());
+      var sign = off < 0 ? '-' : '+';
+      var mins = Math.abs(off) / 60000;
+      var h = Math.floor(mins / 60);
+      var m = mins % 60;
+      return 'UTC' + sign + h + (m ? ':' + D.pad2(m) : '');
+    }
+    var tzSelect = el('select', { 'aria-label': '时区' });
+    TIME_ZONES.forEach(function (pair) {
+      tzSelect.appendChild(el('option', { value: pair[0], text: pair[1] + ' · ' + tzOffsetLabel(pair[0]) }));
+    });
+    var curTz = doc.settings.timeZone || 'Asia/Shanghai';
+    if (TIME_ZONES.map(function (p) { return p[0]; }).indexOf(curTz) < 0) {
+      tzSelect.appendChild(el('option', { value: curTz, text: curTz + ' · ' + tzOffsetLabel(curTz) }));
+    }
+    tzSelect.value = curTz;
+    tzSelect.addEventListener('change', function () {
+      var tz = tzSelect.value;
+      /* 先拨活动时区时钟，再持久化：store.subscribe 触发的提醒重算 / 同步即用新时区 */
+      if (opts.onTimeZoneChange) opts.onTimeZoneChange(tz);
+      store.updateSettings({ timeZone: tz });
       dataChanged();
     });
     var lunarChk = el('input', { type: 'checkbox' });
@@ -601,14 +637,14 @@
       dataChanged();
     });
 
-    /* 2026-10-22 二十三轮（用户反馈）：完成台的提示音响铃开关从标题栏移入设置；
+    /* F-106：完成台计时结束 / 番茄钟切换改用通知提醒（取代响铃），开关从标题栏移入设置；
        仍写 UI 状态（非文档设置），并即时同步到已创建的完成台实例。 */
-    var finishSoundChk = el('input', { type: 'checkbox', 'aria-label': '事项完成台计时结束提示音' });
-    finishSoundChk.checked = !uiState || uiState.finishSound !== false;
-    finishSoundChk.addEventListener('change', function () {
-      var on = finishSoundChk.checked;
-      store.saveUIState({ finishSound: on });
-      if (opts.onFinishSoundChange) opts.onFinishSoundChange(on);
+    var finishNotifyChk = el('input', { type: 'checkbox', 'aria-label': '事项完成台计时结束提醒' });
+    finishNotifyChk.checked = !uiState || uiState.finishNotify !== false;
+    finishNotifyChk.addEventListener('change', function () {
+      var on = finishNotifyChk.checked;
+      store.saveUIState({ finishNotify: on });
+      if (opts.onFinishNotifyChange) opts.onFinishNotifyChange(on);
     });
 
     /* 2026-10-20（用户反馈）：
@@ -617,7 +653,7 @@
        ② 两条滑条改成「标签 + 当前值」一行、滑条通铺下一行（用户要求「横向顶满」），
           并把初值同步进 --range-fill，让已划区一开始就是蓝色。
        2026-10-22 二十四轮（用户反馈）：六个开关固定三行、每行两个，行距相等；
-       「隐藏已完成」与「完成台提示音」不再整行跨列。 */
+       「隐藏已完成」与「完成台提醒」不再整行跨列。 */
     function switchField(input, text) {
       return el('div', { class: 'field' }, [
         el('label', { class: 'switch' }, [input, el('span', { text: text })])
@@ -647,21 +683,24 @@
     syncRangeFill(zoomRange);
     syncRangeFill(weekRange);
 
-    var displaySection = M.foldSection('显示');
-    displaySection.body.appendChild(el('div', { class: 'field' }, [
+    var generalSection = M.foldSection('常规');
+    generalSection.body.appendChild(el('div', { class: 'field' }, [
       el('label', { class: 'field-label', text: '界面主题' }), Form.selectFieldControl(themeSelect).wrap
     ]));
-    displaySection.body.appendChild(el('div', { class: 'switch-grid' }, [
+    generalSection.body.appendChild(el('div', { class: 'field' }, [
+      el('label', { class: 'field-label', text: '时区' }), Form.selectFieldControl(tzSelect).wrap
+    ]));
+    generalSection.body.appendChild(el('div', { class: 'switch-grid' }, [
       switchField(lunarChk, '月历显示农历日期'),
       switchField(noteChk, '月历标注有记录的日子'),
       switchField(holidayChk, '标注中国大陆节假日（休 / 班）'),
       switchField(compressChk, '压缩无安排时段（首末两端，日/周视图）'),
       switchField(hideDoneChk, '隐藏已完成（日 / 周视图）'),
-      switchField(finishSoundChk, '事项完成台计时结束提示音')
+      switchField(finishNotifyChk, '事项完成台计时结束提醒')
     ]));
-    displaySection.body.appendChild(rangeField('日视图时间轴宽度', zoomRange, zoomOut));
-    displaySection.body.appendChild(rangeField('周视图时间轴高度', weekRange, weekOut));
-    body.appendChild(displaySection.element);
+    generalSection.body.appendChild(rangeField('日视图时间轴宽度', zoomRange, zoomOut));
+    generalSection.body.appendChild(rangeField('周视图时间轴高度', weekRange, weekOut));
+    body.appendChild(generalSection.element);
 
     /* ---------- 数据 ---------- */
     var exportBtn = el('button', {
@@ -670,7 +709,7 @@
         try {
           var payload = store.exportDocument();
           var name = 'dayplan-' + D.todayISO().replace(/-/g, '') + '-' +
-            new Date().toTimeString().slice(0, 5).replace(':', '') + '.json';
+            D.msToWall(Date.now()).time.replace(':', '') + '.json';
           downloadJson(name, payload);
           M.toast('已导出 ' + name);
         } catch (e) {

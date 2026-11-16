@@ -2844,7 +2844,7 @@
         getCat: function (id) { return categoryMap()[id]; },
         onDockChange: function () { compute(); renderAll(); },
         onComplete: completeOccurrence,
-        sound: ui.finishSound !== false
+        notify: ui.finishNotify !== false
       });
 
       /* 刷新恢复（用户裁定 2026-10-19；D9 扩 2026-10-27）：完成台条目与计时状态

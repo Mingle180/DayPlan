@@ -28,7 +28,6 @@
     opts = opts || {};
     var store = opts.store;
     var R = root.DayPlan.reminder;
-    var M = root.DayPlan.modal;
 
     var timer = null;
     var fired = {};
@@ -41,20 +40,9 @@
     function notify(row) {
       var body = row.sourceKind === 'countdown' ? '倒计时提醒' : '事项即将开始';
       var title = row.title || '提醒';
-      var open = function () { try { onOpen(row); } catch (e) { /* 导航失败不影响提醒 */ } };
-      if (root.Notification && root.Notification.permission === 'granted') {
-        try {
-          var n = new root.Notification(title, { body: body, tag: rowKey(row) });
-          n.onclick = function () {
-            try { if (root.focus) root.focus(); } catch (e) { /* 部分环境不允许 */ }
-            open();
-            try { n.close(); } catch (e) { /* 忽略 */ }
-          };
-          return;
-        } catch (e) { /* 通知构造失败 → 页内提示 */ }
-      }
-      if (M && typeof M.toast === 'function') {
-        M.toast(title + ' · ' + body, { actionLabel: '查看', onAction: open });
+      var N = root.DayPlan.notify;
+      if (N && typeof N.show === 'function') {
+        N.show({ title: title, body: body, tag: rowKey(row), onOpen: function () { onOpen(row); } });
       }
     }
 

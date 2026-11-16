@@ -148,7 +148,16 @@
       }
       document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
     }
+
+    /* F-105：把活动时区拨到 settings.timeZone（默认北京）。须在 viewDate 初始化（D.todayISO）
+       与任何提醒重算之前生效；网络代理改写设备时区时，应用内时间仍按用户选定时区。 */
+    function applyTimeZone() {
+      var tz;
+      try { tz = ((store.getState() || {}).settings || {}).timeZone; } catch (e) { tz = null; }
+      D.setTimeZone(tz);
+    }
     applyTheme();
+    applyTimeZone();
     if (root.matchMedia) {
       try {
         root.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () { applyTheme(); });
@@ -241,6 +250,7 @@
 
     function onDataChanged() {
       applyTheme();
+      applyTimeZone();
       Object.keys(instances).forEach(function (k) {
         var v = instances[k];
         if (v && typeof v.refresh === 'function') v.refresh();
@@ -1150,10 +1160,11 @@
     }
 
     function clockText(iso) {
-      var d = new Date(iso);
-      if (isNaN(d.getTime())) return '';
-      return D.pad2(d.getMonth() + 1) + '-' + D.pad2(d.getDate()) + ' ' +
-        D.pad2(d.getHours()) + ':' + D.pad2(d.getMinutes());
+      var t = Date.parse(iso);
+      if (!isFinite(t)) return '';
+      var w = D.msToWall(t);
+      return D.pad2(w.month) + '-' + D.pad2(w.day) + ' ' +
+        D.pad2(w.hour) + ':' + D.pad2(w.minute);
     }
 
     /** §4.1 第 3 条：本机有未保存改动，云端那份也保存过 → 问一次。 */
@@ -1487,11 +1498,13 @@
       registerNotificationSection: function (inst) { reminderSectionInst = inst; },
       /* 清空只影响当前作用域：云端那份不动，保存按钮的文字会变蓝提醒「还没传」。 */
       onDataCleared: function () { refreshSaveState(); },
-      /* 2026-10-22 二十三轮：响铃开关移入设置后，立即同步到已创建的完成台实例。 */
-      onFinishSoundChange: function (on) {
+      /* F-105：时区下拉改动 → 先拨活动时区时钟（settings.js 随后持久化并 dataChanged）。 */
+      onTimeZoneChange: function (tz) { D.setTimeZone(tz); },
+      /* F-106：完成台提醒开关移入设置后，立即同步到已创建的完成台实例。 */
+      onFinishNotifyChange: function (on) {
         var dv = instances.day;
         var d = dv && typeof dv.finishDock === 'function' ? dv.finishDock() : null;
-        if (d && typeof d.setSound === 'function') d.setSound(on);
+        if (d && typeof d.setNotify === 'function') d.setNotify(on);
       }
     };
 

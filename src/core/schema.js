@@ -127,7 +127,8 @@
     maxLanes: 3,
     defaultCategoryId: 'cat_short_task',
     weekStartsOn: 1,
-    theme: 'auto'                     /* 'auto' | 'light' | 'dark'（美化迭代 3：设置里可选深浅色） */
+    theme: 'auto',                    /* 'auto' | 'light' | 'dark'（美化迭代 3：设置里可选深浅色） */
+    timeZone: 'Asia/Shanghai'         /* F-105：活动时区（IANA 名，默认北京）；设备本地设置，不随云端同步 */
   };
 
   /** 数值设置项的夹取范围（DM-10） */
@@ -964,7 +965,15 @@
     if (!isNonEmptyString(out.defaultCategoryId)) out.defaultCategoryId = DEFAULT_SETTINGS.defaultCategoryId;
     out.weekStartsOn = clampInt(out.weekStartsOn, 1, 7, DEFAULT_SETTINGS.weekStartsOn);
     if (['auto', 'light', 'dark'].indexOf(out.theme) < 0) out.theme = DEFAULT_SETTINGS.theme;
+    if (!isValidTimeZone(out.timeZone)) out.timeZone = DEFAULT_SETTINGS.timeZone;
     return out;
+  }
+
+  /** F-105：是否为 Intl 可识别的 IANA 时区名（与 datetime.isValidTimeZone 同口径） */
+  function isValidTimeZone(tz) {
+    if (typeof tz !== 'string' || !tz) return false;
+    try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return true; }
+    catch (e) { return false; }
   }
 
   /** 兼容旧名：store.updateSettings 与既有用例使用（等价于 sanitizeSettings） */
@@ -1424,6 +1433,9 @@
     if (settings.weekStartsOn !== undefined && settings.weekStartsOn !== null &&
         (!isFiniteNumber(settings.weekStartsOn) || settings.weekStartsOn < 1 || settings.weekStartsOn > 7)) {
       errors.push(err(path + '.weekStartsOn', 'weekStartsOn 需为 1–7'));
+    }
+    if (settings.timeZone !== undefined && settings.timeZone !== null && !isValidTimeZone(settings.timeZone)) {
+      errors.push(err(path + '.timeZone', 'timeZone 需为合法的 IANA 时区名'));
     }
     return errors;
   }

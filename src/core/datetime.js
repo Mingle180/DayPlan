@@ -2,8 +2,15 @@
  * DayPlan · 日期与时间工具（纯函数，无 DOM 依赖）
  *
  * 契约见 docs/spec/03-data-model.md DM-2。
- * 重要：禁止依赖 `Date.parse("YYYY-MM-DD")` 的隐式 UTC 语义，
- * 本模块所有 "YYYY-MM-DD" 一律按浏览器本地时区解释。
+ * 重要：禁止依赖 `Date.parse("YYYY-MM-DD")` 的隐式 UTC 语义。
+ *
+ * 时区口径（F-105）：文档存的是墙钟（"YYYY-MM-DD" + "HH:mm"）。「今天 / 现在几点」
+ * 与「墙钟 ↔ 瞬间毫秒」一律按**活动时区**解释，而非设备时区——网络代理改写设备
+ * 时区时不再错位。`Date.now()`（epoch 毫秒）与时区无关，仍是唯一瞬间基准。
+ * 活动时区默认等于设备本地 IANA 名；app 启动时设为 settings.timeZone（默认北京）。
+ * 活动时区 == 设备时区时走原生 Date 短路，与历史行为逐毫秒一致。
+ * 纯日历函数（parseDate/addDays/diffDays/星期等）只回读自身构造的年月日，结果与
+ * 时区无关，保持不变——日期字符串就是日历日，加减一天在任何时区都相同。
  */
 (function (root, factory) {
   var api = factory();
@@ -24,6 +31,107 @@
   /** 两位补零 */
   function pad2(n) {
     return n < 10 ? '0' + n : String(n);
+  }
+
+  /* ---------------- 时区时钟（F-105） ---------------- */
+
+  var DEVICE_TZ = (function () {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || null; }
+    catch (e) { return null; }
+  })();
+  var activeTz = DEVICE_TZ;
+  var fmtCache = {};
+
+  /** 是否为 Intl 可识别的 IANA 时区名 */
+  function isValidTimeZone(tz) {
+    if (typeof tz !== 'string' || !tz) return false;
+    try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return true; }
+    catch (e) { return false; }
+  }
+
+  /** 设定活动时区；非法值回退设备本地。返回生效后的时区。 */
+  function setTimeZone(tz) {
+    activeTz = isValidTimeZone(tz) ? tz : DEVICE_TZ;
+    return activeTz;
+  }
+
+  function getTimeZone() { return activeTz; }
+
+  function formatter(tz) {
+    if (!fmtCache[tz]) {
+      fmtCache[tz] = new Intl.DateTimeFormat('en-US', {
+        timeZone: tz, hour12: false,
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit'
+      });
+    }
+    return fmtCache[tz];
+  }
+
+  /** 瞬间 ms 在 tz 里的墙钟分量 */
+  function tzParts(tz, ms) {
+    var parts = formatter(tz).formatToParts(new Date(ms));
+    var map = {};
+    for (var i = 0; i < parts.length; i += 1) map[parts[i].type] = parts[i].value;
+    var h = Number(map.hour);
+    if (h === 24) h = 0;   /* 部分引擎 hour12:false 把午夜给成 24 */
+    return {
+      year: Number(map.year), month: Number(map.month), day: Number(map.day),
+      hour: h, minute: Number(map.minute), second: Number(map.second)
+    };
+  }
+
+  /** tz 在瞬间 ms 的偏移（毫秒，东正西负；时区按分钟对齐，舍入到分） */
+  function tzOffsetMs(tz, ms) {
+    var p = tzParts(tz, ms);
+    var asUTC = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+    return Math.round((asUTC - ms) / 60000) * 60000;
+  }
+
+  /**
+   * 墙钟 "YYYY-MM-DD" + "HH:mm"（按 tz 理解）→ 瞬间毫秒；非法返回 null。
+   * tz 缺省用活动时区；等于设备时区时走原生 Date（与历史逐毫秒一致）。
+   */
+  function wallToMs(dateISO, time, tz) {
+    if (!isValidDate(dateISO) || !isValidTime(time)) return null;
+    tz = tz || activeTz;
+    var ymd = dateISO.split('-');
+    var hm = time.split(':');
+    var y = Number(ymd[0]), mo = Number(ymd[1]), d = Number(ymd[2]);
+    var h = Number(hm[0]), mi = Number(hm[1]);
+    if (!tz || tz === DEVICE_TZ) {
+      var native = new Date(y, mo - 1, d, h, mi, 0, 0).getTime();
+      return isFinite(native) ? native : null;
+    }
+    var guess = Date.UTC(y, mo - 1, d, h, mi, 0, 0);
+    var off = tzOffsetMs(tz, guess);
+    var ms = guess - off;
+    var off2 = tzOffsetMs(tz, ms);   /* 夏令时切换附近偏移会变，再校一次 */
+    if (off2 !== off) ms = guess - off2;
+    return isFinite(ms) ? ms : null;
+  }
+
+  /**
+   * 瞬间毫秒 → tz 里的墙钟 {date,time,minutes,year,month,day,hour,minute}；非法返回 null。
+   */
+  function msToWall(ms, tz) {
+    if (typeof ms !== 'number' || !isFinite(ms)) return null;
+    tz = tz || activeTz;
+    var y, mo, d, h, mi;
+    if (!tz || tz === DEVICE_TZ) {
+      var dt = new Date(ms);
+      y = dt.getFullYear(); mo = dt.getMonth() + 1; d = dt.getDate();
+      h = dt.getHours(); mi = dt.getMinutes();
+    } else {
+      var p = tzParts(tz, ms);
+      y = p.year; mo = p.month; d = p.day; h = p.hour; mi = p.minute;
+    }
+    return {
+      date: y + '-' + pad2(mo) + '-' + pad2(d),
+      time: pad2(h) + ':' + pad2(mi),
+      minutes: h * 60 + mi,
+      year: y, month: mo, day: d, hour: h, minute: mi
+    };
   }
 
   /**
@@ -54,9 +162,10 @@
     return parseDate(iso) !== null;
   }
 
-  /** 今天的本地日期 "YYYY-MM-DD" */
-  function todayISO() {
-    return formatDate(new Date());
+  /** 今天的日期 "YYYY-MM-DD"（按活动时区；可显式传 tz） */
+  function todayISO(tz) {
+    var w = msToWall(Date.now(), tz);
+    return w ? w.date : formatDate(new Date());
   }
 
   /** 与基准日相减的纯日历天数（不受夏令时影响，按本地零点计算） */
@@ -200,8 +309,10 @@
     return out;
   }
 
-  /** 当前时间对应的分钟数（用于"今天"指示线） */
-  function nowMinutes() {
+  /** 当前时间对应的分钟数（用于"今天"指示线；按活动时区，可显式传 tz） */
+  function nowMinutes(tz) {
+    var w = msToWall(Date.now(), tz);
+    if (w) return w.minutes;
     var now = new Date();
     return now.getHours() * 60 + now.getMinutes();
   }
@@ -232,6 +343,13 @@
     isValidTime: isValidTime,
     dateRange: dateRange,
     monthGrid: monthGrid,
-    nowMinutes: nowMinutes
+    nowMinutes: nowMinutes,
+    DEVICE_TZ: DEVICE_TZ,
+    isValidTimeZone: isValidTimeZone,
+    setTimeZone: setTimeZone,
+    getTimeZone: getTimeZone,
+    tzOffsetMs: tzOffsetMs,
+    wallToMs: wallToMs,
+    msToWall: msToWall
   };
 });
