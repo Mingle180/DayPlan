@@ -1028,7 +1028,6 @@
         refreshSaveState();
         if (reminderSync) reminderSync.reset();
         reminderSyncArmed = onAccountScope(uid);
-        if (reminderSyncArmed) scheduleReminderSync();
         if (cloudSectionInst && typeof cloudSectionInst.render === 'function') {
           try { cloudSectionInst.render(); } catch (e) { /* 面板已关闭 */ }
         }
@@ -1279,6 +1278,8 @@
             device: deviceLabel,
             hash: hashOfDoc(row.schedule_data)
           });
+          /* F-109：本机刚以云端为准建立副本，此时同步提醒才与云端文档一致。 */
+          syncReminders({ force: true });
         } else {
           /* 云端为空：没有标记 = 本机这份还没传过（保存按钮亮着小红点）。 */
           clearMarker(uid);
@@ -1328,8 +1329,10 @@
         }
         if (res && res.ok) {
           if (reminderSync) reminderSync.reset();
-          reminderSyncArmed = true;
-          syncReminders({ force: true });
+          reminderSyncArmed = onAccountScope(uid);
+          /* F-109：登录后的提醒对齐交给 cloudOpenPass（干净则静默载入云端再同步），
+             不再拿本机当前文档强制整批替换，避免陈旧本机写回旧 fire_at。 */
+          if (onAccountScope(uid)) cloudOpenPass();
           refreshPushActive();
         }
       });
@@ -1425,10 +1428,11 @@
         var uid = session.getUserId();
         lastOpenPassAt = Date.now();
         enterAccountForSession(uid, true).then(function () {
-          if (onAccountScope(uid)) cloudOpenPass();
           if (reminderSync) reminderSync.reset();
-          reminderSyncArmed = true;
-          scheduleReminderSync();
+          reminderSyncArmed = onAccountScope(uid);
+          /* F-109：启动恢复的提醒同步由 enterAccount 采纳云端行 / cloudOpenPass 载入驱动，
+             不再无条件按本机当前文档整批替换。 */
+          if (onAccountScope(uid)) cloudOpenPass();
           refreshPushActive();
         });
       }, function () {
@@ -1963,7 +1967,8 @@
       });
     }
 
-    store.subscribe(function () { scheduleReminderSync(); });
+    /* F-109：提醒只随「保存 / 回溯 / 云端覆盖本机」同步，不订阅本机编辑——
+       手动保存模型下本机临时状态可能落后于其它设备，整批替换会把旧 fire_at 写回。 */
 
     /* ---------------- 初始化渲染 ---------------- */
 

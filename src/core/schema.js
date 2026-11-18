@@ -1112,6 +1112,9 @@
       if (typeof cd.note !== 'string') errors.push(err(path + '.note', '备注必须是字符串'));
       else if (cd.note.length > NOTE_MAX) errors.push(err(path + '.note', '备注不能超过 ' + NOTE_MAX + ' 字'));
     }
+    if (cd.done !== undefined && cd.done !== null && typeof cd.done !== 'boolean') {
+      errors.push(err(path + '.done', 'done 必须是布尔'));
+    }
     ['createdAt', 'updatedAt'].forEach(function (k) {
       if (cd[k] !== undefined && cd[k] !== null && typeof cd[k] !== 'string') {
         errors.push(err(path + '.' + k, k + ' 必须是字符串'));
@@ -1198,6 +1201,7 @@
       }
       entry.targetAt = cd.targetAt;
       entry.note = typeof cd.note === 'string' ? cd.note.slice(0, NOTE_MAX) : '';
+      entry.done = !!cd.done;
       if (entry.reminder !== undefined && entry.reminder !== null) {
         var rem = normalizeReminder(entry.reminder);
         if (rem && rem.offsetMinutes !== undefined) entry.reminder = rem;

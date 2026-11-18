@@ -616,6 +616,11 @@ html[data-theme='dark'] .lower-row > .finish-dock { background: var(--surface-2)
 .cd-expired[hidden] { display: none; }
 .cd-item.is-expired .cd-title,
 .cd-item.is-expired .cd-num { color: var(--text-3); }
+/* F-108：完成态——停走（隐藏数字）+ 划线 + 「已完成」徽标，留原位 */
+.cd-item.is-done { opacity: .6; }
+.cd-item.is-done .cd-title { color: var(--text-3); text-decoration: line-through; }
+.cd-clock.is-done .cd-value { display: none; }
+.cd-item.is-done .cd-expired { color: var(--primary); }
 
 /* ---------- 完成台条目 ---------- */
 .dock-item {
@@ -1444,6 +1449,9 @@ body.is-panning * { cursor: grabbing !important; user-select: none !important; }
 }
 .wp-item:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .wp-item.is-dragging { opacity: .45; }
+/* F-108：计划完成态——划线降透明度 */
+.wp-item.is-done { opacity: .55; }
+.wp-item.is-done .wp-title { color: var(--text-3); text-decoration: line-through; }
 .wp-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .wp-cat { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--cat, var(--text-3)); }
 .wp-title {

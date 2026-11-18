@@ -1005,7 +1005,7 @@
         var progress = seriesProgress(it, ym);
         return {
           type: 'series', id: it.id, text: it.title,
-          done: progress.total > 0 && progress.done === progress.total,
+          done: !!it.done || (progress.total > 0 && progress.done === progress.total),
           series: it, progress: progress
         };
       });
@@ -1024,6 +1024,22 @@
       return p ? (p.year + ' 年 ' + p.month + ' 月') : ym;
     }
 
+    /* F-108：计划完成手势（桌面右键 / 手机单击完成·双击编辑） */
+    var MP_TAP_DELAY_MS = 300;
+    var mpTap = null;
+    var mpPointerType = 'mouse';
+    var mpDragId = null;
+    var mpDragSuppressUntil = 0;
+    function clearMpTap() {
+      if (mpTap && mpTap.timer) clearTimeout(mpTap.timer);
+      mpTap = null;
+    }
+    function fireMpTap() {
+      var p = mpTap;
+      mpTap = null;
+      if (p) togglePlanDone(p.ym, p.entry);
+    }
+
     function buildPlanRow(entry, index, ym) {
       var isSeries = entry.type === 'series';
       var progress = entry.progress || null;
@@ -1033,11 +1049,14 @@
         'data-done': entry.done ? 'true' : 'false',
         tabindex: '0', role: 'button',
         title: isSeries
-          ? '点击编辑「' + entry.text + '」；完成情况按天记录'
+          ? (entry.done
+            ? '已完成：' + entry.text + '（右键 / 手机单击取消完成）'
+            : '点击编辑「' + entry.text + '」；右键 / 手机单击标记完成')
           : (entry.done
             ? '已完成：' + entry.text + '（右键取消完成）'
             : '点击修改「' + entry.text + '」；右键标记完成')
       });
+      if (isSeries) row.setAttribute('draggable', 'true');
       row.appendChild(el('span', { class: 'mp-seq', text: String(index + 1) }));
       row.appendChild(el('span', { class: 'mp-text', text: entry.text }));
       if (isSeries && progress && progress.total > 0) {
@@ -1057,15 +1076,32 @@
           removePlanNow(ym, entry);
         }
       }));
-      row.addEventListener('click', function () { editPlan(ym, entry); });
-      if (!isSeries) {
-        row.addEventListener('contextmenu', function (e) {
-          if (e && e.preventDefault) e.preventDefault();
-          /* 右键 ✕ 不切换完成，交给按钮自身（浏览器菜单已屏蔽） */
-          if (e && e.target && closestBy(e.target, '.mp-del')) return;
-          togglePlanDone(ym, entry);
-        });
-      }
+      row.addEventListener('pointerdown', function (e) {
+        mpPointerType = e.pointerType || 'mouse';
+      });
+      row.addEventListener('click', function () {
+        if (Date.now() < mpDragSuppressUntil) return;
+        if (mpPointerType !== 'mouse') {
+          if (mpTap && mpTap.id === entry.id) {
+            clearMpTap();
+            editPlan(ym, entry);
+            return;
+          }
+          if (mpTap) fireMpTap();
+          var timer = setTimeout(function () {
+            if (mpTap && mpTap.timer === timer) fireMpTap();
+          }, MP_TAP_DELAY_MS);
+          mpTap = { id: entry.id, ym: ym, entry: entry, timer: timer };
+          return;
+        }
+        editPlan(ym, entry);
+      });
+      row.addEventListener('contextmenu', function (e) {
+        if (e && e.preventDefault) e.preventDefault();
+        /* 右键 ✕ 不切换完成，交给按钮自身（浏览器菜单已屏蔽） */
+        if (e && e.target && closestBy(e.target, '.mp-del')) return;
+        togglePlanDone(ym, entry);
+      });
       row.addEventListener('keydown', function (e) {
         /* 焦点在行内 ✕ 上时，键盘事件会冒泡到行；交给按钮自身（删除 / 空格），
            否则 Enter 会同时触发删除与编辑弹窗。 */
@@ -1075,8 +1111,8 @@
           editPlan(ym, entry);
           return;
         }
-        /* 键盘等价于右键：标准「菜单键」/ Shift+F10（仅旧版清单条目） */
-        if (!isSeries && (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10'))) {
+        /* 键盘等价于右键：标准「菜单键」/ Shift+F10 */
+        if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
           e.preventDefault();
           togglePlanDone(ym, entry);
         }
@@ -1104,7 +1140,72 @@
         el('h3', { class: 'mp-title', text: '本月计划' }),
         el('span', { class: 'mp-sub', text: monthLabel(ym) })
       ]));
-      panel.appendChild(el('div', { class: 'mp-list' }));
+      var list = el('div', { class: 'mp-list' });
+      panel.appendChild(list);
+
+      /* F-108：序列计划拖动排序（旧版纯文本计划不参与；落列表内 = 排序） */
+      function commitPlanReorder() {
+        var ids = [];
+        var rows = list.querySelectorAll('.mp-item.is-series');
+        for (var i = 0; i < rows.length; i += 1) {
+          var id = rows[i].getAttribute('data-plan-id');
+          if (id) ids.push(id);
+        }
+        try { store.reorderPlans(ids); } catch (err) { M.toast('调整次序失败'); }
+        afterPlanChange();
+      }
+      list.addEventListener('dragstart', function (e) {
+        var row = e.target && e.target.closest ? e.target.closest('.mp-item.is-series') : null;
+        if (!row) return;
+        mpDragId = row.getAttribute('data-plan-id');
+        mpDragSuppressUntil = Date.now() + 500;
+        row.classList.add('is-dragging');
+        try {
+          if (e.dataTransfer) {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', mpDragId);
+          }
+        } catch (err) { /* 忽略 */ }
+      });
+      list.addEventListener('dragend', function (e) {
+        var row = e.target && e.target.closest ? e.target.closest('.mp-item') : null;
+        if (row) row.classList.remove('is-dragging');
+        mpDragId = null;
+        afterPlanChange();
+      });
+      list.addEventListener('dragover', function (e) {
+        if (!mpDragId) return;
+        e.preventDefault();
+        try { if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'; } catch (err) { /* 忽略 */ }
+        var dragged = list.querySelector('.mp-item.is-dragging');
+        if (!dragged) return;
+        var row = e.target && e.target.closest ? e.target.closest('.mp-item.is-series') : null;
+        if (!row || row === dragged || !row.getBoundingClientRect) return;
+        var r = row.getBoundingClientRect();
+        if (e.clientY < r.top + r.height / 2) {
+          if (row.previousSibling !== dragged) list.insertBefore(dragged, row);
+        } else if (row.nextSibling !== dragged) {
+          list.insertBefore(dragged, row.nextSibling);
+        }
+      });
+      list.addEventListener('drop', function (e) {
+        if (!mpDragId) return;
+        e.preventDefault();
+        if (e.stopPropagation) e.stopPropagation();
+        mpDragId = null;
+        mpDragSuppressUntil = Date.now() + 500;
+        commitPlanReorder();
+      });
+      var TR = root.DayPlan ? root.DayPlan.touchReorder : null;
+      if (TR && typeof TR.attach === 'function') {
+        TR.attach(list, {
+          rowSelector: '.mp-item.is-series',
+          getId: function (row) { return row.getAttribute('data-plan-id'); },
+          onSuppress: function (ms) { mpDragSuppressUntil = Date.now() + ms; },
+          onReorder: function () { commitPlanReorder(); }
+        });
+      }
+
       panel.appendChild(el('div', { class: 'mp-foot' }, [
         el('button', {
           class: 'btn mp-add', type: 'button', text: '＋ 创建',
@@ -1431,7 +1532,16 @@
 
     /** 切换完成态（右键 / 菜单键）；仅旧版清单条目。序列的完成按天记录在日视图。 */
     function togglePlanDone(ym, entry) {
-      if (entry && entry.type === 'series') return;
+      if (entry && entry.type === 'series') {
+        if (!store || typeof store.togglePlanDone !== 'function') return;
+        var r;
+        try { r = store.togglePlanDone(entry.id); } catch (e) { M.toast(e.message); return; }
+        afterPlanChange();
+        M.toast(r.done
+          ? (r.copies > 0 ? '已标记完成（含 ' + r.copies + ' 个日副本）' : '已标记完成')
+          : '已取消完成');
+        return;
+      }
       if (!store || typeof store.toggleMonthPlanItemDone !== 'function') return;
       var done;
       try {

@@ -26,6 +26,7 @@
   var TOUCH_SLOP_PX = 8;
   var MOUSE_SLOP_PX = 4;
   var CLICK_SUPPRESS_MS = 400;
+  var TAP_DELAY_MS = 300;
 
   var TARGET_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;
 
@@ -110,6 +111,8 @@
     var press = null;
     var drag = null;
     var suppressClickUntil = 0;
+    var lastPointerType = 'mouse';
+    var pendingTap = null;
 
     /* ---------------- 渲染 ---------------- */
 
@@ -150,6 +153,31 @@
       return f;
     }
 
+    function clearPendingTap() {
+      if (pendingTap && pendingTap.timer) clearTimeout(pendingTap.timer);
+      pendingTap = null;
+    }
+
+    function firePendingTap() {
+      var p = pendingTap;
+      pendingTap = null;
+      if (p) toggleDone(p.id);
+    }
+
+    /** F-108：切换完成态（桌面右键 / 手机单击）。完成后停走 + 划线，提醒物化跳过。 */
+    function toggleDone(id) {
+      var r;
+      try {
+        r = store.toggleCountdownDone(id);
+      } catch (e) {
+        if (M) M.toast(e.message || String(e));
+        return;
+      }
+      if (M) M.toast(r.done ? '已标记完成' : '已标记为未完成');
+      render();
+      onChange();
+    }
+
     function buildItem(cd) {
       var li = mk('li', 'cd-item');
       li.setAttribute('data-cd-id', cd.id);
@@ -174,16 +202,47 @@
       var clock = clockNode();
       li.appendChild(head);
       li.appendChild(clock.root);
+      if (cd.done) {
+        li.classList.add('is-done');
+        clock.root.classList.add('is-done');
+        clock.root.setAttribute('aria-label', '已完成');
+        clock.tag.textContent = '已完成';
+        clock.tag.hidden = false;
+      }
       li.addEventListener('click', function () {
         if (Date.now() < suppressClickUntil) return;
+        /* 手机：单击=完成、双击=编辑（与事项同口径）；桌面单击仍=编辑 */
+        if (lastPointerType !== 'mouse') {
+          if (pendingTap && pendingTap.id === cd.id) {
+            clearPendingTap();
+            openForm(cd.id);
+            return;
+          }
+          if (pendingTap) firePendingTap();
+          var timer = setTimeout(function () {
+            if (pendingTap && pendingTap.timer === timer) firePendingTap();
+          }, TAP_DELAY_MS);
+          pendingTap = { id: cd.id, timer: timer };
+          return;
+        }
         openForm(cd.id);
       });
+      li.addEventListener('contextmenu', function (e) {
+        if (e && e.preventDefault) e.preventDefault();
+        if (Date.now() < suppressClickUntil) return;
+        toggleDone(cd.id);
+      });
       li.addEventListener('keydown', function (e) {
+        if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
+          e.preventDefault();
+          toggleDone(cd.id);
+          return;
+        }
         if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
         e.preventDefault();
         openForm(cd.id);
       });
-      return { li: li, clock: clock, targetMs: parseTargetAt(cd.targetAt) };
+      return { li: li, clock: clock, targetMs: parseTargetAt(cd.targetAt), done: !!cd.done };
     }
 
     function render() {
@@ -206,6 +265,7 @@
       var nowMs = Date.now();
       Object.keys(nodes).forEach(function (id) {
         var item = nodes[id];
+        if (item.done) return;
         var f = syncClock(item.clock, item.targetMs, nowMs);
         var has = item.li.classList.contains('is-expired');
         if (f.expired && !has) item.li.classList.add('is-expired');
@@ -327,7 +387,8 @@
       else if (typeof li.cloneNode === 'function') node = li.cloneNode(true);
       if (!node) return null;
       var expired = !!(li.classList && li.classList.contains('is-expired'));
-      node.className = 'cd-item cd-ghost' + (expired ? ' is-expired' : '');
+      var done = !!(li.classList && li.classList.contains('is-done'));
+      node.className = 'cd-item cd-ghost' + (expired ? ' is-expired' : '') + (done ? ' is-done' : '');
       node.setAttribute('aria-hidden', 'true');
       if (node.removeAttribute) node.removeAttribute('data-cd-id');
       var r = (li.getBoundingClientRect ? li.getBoundingClientRect() : null) || { left: 0, top: 0, width: 0, height: 0 };
@@ -443,6 +504,7 @@
         var li = (target && typeof target.closest === 'function') ? target.closest('.cd-item') : null;
         if (!li || (listEl.contains && !listEl.contains(li))) return;
         var touch = e.pointerType !== 'mouse';
+        lastPointerType = e.pointerType || 'mouse';
         press = {
           li: li, x: e.clientX, y: e.clientY, pointerId: e.pointerId, touch: touch, timer: null
         };

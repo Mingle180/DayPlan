@@ -2080,16 +2080,41 @@
       return time.start + (time.end ? '–' + time.end : '');
     }
 
+    /* F-108：计划完成手势（桌面右键 / 手机单击完成·双击编辑），与事项同口径 */
+    var PLAN_TAP_DELAY_MS = 300;
+    var planTap = null;
+    var planPointerType = 'mouse';
+    function clearPlanTap() {
+      if (planTap && planTap.timer) clearTimeout(planTap.timer);
+      planTap = null;
+    }
+    function firePlanTap() {
+      var p = planTap;
+      planTap = null;
+      if (p) togglePlanDone(p.id);
+    }
+    function togglePlanDone(planId) {
+      if (dragSuppressUntil && Date.now() < dragSuppressUntil) return;
+      var r;
+      try { r = store.togglePlanDone(planId); } catch (e) { M.toast(errText(e)); return; }
+      M.toast(r.done
+        ? (r.copies > 0 ? '已标记完成（含 ' + r.copies + ' 个日副本）' : '已标记完成')
+        : '已标记为未完成');
+      afterWrite();
+    }
+
     function planRowNode(plan, cats) {
       var cat = (cats && cats[plan.categoryId]) || { name: '未分类', color: DEFAULT_CAT_COLOR };
       var isMonth = plan.meta.origin === 'monthPlan';
       var tone = toneOf ? toneOf(cat.color) : null;
       var row = el('li', {
-        class: 'wp-item', role: 'button', tabindex: '0', draggable: 'true',
+        class: 'wp-item' + (plan.done ? ' is-done' : ''), role: 'button', tabindex: '0', draggable: 'true',
         'data-plan-id': plan.id,
         'data-plan-kind': isMonth ? 'monthPlan' : 'weekPlan',
+        'data-done': plan.done ? 'true' : 'false',
         style: '--cat:' + catAccent(cat.color) + (tone ? ';--cat-bg:' + tone.background : ''),
-        'aria-label': (isMonth ? '本月：' : '本周：') + plan.title
+        'aria-label': (isMonth ? '本月：' : '本周：') + plan.title + (plan.done ? '（已完成）' : ''),
+        title: plan.done ? '已完成（右键 / 手机单击取消完成）' : '右键 / 手机单击标记完成'
       });
       var main = el('div', { class: 'wp-main' }, [
         el('span', { class: 'wp-cat', 'aria-hidden': 'true' }),
@@ -2102,9 +2127,31 @@
       if (plan.note) row.appendChild(el('div', { class: 'wp-note', text: plan.note }));
       row.addEventListener('click', function () {
         if (dragSuppressUntil && Date.now() < dragSuppressUntil) return;
+        if (planPointerType !== 'mouse') {
+          if (planTap && planTap.id === plan.id) {
+            clearPlanTap();
+            editWeekPlan(plan.id);
+            return;
+          }
+          if (planTap) firePlanTap();
+          var timer = setTimeout(function () {
+            if (planTap && planTap.timer === timer) firePlanTap();
+          }, PLAN_TAP_DELAY_MS);
+          planTap = { id: plan.id, timer: timer };
+          return;
+        }
         editWeekPlan(plan.id);
       });
+      row.addEventListener('contextmenu', function (e) {
+        if (e && e.preventDefault) e.preventDefault();
+        togglePlanDone(plan.id);
+      });
       row.addEventListener('keydown', function (e) {
+        if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
+          e.preventDefault();
+          togglePlanDone(plan.id);
+          return;
+        }
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           editWeekPlan(plan.id);
@@ -2218,6 +2265,10 @@
     function setupPlanDrag() {
       if (!plansListEl || !gridEl) return;
 
+      plansListEl.addEventListener('pointerdown', function (e) {
+        planPointerType = e.pointerType || 'mouse';
+      });
+
       plansListEl.addEventListener('dragstart', function (e) {
         var row = e.target && e.target.closest ? e.target.closest('.wp-item') : null;
         if (!row) return;
@@ -2226,7 +2277,7 @@
         row.classList.add('is-dragging');
         try {
           if (e.dataTransfer) {
-            e.dataTransfer.effectAllowed = 'copy';
+            e.dataTransfer.effectAllowed = 'copyMove';
             e.dataTransfer.setData('application/x-dayplan-weekplan', dragPlanId);
             e.dataTransfer.setData('text/plain', dragPlanId);
           }
@@ -2239,7 +2290,56 @@
         clearPlanPreview();
         foldPlanAxis();
         dragPlanId = null;
+        /* 列表内拖排只改 DOM 未提交时（取消 / 落到网格复制），按 store 顺序复原右栏 */
+        renderPlans(docOf(), state.monday);
       });
+
+      /* F-108：落点决定——松手在计划列表内 = 排序（拖到网格仍是复制副本） */
+      plansListEl.addEventListener('dragover', function (e) {
+        if (!dragPlanId) return;
+        e.preventDefault();
+        try { if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'; } catch (err) { /* 忽略 */ }
+        var dragged = plansListEl.querySelector('.wp-item.is-dragging');
+        if (!dragged) return;
+        var row = e.target && e.target.closest ? e.target.closest('.wp-item') : null;
+        if (!row || row === dragged || !row.getBoundingClientRect) return;
+        var r = row.getBoundingClientRect();
+        if (e.clientY < r.top + r.height / 2) {
+          if (row.previousSibling !== dragged) plansListEl.insertBefore(dragged, row);
+        } else if (row.nextSibling !== dragged) {
+          plansListEl.insertBefore(dragged, row.nextSibling);
+        }
+      });
+
+      plansListEl.addEventListener('drop', function (e) {
+        if (!dragPlanId) return;
+        e.preventDefault();
+        if (e.stopPropagation) e.stopPropagation();
+        var ids = [];
+        var children = plansListEl.children;
+        for (var i = 0; i < children.length; i += 1) {
+          var id = children[i].getAttribute && children[i].getAttribute('data-plan-id');
+          if (id) ids.push(id);
+        }
+        dragPlanId = null;
+        dragSuppressUntil = Date.now() + 500;
+        try { store.reorderPlans(ids); } catch (err) { M.toast('调整次序失败：' + errText(err)); }
+        afterWrite();
+      });
+
+      /* F-108：手机长按拖 = 列表内排序（鼠标走上面的 HTML5 拖拽） */
+      var TR = root.DayPlan ? root.DayPlan.touchReorder : null;
+      if (TR && typeof TR.attach === 'function') {
+        TR.attach(plansListEl, {
+          rowSelector: '.wp-item',
+          getId: function (row) { return row.getAttribute('data-plan-id'); },
+          onSuppress: function (ms) { dragSuppressUntil = Date.now() + ms; },
+          onReorder: function (ids) {
+            try { store.reorderPlans(ids); } catch (err) { M.toast('调整次序失败：' + errText(err)); }
+            afterWrite();
+          }
+        });
+      }
 
       gridEl.addEventListener('dragover', function (e) {
         if (!dragPlanId) return;

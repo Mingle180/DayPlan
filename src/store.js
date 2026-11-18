@@ -1606,7 +1606,7 @@
     function getCountdowns() {
       var list = Array.isArray(state.countdowns) ? state.countdowns : [];
       return list.map(function (e) {
-        return {
+        var out = {
           id: e.id,
           title: e.title,
           categoryId: e.categoryId,
@@ -1616,6 +1616,9 @@
           createdAt: e.createdAt,
           updatedAt: e.updatedAt
         };
+        /* F-108：done 为可选布尔，仅完成时携带（读取层不得剥掉，否则 UI 永远看不到完成态） */
+        if (e.done === true) out.done = true;
+        return out;
       });
     }
 
@@ -1679,6 +1682,22 @@
       return true;
     }
 
+    /** F-108：切换倒计时完成态（桌面右键 / 手机单击）。完成后提醒物化跳过该行。 */
+    function toggleCountdownDone(id) {
+      var result = null;
+      mutate(function (draft) {
+        var list = Array.isArray(draft.countdowns) ? draft.countdowns : [];
+        var i = -1;
+        for (var k = 0; k < list.length; k += 1) { if (list[k].id === id) { i = k; break; } }
+        if (i < 0) throw StoreError('E_NOT_FOUND', '倒计时不存在：' + id);
+        var next = Object.assign({}, list[i], { done: !list[i].done, updatedAt: now() });
+        list[i] = next;
+        draft.countdowns = list;
+        result = { done: next.done };
+      });
+      return result;
+    }
+
     // ---------------- 完成台快照（D9 / 2026-10-27：参与同步） ----------------
 
     /**
@@ -1716,6 +1735,70 @@
         });
         list.forEach(function (e) { if (next.indexOf(e) < 0) next.push(e); });
         draft.countdowns = next;
+      });
+      return true;
+    }
+
+    /**
+     * F-108：切换计划完成态。
+     * 标完成 = 计划本身 + 所有日副本（meta.sourcePlanId）置 done=true（已完成的保持完成）；
+     * addToDays!==false 时把 done===false 的逐天例外也置 true（每天发生全部完成）。
+     * 再标一次只取消计划本身（done=false），副本与例外不动。
+     * @returns {{done:boolean, copies:number}} copies = 本次新标记完成的副本数
+     */
+    function togglePlanDone(id) {
+      var result = null;
+      mutate(function (draft) {
+        var i = findIndexById(draft.items, id);
+        if (i < 0) throw StoreError('E_NOT_FOUND', '计划不存在：' + id);
+        var plan = draft.items[i];
+        if (plan.kind !== 'series' || !plan.meta
+          || (plan.meta.origin !== 'weekPlan' && plan.meta.origin !== 'monthPlan')) {
+          throw StoreError('E_INVALID', '不是计划：' + id);
+        }
+        var stamp = now();
+        if (plan.done === true) {
+          draft.items[i] = Object.assign({}, plan, { done: false, updatedAt: stamp });
+          result = { done: false, copies: 0 };
+          return;
+        }
+        var copies = 0;
+        var nextItems = draft.items.map(function (it) {
+          if (it && it.kind === 'single' && it.meta && it.meta.sourcePlanId === id && it.done !== true) {
+            copies += 1;
+            return Object.assign({}, it, { done: true, updatedAt: stamp });
+          }
+          return it;
+        });
+        var nextPlan = Object.assign({}, plan, { done: true, updatedAt: stamp });
+        if (plan.meta.addToDays !== false && plan.exceptions) {
+          var ex = {};
+          Object.keys(plan.exceptions).forEach(function (k) {
+            var e = plan.exceptions[k];
+            ex[k] = (e && e.done === false) ? Object.assign({}, e, { done: true, updatedAt: stamp }) : e;
+          });
+          nextPlan.exceptions = ex;
+        }
+        nextItems[i] = nextPlan;
+        draft.items = nextItems;
+        result = { done: true, copies: copies };
+      });
+      return result;
+    }
+
+    /** F-108：计划拖动排序。所列计划 order 压实为 0..n-1；未列出的计划保持原 order。 */
+    function reorderPlans(orderedIds) {
+      var rank = {};
+      var next = 0;
+      (Array.isArray(orderedIds) ? orderedIds : []).forEach(function (id) {
+        if (typeof id === 'string' && !(id in rank)) { rank[id] = next; next += 1; }
+      });
+      mutate(function (draft) {
+        draft.items.forEach(function (it, j) {
+          if (it && it.id in rank) {
+            draft.items[j] = Object.assign({}, it, { order: rank[it.id], updatedAt: now() });
+          }
+        });
       });
       return true;
     }
@@ -2320,6 +2403,8 @@
       reorderUntimed: reorderUntimed,
       toggleDone: toggleDone,
       toggleStarred: toggleStarred,
+      togglePlanDone: togglePlanDone,
+      reorderPlans: reorderPlans,
       // 紧急（迭代 4 / DM-18）
       toggleUrgent: toggleUrgent,
       effectiveUrgent: effectiveUrgent,
@@ -2350,6 +2435,7 @@
       updateCountdown: updateCountdown,
       removeCountdown: removeCountdown,
       reorderCountdowns: reorderCountdowns,
+      toggleCountdownDone: toggleCountdownDone,
       // 完成台快照（D9：参与同步）
       getFinishDock: getFinishDock,
       setFinishDock: setFinishDock,

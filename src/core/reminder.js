@@ -249,7 +249,7 @@
 
     var countdowns = Array.isArray(doc.countdowns) ? doc.countdowns : [];
     countdowns.forEach(function (cd) {
-      if (!cd || !cd.id) return;
+      if (!cd || !cd.id || cd.done === true) return;
       var rem = normalize(cd.reminder);
       if (!rem || !isOffsetMode(rem)) return;
       var base = targetMs(cd.targetAt);
