@@ -2049,30 +2049,35 @@
      *   行可点开编辑弹窗；HTML5 拖到左侧某天生成独立单次副本（源不消失、允许重复）。
      * ------------------------------------------------------------------ */
 
-    /** 本周计划清单：周计划（weekStart=本周一）在前、月计划（月份与本周相交）在后，组内按 order / createdAt。 */
+    /** 本周计划清单：周计划（weekStart=本周一）+ 相交月份的月计划，按同一全局 order 排序。
+     *  F-112：拖动落盘提交的是全局 order（reorderPlans 压实 0..n-1），渲染必须按它排，
+     *  不能再按周/月分组各自排序后 concat——否则跨组拖动会被还原（跳回原位）。
+     *  周在前/月在后仅作为 order 相等（未拖排过的默认态）时的稳定 tie-break。 */
     function weekPlansOf(doc, monday) {
       var items = (doc && doc.items) || [];
       var months = {};
       weekDays(monday).forEach(function (iso) { months[iso.slice(0, 7)] = true; });
-      var week = [];
-      var month = [];
+      var plans = [];
       items.forEach(function (it) {
         if (!it || it.kind !== 'series' || !it.meta) return;
-        if (it.meta.origin === 'weekPlan' && it.meta.weekStart === monday) week.push(it);
-        else if (it.meta.origin === 'monthPlan' && months[it.meta.month]) month.push(it);
+        if (it.meta.origin === 'weekPlan' && it.meta.weekStart === monday) plans.push(it);
+        else if (it.meta.origin === 'monthPlan' && months[it.meta.month]) plans.push(it);
       });
+      function groupOf(it) { return it.meta.origin === 'weekPlan' ? 0 : 1; }
       function byOrder(a, b) {
         var ao = numOr(a.order, 0);
         var bo = numOr(b.order, 0);
         if (ao !== bo) return ao - bo;
+        var ga = groupOf(a);
+        var gb = groupOf(b);
+        if (ga !== gb) return ga - gb;
         var ac = String(a.createdAt || '');
         var bc = String(b.createdAt || '');
         if (ac !== bc) return ac < bc ? -1 : 1;
         return String(a.id) < String(b.id) ? -1 : 1;
       }
-      week.sort(byOrder);
-      month.sort(byOrder);
-      return week.concat(month);
+      plans.sort(byOrder);
+      return plans;
     }
 
     function planTimeText(time) {
