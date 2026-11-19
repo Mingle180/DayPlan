@@ -225,7 +225,7 @@ html[data-theme='dark'] .app-header {
   margin-left: auto;
   pointer-events: none;
   opacity: .84;
-  background: url("../assets/illustrations/header-botanical-branch.png") center / contain no-repeat;
+  background: url("../assets/illustrations/header-botanical-branch.webp") center / contain no-repeat;
 }
 @media (max-width: 1000px) {
   .header-branch { display: none; }
@@ -878,7 +878,7 @@ html[data-theme='dark'] .lower-row > .finish-dock { background: var(--surface); 
   /* 2026-10-30（用户反馈）：图内大片半透明纸雾，深色下会透出底下的深色成暗斑；
      垫色画在容器上（不画在插画自身，插画的 drop-shadow 只按轮廓投影） */
   background-image:
-    url("../assets/illustrations/empty-cat.png");
+    url("../assets/illustrations/empty-cat.webp");
   background-position: center;
   background-size: contain;
   background-repeat: no-repeat;
@@ -1008,14 +1008,14 @@ html[data-theme='dark'] .rail-cover::before {
   left: 15px;
   height: 30px;
   aspect-ratio: 300 / 89;
-  background-image: url("../assets/illustrations/brand-wordmark-text.png");
+  background-image: url("../assets/illustrations/brand-wordmark-text.webp");
   background-repeat: no-repeat;
   background-position: left top;
   background-size: 100% 100%;
   pointer-events: none;
 }
 html[data-theme='dark'] .rail-cover-brand {
-  background-image: url("../assets/illustrations/brand-wordmark-text-dark.png");
+  background-image: url("../assets/illustrations/brand-wordmark-text-dark.webp");
 }
 
 /* 悬停 / 键盘聚焦才露出的更换提示，不占画面 */
@@ -1199,7 +1199,7 @@ html[data-theme='dark'] .cd-ico { opacity: .55; }
   width: 84px;
   height: 92px;
   background-image:
-    url("../assets/illustrations/timeline-coffee-books.png");
+    url("../assets/illustrations/timeline-coffee-books.webp");
   background-position: center;
   background-size: contain;
   background-repeat: no-repeat;
