@@ -2269,12 +2269,46 @@
         planPointerType = e.pointerType || 'mouse';
       });
 
+      /* F-110：贴边自动滚动——指针停在右栏列表上/下边缘时滚动，长列表可拖到需滚动才到的位置 */
+      var planDragY = null;
+      var planScroller = (root.DayPlan && root.DayPlan.touchReorder && root.DayPlan.touchReorder.edgeScroll)
+        ? root.DayPlan.touchReorder.edgeScroll(plansListEl, {
+          getY: function () { return planDragY; },
+          onScroll: function () { if (dragPlanId && planDragY != null) planDragInsert(planDragY); }
+        })
+        : { start: function () {}, stop: function () {} };
+
+      /* 按指针几何把拖拽行插到落点（dragover 与自动滚动共用） */
+      function planDragInsert(y) {
+        var dragged = plansListEl.querySelector('.wp-item.is-dragging');
+        if (!dragged) return;
+        var children = plansListEl.children;
+        var before = null;
+        for (var i = 0; i < children.length; i += 1) {
+          var n = children[i];
+          if (n === dragged || !n.getBoundingClientRect || !n.getAttribute('data-plan-id')) continue;
+          var r = n.getBoundingClientRect();
+          if (y < r.top + r.height / 2) { before = n; break; }
+        }
+        if (before) {
+          if (dragged.nextSibling !== before) plansListEl.insertBefore(dragged, before);
+        } else {
+          var last = null;
+          for (var j = children.length - 1; j >= 0; j -= 1) {
+            if (children[j] !== dragged && children[j].getAttribute('data-plan-id')) { last = children[j]; break; }
+          }
+          if (last && last.nextSibling !== dragged) plansListEl.insertBefore(dragged, last.nextSibling);
+        }
+      }
+
       plansListEl.addEventListener('dragstart', function (e) {
         var row = e.target && e.target.closest ? e.target.closest('.wp-item') : null;
         if (!row) return;
         dragPlanId = row.getAttribute('data-plan-id');
         dragSuppressUntil = Date.now() + 500;
         row.classList.add('is-dragging');
+        planDragY = e.clientY;
+        planScroller.start();
         try {
           if (e.dataTransfer) {
             e.dataTransfer.effectAllowed = 'copyMove';
@@ -2287,6 +2321,8 @@
       plansListEl.addEventListener('dragend', function (e) {
         var row = e.target && e.target.closest ? e.target.closest('.wp-item') : null;
         if (row) row.classList.remove('is-dragging');
+        planScroller.stop();
+        planDragY = null;
         clearPlanPreview();
         foldPlanAxis();
         dragPlanId = null;
@@ -2299,16 +2335,8 @@
         if (!dragPlanId) return;
         e.preventDefault();
         try { if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'; } catch (err) { /* 忽略 */ }
-        var dragged = plansListEl.querySelector('.wp-item.is-dragging');
-        if (!dragged) return;
-        var row = e.target && e.target.closest ? e.target.closest('.wp-item') : null;
-        if (!row || row === dragged || !row.getBoundingClientRect) return;
-        var r = row.getBoundingClientRect();
-        if (e.clientY < r.top + r.height / 2) {
-          if (row.previousSibling !== dragged) plansListEl.insertBefore(dragged, row);
-        } else if (row.nextSibling !== dragged) {
-          plansListEl.insertBefore(dragged, row.nextSibling);
-        }
+        planDragY = e.clientY;
+        planDragInsert(e.clientY);
       });
 
       plansListEl.addEventListener('drop', function (e) {
@@ -2321,6 +2349,8 @@
           var id = children[i].getAttribute && children[i].getAttribute('data-plan-id');
           if (id) ids.push(id);
         }
+        planScroller.stop();
+        planDragY = null;
         dragPlanId = null;
         dragSuppressUntil = Date.now() + 500;
         try { store.reorderPlans(ids); } catch (err) { M.toast('调整次序失败：' + errText(err)); }

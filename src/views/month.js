@@ -1028,7 +1028,6 @@
     var MP_TAP_DELAY_MS = 300;
     var mpTap = null;
     var mpPointerType = 'mouse';
-    var mpDragId = null;
     var mpDragSuppressUntil = 0;
     function clearMpTap() {
       if (mpTap && mpTap.timer) clearTimeout(mpTap.timer);
@@ -1056,7 +1055,6 @@
             ? '已完成：' + entry.text + '（右键取消完成）'
             : '点击修改「' + entry.text + '」；右键标记完成')
       });
-      if (isSeries) row.setAttribute('draggable', 'true');
       row.appendChild(el('span', { class: 'mp-seq', text: String(index + 1) }));
       row.appendChild(el('span', { class: 'mp-text', text: entry.text }));
       if (isSeries && progress && progress.total > 0) {
@@ -1154,52 +1152,14 @@
         try { store.reorderPlans(ids); } catch (err) { M.toast('调整次序失败'); }
         afterPlanChange();
       }
-      list.addEventListener('dragstart', function (e) {
-        var row = e.target && e.target.closest ? e.target.closest('.mp-item.is-series') : null;
-        if (!row) return;
-        mpDragId = row.getAttribute('data-plan-id');
-        mpDragSuppressUntil = Date.now() + 500;
-        row.classList.add('is-dragging');
-        try {
-          if (e.dataTransfer) {
-            e.dataTransfer.effectAllowed = 'move';
-            e.dataTransfer.setData('text/plain', mpDragId);
-          }
-        } catch (err) { /* 忽略 */ }
-      });
-      list.addEventListener('dragend', function (e) {
-        var row = e.target && e.target.closest ? e.target.closest('.mp-item') : null;
-        if (row) row.classList.remove('is-dragging');
-        mpDragId = null;
-        afterPlanChange();
-      });
-      list.addEventListener('dragover', function (e) {
-        if (!mpDragId) return;
-        e.preventDefault();
-        try { if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'; } catch (err) { /* 忽略 */ }
-        var dragged = list.querySelector('.mp-item.is-dragging');
-        if (!dragged) return;
-        var row = e.target && e.target.closest ? e.target.closest('.mp-item.is-series') : null;
-        if (!row || row === dragged || !row.getBoundingClientRect) return;
-        var r = row.getBoundingClientRect();
-        if (e.clientY < r.top + r.height / 2) {
-          if (row.previousSibling !== dragged) list.insertBefore(dragged, row);
-        } else if (row.nextSibling !== dragged) {
-          list.insertBefore(dragged, row.nextSibling);
-        }
-      });
-      list.addEventListener('drop', function (e) {
-        if (!mpDragId) return;
-        e.preventDefault();
-        if (e.stopPropagation) e.stopPropagation();
-        mpDragId = null;
-        mpDragSuppressUntil = Date.now() + 500;
-        commitPlanReorder();
-      });
+      /* F-110：月计划面板是绝对定位覆盖层，Chromium 会吞掉这种环境里的 HTML5 drop
+         （dragstart/dragover 正常、松手只发 dragend，排序不落盘）。改用指针拖拽：
+         桌面鼠标按下移动即拖、手机长按拖，同一套 touchReorder，松手按 DOM 顺序提交。 */
       var TR = root.DayPlan ? root.DayPlan.touchReorder : null;
       if (TR && typeof TR.attach === 'function') {
         TR.attach(list, {
           rowSelector: '.mp-item.is-series',
+          allowMouse: true,
           getId: function (row) { return row.getAttribute('data-plan-id'); },
           onSuppress: function (ms) { mpDragSuppressUntil = Date.now() + ms; },
           onReorder: function () { commitPlanReorder(); }
@@ -1532,6 +1492,8 @@
 
     /** 切换完成态（右键 / 菜单键）；仅旧版清单条目。序列的完成按天记录在日视图。 */
     function togglePlanDone(ym, entry) {
+      /* F-110：拖拽刚结束时抑制（真机安卓长按会触发 contextmenu，避免拖动中途误翻完成态打断拖拽） */
+      if (mpDragSuppressUntil && Date.now() < mpDragSuppressUntil) return;
       if (entry && entry.type === 'series') {
         if (!store || typeof store.togglePlanDone !== 'function') return;
         var r;
@@ -1619,22 +1581,27 @@
       renderList();
       updateStatus();
       syncDiagnostics();
-      /* 重绘会重建月份列：把打开中的计划面板**原节点**搬进新列，
-         尺寸仍由新列决定（不重建面板 → 列表滚动位置与焦点不丢）。 */
-      if (planPanel && planYM) {
-        var freshCol = findPlanColumn(planYM);
-        if (freshCol) {
-          planColumn = freshCol;
-          if (planPanel.parentNode) planPanel.parentNode.removeChild(planPanel);
-          freshCol.appendChild(planPanel);
-          if (freshCol.classList) freshCol.classList.add('is-plan-open');
-          var head = planHeadOf(freshCol);
-          if (head && head.classList) head.classList.add('is-plan-open');
-          if (head && head.setAttribute) head.setAttribute('aria-expanded', 'true');
-          fillPlanPanel();
-        } else {
-          closePlan(true);
-        }
+      reanchorPlanPanel();
+    }
+
+    /** 重绘 / 头部追加会重建月份列：把打开中的计划面板**原节点**搬进新列，
+        尺寸仍由新列决定（不重建面板 → 列表滚动位置与焦点不丢）。
+        F-110：extend('back') 也走 innerHTML 重建，同样必须重新锚定，
+        否则贴边滚动续年会把打开中的面板连同旧列一起清掉。 */
+    function reanchorPlanPanel() {
+      if (!planPanel || !planYM) return;
+      var freshCol = findPlanColumn(planYM);
+      if (freshCol) {
+        planColumn = freshCol;
+        if (planPanel.parentNode) planPanel.parentNode.removeChild(planPanel);
+        freshCol.appendChild(planPanel);
+        if (freshCol.classList) freshCol.classList.add('is-plan-open');
+        var head = planHeadOf(freshCol);
+        if (head && head.classList) head.classList.add('is-plan-open');
+        if (head && head.setAttribute) head.setAttribute('aria-expanded', 'true');
+        fillPlanPanel();
+      } else {
+        closePlan(true);
       }
     }
 
@@ -1799,6 +1766,7 @@
         }
         if (prependHeight > 0) setScrollTop((scrollEl.scrollTop || 0) + prependHeight);
         restoreAnchor(anchorYm);
+        reanchorPlanPanel();
       } else {
         /* 尾部追加：已有节点不动，直接续渲染 */
         renderAppended(context, beforeCount);

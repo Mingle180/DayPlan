@@ -364,14 +364,19 @@
     /**
      * revision 条件更新。patchBody 由调用方给（含新 revision），本模块不代算。
      * 0 行 = 别人先改了或行被删 → E_CONFLICT，绝不报成功。
+     * @param {object} [extra] extra.select 裁响应列（如 'revision,updated_at'），缺省回整行。
      */
-    function updateConditional(uid, patchBody, expectedRevision, accessToken) {
+    function updateConditional(uid, patchBody, expectedRevision, accessToken, extra) {
+      var query = [
+        ['user_id', 'eq.' + uid],
+        ['revision', 'eq.' + expectedRevision]
+      ];
+      if (extra && typeof extra.select === 'string' && extra.select) {
+        query.push(['select', extra.select]);
+      }
       return request({
         method: 'PATCH',
-        query: [
-          ['user_id', 'eq.' + uid],
-          ['revision', 'eq.' + expectedRevision]
-        ],
+        query: query,
         body: patchBody,
         accessToken: accessToken,
         prefer: 'return=representation',

@@ -919,6 +919,11 @@ button { font: inherit; color: inherit; text-align: center; }
 .cd-expired[hidden] { display: none; }
 .cd-item.is-expired .cd-title,
 .cd-item.is-expired .cd-num { color: var(--text-3); }
+/* F-108：完成态——停走（隐藏数字）+ 划线 + 「已完成」徽标，留原位 */
+.cd-item.is-done { opacity: .6; }
+.cd-item.is-done .cd-title { color: var(--text-3); text-decoration: line-through; }
+.cd-clock.is-done .cd-value { display: none; }
+.cd-item.is-done .cd-expired { color: var(--primary); }
 
 /* ---------- 完成台条目 ---------- */
 .dock-item {
@@ -1724,6 +1729,9 @@ button { font: inherit; color: inherit; text-align: center; }
 
 .wp-item:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .wp-item.is-dragging { opacity: .45; }
+/* F-108：计划完成态——划线降透明度 */
+.wp-item.is-done { opacity: .55; }
+.wp-item.is-done .wp-title { color: var(--text-3); text-decoration: line-through; }
 .wp-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .wp-cat { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--cat, var(--text-3)); }
 .wp-title {
@@ -6541,6 +6549,11 @@ button { font: inherit; color: inherit; text-align: center; }
 .cd-expired[hidden] { display: none; }
 .cd-item.is-expired .cd-title,
 .cd-item.is-expired .cd-num { color: var(--text-3); }
+/* F-108：完成态——停走（隐藏数字）+ 划线 + 「已完成」徽标，留原位 */
+.cd-item.is-done { opacity: .6; }
+.cd-item.is-done .cd-title { color: var(--text-3); text-decoration: line-through; }
+.cd-clock.is-done .cd-value { display: none; }
+.cd-item.is-done .cd-expired { color: var(--primary); }
 
 /* ---------- 完成台条目 ---------- */
 .dock-item {
@@ -7360,6 +7373,9 @@ button { font: inherit; color: inherit; text-align: center; }
 
 .wp-item:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .wp-item.is-dragging { opacity: .45; }
+/* F-108：计划完成态——划线降透明度 */
+.wp-item.is-done { opacity: .55; }
+.wp-item.is-done .wp-title { color: var(--text-3); text-decoration: line-through; }
 .wp-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .wp-cat { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--cat, var(--text-3)); }
 .wp-title {
@@ -15373,6 +15389,9 @@ body.tut-landing {
       if (typeof cd.note !== 'string') errors.push(err(path + '.note', '备注必须是字符串'));
       else if (cd.note.length > NOTE_MAX) errors.push(err(path + '.note', '备注不能超过 ' + NOTE_MAX + ' 字'));
     }
+    if (cd.done !== undefined && cd.done !== null && typeof cd.done !== 'boolean') {
+      errors.push(err(path + '.done', 'done 必须是布尔'));
+    }
     ['createdAt', 'updatedAt'].forEach(function (k) {
       if (cd[k] !== undefined && cd[k] !== null && typeof cd[k] !== 'string') {
         errors.push(err(path + '.' + k, k + ' 必须是字符串'));
@@ -15459,6 +15478,7 @@ body.tut-landing {
       }
       entry.targetAt = cd.targetAt;
       entry.note = typeof cd.note === 'string' ? cd.note.slice(0, NOTE_MAX) : '';
+      entry.done = !!cd.done;
       if (entry.reminder !== undefined && entry.reminder !== null) {
         var rem = normalizeReminder(entry.reminder);
         if (rem && rem.offsetMinutes !== undefined) entry.reminder = rem;
@@ -18807,7 +18827,7 @@ body.tut-landing {
 
     var countdowns = Array.isArray(doc.countdowns) ? doc.countdowns : [];
     countdowns.forEach(function (cd) {
-      if (!cd || !cd.id) return;
+      if (!cd || !cd.id || cd.done === true) return;
       var rem = normalize(cd.reminder);
       if (!rem || !isOffsetMode(rem)) return;
       var base = targetMs(cd.targetAt);
@@ -25115,7 +25135,7 @@ body.tut-landing {
     function getCountdowns() {
       var list = Array.isArray(state.countdowns) ? state.countdowns : [];
       return list.map(function (e) {
-        return {
+        var out = {
           id: e.id,
           title: e.title,
           categoryId: e.categoryId,
@@ -25125,6 +25145,9 @@ body.tut-landing {
           createdAt: e.createdAt,
           updatedAt: e.updatedAt
         };
+        /* F-108：done 为可选布尔，仅完成时携带（读取层不得剥掉，否则 UI 永远看不到完成态） */
+        if (e.done === true) out.done = true;
+        return out;
       });
     }
 
@@ -25188,6 +25211,22 @@ body.tut-landing {
       return true;
     }
 
+    /** F-108：切换倒计时完成态（桌面右键 / 手机单击）。完成后提醒物化跳过该行。 */
+    function toggleCountdownDone(id) {
+      var result = null;
+      mutate(function (draft) {
+        var list = Array.isArray(draft.countdowns) ? draft.countdowns : [];
+        var i = -1;
+        for (var k = 0; k < list.length; k += 1) { if (list[k].id === id) { i = k; break; } }
+        if (i < 0) throw StoreError('E_NOT_FOUND', '倒计时不存在：' + id);
+        var next = Object.assign({}, list[i], { done: !list[i].done, updatedAt: now() });
+        list[i] = next;
+        draft.countdowns = list;
+        result = { done: next.done };
+      });
+      return result;
+    }
+
     // ---------------- 完成台快照（D9 / 2026-10-27：参与同步） ----------------
 
     /**
@@ -25225,6 +25264,70 @@ body.tut-landing {
         });
         list.forEach(function (e) { if (next.indexOf(e) < 0) next.push(e); });
         draft.countdowns = next;
+      });
+      return true;
+    }
+
+    /**
+     * F-108：切换计划完成态。
+     * 标完成 = 计划本身 + 所有日副本（meta.sourcePlanId）置 done=true（已完成的保持完成）；
+     * addToDays!==false 时把 done===false 的逐天例外也置 true（每天发生全部完成）。
+     * 再标一次只取消计划本身（done=false），副本与例外不动。
+     * @returns {{done:boolean, copies:number}} copies = 本次新标记完成的副本数
+     */
+    function togglePlanDone(id) {
+      var result = null;
+      mutate(function (draft) {
+        var i = findIndexById(draft.items, id);
+        if (i < 0) throw StoreError('E_NOT_FOUND', '计划不存在：' + id);
+        var plan = draft.items[i];
+        if (plan.kind !== 'series' || !plan.meta
+          || (plan.meta.origin !== 'weekPlan' && plan.meta.origin !== 'monthPlan')) {
+          throw StoreError('E_INVALID', '不是计划：' + id);
+        }
+        var stamp = now();
+        if (plan.done === true) {
+          draft.items[i] = Object.assign({}, plan, { done: false, updatedAt: stamp });
+          result = { done: false, copies: 0 };
+          return;
+        }
+        var copies = 0;
+        var nextItems = draft.items.map(function (it) {
+          if (it && it.kind === 'single' && it.meta && it.meta.sourcePlanId === id && it.done !== true) {
+            copies += 1;
+            return Object.assign({}, it, { done: true, updatedAt: stamp });
+          }
+          return it;
+        });
+        var nextPlan = Object.assign({}, plan, { done: true, updatedAt: stamp });
+        if (plan.meta.addToDays !== false && plan.exceptions) {
+          var ex = {};
+          Object.keys(plan.exceptions).forEach(function (k) {
+            var e = plan.exceptions[k];
+            ex[k] = (e && e.done === false) ? Object.assign({}, e, { done: true, updatedAt: stamp }) : e;
+          });
+          nextPlan.exceptions = ex;
+        }
+        nextItems[i] = nextPlan;
+        draft.items = nextItems;
+        result = { done: true, copies: copies };
+      });
+      return result;
+    }
+
+    /** F-108：计划拖动排序。所列计划 order 压实为 0..n-1；未列出的计划保持原 order。 */
+    function reorderPlans(orderedIds) {
+      var rank = {};
+      var next = 0;
+      (Array.isArray(orderedIds) ? orderedIds : []).forEach(function (id) {
+        if (typeof id === 'string' && !(id in rank)) { rank[id] = next; next += 1; }
+      });
+      mutate(function (draft) {
+        draft.items.forEach(function (it, j) {
+          if (it && it.id in rank) {
+            draft.items[j] = Object.assign({}, it, { order: rank[it.id], updatedAt: now() });
+          }
+        });
       });
       return true;
     }
@@ -25829,6 +25932,8 @@ body.tut-landing {
       reorderUntimed: reorderUntimed,
       toggleDone: toggleDone,
       toggleStarred: toggleStarred,
+      togglePlanDone: togglePlanDone,
+      reorderPlans: reorderPlans,
       // 紧急（迭代 4 / DM-18）
       toggleUrgent: toggleUrgent,
       effectiveUrgent: effectiveUrgent,
@@ -25859,6 +25964,7 @@ body.tut-landing {
       updateCountdown: updateCountdown,
       removeCountdown: removeCountdown,
       reorderCountdowns: reorderCountdowns,
+      toggleCountdownDone: toggleCountdownDone,
       // 完成台快照（D9：参与同步）
       getFinishDock: getFinishDock,
       setFinishDock: setFinishDock,
@@ -26264,14 +26370,19 @@ body.tut-landing {
     /**
      * revision 条件更新。patchBody 由调用方给（含新 revision），本模块不代算。
      * 0 行 = 别人先改了或行被删 → E_CONFLICT，绝不报成功。
+     * @param {object} [extra] extra.select 裁响应列（如 'revision,updated_at'），缺省回整行。
      */
-    function updateConditional(uid, patchBody, expectedRevision, accessToken) {
+    function updateConditional(uid, patchBody, expectedRevision, accessToken, extra) {
+      var query = [
+        ['user_id', 'eq.' + uid],
+        ['revision', 'eq.' + expectedRevision]
+      ];
+      if (extra && typeof extra.select === 'string' && extra.select) {
+        query.push(['select', extra.select]);
+      }
       return request({
         method: 'PATCH',
-        query: [
-          ['user_id', 'eq.' + uid],
-          ['revision', 'eq.' + expectedRevision]
-        ],
+        query: query,
         body: patchBody,
         accessToken: accessToken,
         prefer: 'return=representation',
@@ -27943,6 +28054,7 @@ body.tut-landing {
    * @param {Function} opts.withToken session.withToken：(fn(accessToken)) => Promise
    * @param {string} [opts.device]   设备标签（写入 saved_by）
    * @param {number} [opts.maxAttempts] 写冲突重试上限，默认 3
+   * @param {Function} [opts.rpc]    (fnName, params, token) => Promise；注入则优先走 save_schedule RPC
    * @returns {{read:Function, save:Function, restore:Function}}
    */
   function createClient(opts) {
@@ -27958,6 +28070,16 @@ body.tut-landing {
     if (!http || !uid || typeof withToken !== 'function') {
       throw new TypeError('createClient 需要 http / uid / withToken');
     }
+
+    /* F-111 乐观写：缓存上次见过的云端整行。read/save 成功与采纳后更新；
+       任何写冲突即清空（缓存 revision 已陈旧），下一轮退回读改写。
+       有缓存时保存省掉「保存前整段 GET」，直接本地算版本栈 + 条件 PATCH。 */
+    var lastRow = null;
+
+    /* F-111.2 服务端 RPC：注入了 opts.rpc 才尝试 save_schedule（一次 RPC 完成
+       读+算栈+条件写，行锁串行化）。函数不存在（未部署 / 404 PGRST202）即永久
+       关闭 RPC，回退到已验证的乐观写 / 读改写——因此 SQL 部署前上线本代码也安全。 */
+    var rpcAvailable = typeof opts.rpc === 'function';
 
     /**
      * 把「同步抛 / Promise 拒绝」统一成失败结果：调用方只处理一种形状。
@@ -27979,14 +28101,15 @@ body.tut-landing {
           return fail((res && res.code) || 'E_BAD_RESPONSE', (res && res.message) || '读取云端失败');
         }
         var row = rowOf(res);
-        if (!row) return { ok: true, row: null };
+        if (!row) { lastRow = null; return { ok: true, row: null }; }
         var normalized = normalizeRow(row);
         if (!normalized) return fail('E_BAD_ROW', '云端行结构不可识别，已拒绝使用');
+        lastRow = normalized;
         return { ok: true, row: normalized };
       });
     }
 
-    /** 一次写入尝试：内部完成「读 → 算版本栈 → insert / 条件 PATCH」。 */
+    /** 一次写入尝试（回退路径）：内部完成「读 → 算版本栈 → insert / 条件 PATCH」。 */
     function attempt(payload) {
       return read().then(function (r) {
         if (!r.ok) return r;
@@ -28003,8 +28126,8 @@ body.tut-landing {
               });
             });
           }, '保存失败：网络不可用').then(function (res) {
-            if (res && res.ok) return { ok: true, row: normalizeRow(rowOf(res)) };
-            if (res && res.code === 'E_CONFLICT') return { ok: false, retry: true };
+            if (res && res.ok) { lastRow = normalizeRow(rowOf(res)); return { ok: true, row: lastRow }; }
+            if (res && res.code === 'E_CONFLICT') { lastRow = null; return { ok: false, retry: true }; }
             return mapWriteError(fail((res && res.code) || 'E_BAD_RESPONSE', (res && res.message) || '保存失败'));
           });
         }
@@ -28022,10 +28145,75 @@ body.tut-landing {
             }, prev.revision, token);
           });
         }, '保存失败：网络不可用').then(function (res) {
-          if (res && res.ok) return { ok: true, row: normalizeRow(rowOf(res)) };
-          if (res && res.code === 'E_CONFLICT') return { ok: false, retry: true };
+          if (res && res.ok) { lastRow = normalizeRow(rowOf(res)); return { ok: true, row: lastRow }; }
+          if (res && res.code === 'E_CONFLICT') { lastRow = null; return { ok: false, retry: true }; }
           return mapWriteError(fail((res && res.code) || 'E_BAD_RESPONSE', (res && res.message) || '保存失败'));
         });
+      });
+    }
+
+    /** F-111 乐观写：用缓存整行本地算版本栈，直接条件 PATCH（省掉保存前 GET），
+        响应裁成 revision,updated_at；成功后用「发出的 payload+版本栈 + 返回列」重建缓存。
+        冲突即清缓存退回读改写。条件 PATCH 仍守 revision，0 行绝不报成功。 */
+    function attemptOptimistic(payload) {
+      var prev = lastRow;
+      var versions = V.nextVersions(prev);
+      return callNetwork(function () {
+        return withToken(function (token) {
+          return http.updateConditional(uid, {
+            schedule_data: payload,
+            versions: versions,
+            saved_by: device,
+            revision: prev.revision + 1
+          }, prev.revision, token, { select: 'revision,updated_at' });
+        });
+      }, '保存失败：网络不可用').then(function (res) {
+        if (res && res.ok) {
+          var ret = res.row || {};
+          lastRow = {
+            schedule_data: payload,
+            revision: typeof ret.revision === 'number' && isFinite(ret.revision) ? ret.revision : prev.revision + 1,
+            updated_at: typeof ret.updated_at === 'string' ? ret.updated_at : '',
+            saved_by: device,
+            versions: versions
+          };
+          return { ok: true, row: lastRow };
+        }
+        if (res && res.code === 'E_CONFLICT') { lastRow = null; return { ok: false, retry: true }; }
+        return mapWriteError(fail((res && res.code) || 'E_BAD_RESPONSE', (res && res.message) || '保存失败'));
+      });
+    }
+
+    /** F-111.2 服务端 RPC：一次 save_schedule 完成读+算栈+条件写（行锁串行化）。
+        函数未部署（404 / PGRST202）→ 关闭 RPC 并回退；服务端报 conflict → 清缓存重试；
+        成功用返回的整行（含服务端算好的 versions）重建缓存，供回退路径继续使用。 */
+    function attemptRpc(payload) {
+      return callNetwork(function () {
+        return withToken(function (token) {
+          return opts.rpc('save_schedule', { p_data: payload, p_device: device }, token);
+        });
+      }, '保存失败：网络不可用').then(function (res) {
+        if (!res || !res.ok) {
+          if (res && (res.status === 404 || /PGRST202|Could not find the function/i.test(String(res.message || '')))) {
+            rpcAvailable = false;
+            return { ok: false, fallback: true };
+          }
+          return mapWriteError(fail((res && res.code) || 'E_BAD_RESPONSE', (res && res.message) || '保存失败'));
+        }
+        var r = Array.isArray(res.rows) && res.rows.length ? res.rows[0] : null;
+        if (!isPlainObject(r)) return fail('E_BAD_RESPONSE', '保存响应不可验证');
+        if (r.ok === false && r.code === 'conflict') { lastRow = null; return { ok: false, retry: true }; }
+        if (r.ok !== true || typeof r.revision !== 'number' || !isFinite(r.revision)) {
+          return fail('E_BAD_RESPONSE', '保存响应不可验证');
+        }
+        lastRow = {
+          schedule_data: payload,
+          revision: r.revision,
+          updated_at: typeof r.updated_at === 'string' ? r.updated_at : '',
+          saved_by: typeof r.saved_by === 'string' ? r.saved_by : device,
+          versions: Array.isArray(r.versions) ? r.versions : []
+        };
+        return { ok: true, row: lastRow };
       });
     }
 
@@ -28041,8 +28229,17 @@ body.tut-landing {
       var n = 0;
       function loop() {
         n += 1;
-        return attempt(payload).then(function (res) {
+        var p;
+        if (rpcAvailable && typeof opts.rpc === 'function') {
+          p = attemptRpc(payload);
+        } else if (lastRow && typeof lastRow.revision === 'number') {
+          p = attemptOptimistic(payload);
+        } else {
+          p = attempt(payload);
+        }
+        return p.then(function (res) {
           if (res.ok) return { ok: true, row: res.row, attempts: n };
+          if (res.fallback) { n -= 1; return loop(); }  // RPC 未部署：不消耗重试轮次
           if (res.retry && n < maxAttempts) return loop();
           if (res.retry) {
             return fail('E_CONFLICT', '云端刚被其它设备保存过，请再点一次保存', { attempts: n });
@@ -33797,6 +33994,7 @@ body.tut-landing {
   var TOUCH_SLOP_PX = 8;
   var MOUSE_SLOP_PX = 4;
   var CLICK_SUPPRESS_MS = 400;
+  var TAP_DELAY_MS = 300;
 
   var TARGET_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;
 
@@ -33881,6 +34079,8 @@ body.tut-landing {
     var press = null;
     var drag = null;
     var suppressClickUntil = 0;
+    var lastPointerType = 'mouse';
+    var pendingTap = null;
 
     /* ---------------- 渲染 ---------------- */
 
@@ -33921,6 +34121,31 @@ body.tut-landing {
       return f;
     }
 
+    function clearPendingTap() {
+      if (pendingTap && pendingTap.timer) clearTimeout(pendingTap.timer);
+      pendingTap = null;
+    }
+
+    function firePendingTap() {
+      var p = pendingTap;
+      pendingTap = null;
+      if (p) toggleDone(p.id);
+    }
+
+    /** F-108：切换完成态（桌面右键 / 手机单击）。完成后停走 + 划线，提醒物化跳过。 */
+    function toggleDone(id) {
+      var r;
+      try {
+        r = store.toggleCountdownDone(id);
+      } catch (e) {
+        if (M) M.toast(e.message || String(e));
+        return;
+      }
+      if (M) M.toast(r.done ? '已标记完成' : '已标记为未完成');
+      render();
+      onChange();
+    }
+
     function buildItem(cd) {
       var li = mk('li', 'cd-item');
       li.setAttribute('data-cd-id', cd.id);
@@ -33945,16 +34170,47 @@ body.tut-landing {
       var clock = clockNode();
       li.appendChild(head);
       li.appendChild(clock.root);
+      if (cd.done) {
+        li.classList.add('is-done');
+        clock.root.classList.add('is-done');
+        clock.root.setAttribute('aria-label', '已完成');
+        clock.tag.textContent = '已完成';
+        clock.tag.hidden = false;
+      }
       li.addEventListener('click', function () {
         if (Date.now() < suppressClickUntil) return;
+        /* 手机：单击=完成、双击=编辑（与事项同口径）；桌面单击仍=编辑 */
+        if (lastPointerType !== 'mouse') {
+          if (pendingTap && pendingTap.id === cd.id) {
+            clearPendingTap();
+            openForm(cd.id);
+            return;
+          }
+          if (pendingTap) firePendingTap();
+          var timer = setTimeout(function () {
+            if (pendingTap && pendingTap.timer === timer) firePendingTap();
+          }, TAP_DELAY_MS);
+          pendingTap = { id: cd.id, timer: timer };
+          return;
+        }
         openForm(cd.id);
       });
+      li.addEventListener('contextmenu', function (e) {
+        if (e && e.preventDefault) e.preventDefault();
+        if (Date.now() < suppressClickUntil) return;
+        toggleDone(cd.id);
+      });
       li.addEventListener('keydown', function (e) {
+        if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
+          e.preventDefault();
+          toggleDone(cd.id);
+          return;
+        }
         if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
         e.preventDefault();
         openForm(cd.id);
       });
-      return { li: li, clock: clock, targetMs: parseTargetAt(cd.targetAt) };
+      return { li: li, clock: clock, targetMs: parseTargetAt(cd.targetAt), done: !!cd.done };
     }
 
     function render() {
@@ -33977,6 +34233,7 @@ body.tut-landing {
       var nowMs = Date.now();
       Object.keys(nodes).forEach(function (id) {
         var item = nodes[id];
+        if (item.done) return;
         var f = syncClock(item.clock, item.targetMs, nowMs);
         var has = item.li.classList.contains('is-expired');
         if (f.expired && !has) item.li.classList.add('is-expired');
@@ -34098,7 +34355,8 @@ body.tut-landing {
       else if (typeof li.cloneNode === 'function') node = li.cloneNode(true);
       if (!node) return null;
       var expired = !!(li.classList && li.classList.contains('is-expired'));
-      node.className = 'cd-item cd-ghost' + (expired ? ' is-expired' : '');
+      var done = !!(li.classList && li.classList.contains('is-done'));
+      node.className = 'cd-item cd-ghost' + (expired ? ' is-expired' : '') + (done ? ' is-done' : '');
       node.setAttribute('aria-hidden', 'true');
       if (node.removeAttribute) node.removeAttribute('data-cd-id');
       var r = (li.getBoundingClientRect ? li.getBoundingClientRect() : null) || { left: 0, top: 0, width: 0, height: 0 };
@@ -34214,6 +34472,7 @@ body.tut-landing {
         var li = (target && typeof target.closest === 'function') ? target.closest('.cd-item') : null;
         if (!li || (listEl.contains && !listEl.contains(li))) return;
         var touch = e.pointerType !== 'mouse';
+        lastPointerType = e.pointerType || 'mouse';
         press = {
           li: li, x: e.clientX, y: e.clientY, pointerId: e.pointerId, touch: touch, timer: null
         };
@@ -35355,6 +35614,246 @@ body.tut-landing {
 </script>
 <script>
 /**
+ * DayPlan · 列表指针拖动排序（F-108 手机长按；F-110 桌面鼠标 + 贴边自动滚动）
+ *
+ * 触屏：长按 320ms 起拖；鼠标（allowMouse）：按下移动超过阈值即起拖。
+ * 跟手把行插到指针所在位置，松手提交新顺序；起拖后抑制 click，避免误触发完成/编辑。
+ * 指针停在列表上下边缘时自动滚动（edgeScroll），让长列表能拖到需要滚动才到的位置。
+ *
+ * attach(listEl, {
+ *   rowSelector, getId(row)->string|null, allowMouse,
+ *   onReorder(ids), onSuppress(ms), onDragChange(bool)
+ * }) -> { destroy }
+ *
+ * edgeScroll(listEl, { getY, onScroll, edge, maxSpeed }) -> { start, stop }
+ *   纯几何驱动，可脱离 DOM 单测（fake listEl 只需 getBoundingClientRect/scrollHeight/clientHeight/scrollTop）。
+ */
+(function (root, factory) {
+  'use strict';
+  if (typeof module === 'object' && module.exports) {
+    module.exports = factory(root);
+  } else {
+    root.DayPlan = root.DayPlan || {};
+    root.DayPlan.touchReorder = factory(root);
+  }
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (root) {
+  'use strict';
+
+  var LONG_PRESS_MS = 320;
+  var SLOP_PX = 8;
+  var SUPPRESS_MS = 450;
+  var EDGE_PX = 48;
+  var MAX_SPEED = 18;
+
+  /** 贴边自动滚动：指针进入列表上/下 EDGE_PX 带内按接近程度变速滚动，离带即停。 */
+  function edgeScroll(listEl, opts) {
+    opts = opts || {};
+    var edge = typeof opts.edge === 'number' ? opts.edge : EDGE_PX;
+    var maxSpeed = typeof opts.maxSpeed === 'number' ? opts.maxSpeed : MAX_SPEED;
+    var getY = typeof opts.getY === 'function' ? opts.getY : function () { return null; };
+    var onScroll = typeof opts.onScroll === 'function' ? opts.onScroll : function () {};
+    var rafFn = (root && typeof root.requestAnimationFrame === 'function')
+      ? function (cb) { return root.requestAnimationFrame(cb); }
+      : function (cb) { return setTimeout(function () { cb(Date.now()); }, 16); };
+    var cancelFn = (root && typeof root.cancelAnimationFrame === 'function')
+      ? function (id) { root.cancelAnimationFrame(id); }
+      : function (id) { clearTimeout(id); };
+    var handle = null;
+
+    /** 单帧滚动量（px）：带外 0，带内随接近边缘线性增大到 maxSpeed。导出供单测。 */
+    function stepFor(y, rect, scrollH, clientH) {
+      if (y == null || !(scrollH > clientH) || !rect) return 0;
+      var dy = 0;
+      if (y < rect.top + edge) {
+        var t = (y - rect.top) / edge;
+        if (t < 0) t = 0; if (t > 1) t = 1;
+        dy = -Math.ceil(maxSpeed * (1 - t));
+      } else if (y > rect.bottom - edge) {
+        var b = (rect.bottom - y) / edge;
+        if (b < 0) b = 0; if (b > 1) b = 1;
+        dy = Math.ceil(maxSpeed * (1 - b));
+      }
+      return dy;
+    }
+
+    function tick() {
+      var y = getY();
+      if (listEl) {
+        var dy = stepFor(y, listEl.getBoundingClientRect ? listEl.getBoundingClientRect() : null,
+          listEl.scrollHeight, listEl.clientHeight);
+        if (dy) {
+          var max = listEl.scrollHeight - listEl.clientHeight;
+          var next = (listEl.scrollTop || 0) + dy;
+          if (next < 0) next = 0; if (next > max) next = max;
+          if (next !== listEl.scrollTop) { listEl.scrollTop = next; onScroll(); }
+        }
+      }
+      handle = rafFn(tick);
+    }
+
+    return {
+      start: function () { if (handle == null) handle = rafFn(tick); },
+      stop: function () { if (handle != null) { cancelFn(handle); handle = null; } },
+      stepFor: stepFor
+    };
+  }
+
+  function attach(listEl, opts) {
+    opts = opts || {};
+    var rowSelector = opts.rowSelector || '.wp-item';
+    var allowMouse = opts.allowMouse === true;
+    var getId = typeof opts.getId === 'function' ? opts.getId : function (row) {
+      return row.getAttribute ? row.getAttribute('data-plan-id') : null;
+    };
+    var onReorder = typeof opts.onReorder === 'function' ? opts.onReorder : function () {};
+    var onSuppress = typeof opts.onSuppress === 'function' ? opts.onSuppress : function () {};
+    var onDragChange = typeof opts.onDragChange === 'function' ? opts.onDragChange : function () {};
+
+    var press = null;
+    var drag = null;
+    var scroller = edgeScroll(listEl, {
+      getY: function () { return drag ? drag.lastY : null; },
+      onScroll: function () { if (drag) moveDrag(drag.lastY); }
+    });
+
+    function rowOf(target) {
+      var n = target;
+      while (n && n !== listEl) {
+        if (n.classList && n.matches && n.matches(rowSelector)) return n;
+        n = n.parentNode;
+      }
+      return null;
+    }
+
+    function rows() {
+      var out = [];
+      var children = listEl.children;
+      for (var i = 0; i < children.length; i += 1) {
+        if (children[i].matches && children[i].matches(rowSelector)) out.push(children[i]);
+      }
+      return out;
+    }
+
+    function cancelPress() {
+      if (press && press.timer) clearTimeout(press.timer);
+      press = null;
+      detach();
+    }
+
+    function beginDrag(p) {
+      if (p.timer) clearTimeout(p.timer);
+      drag = { row: p.row, startY: p.y, lastY: p.y };
+      if (p.row.classList) p.row.classList.add('is-dragging');
+      onDragChange(true);
+      onSuppress(SUPPRESS_MS);
+      scroller.start();
+      if (press === p) press = null;
+    }
+
+    function moveDrag(y) {
+      if (!drag) return;
+      drag.lastY = y;
+      var list = rows();
+      var before = null;
+      for (var i = 0; i < list.length; i += 1) {
+        var n = list[i];
+        if (n === drag.row || !n.getBoundingClientRect) continue;
+        var r = n.getBoundingClientRect();
+        if (y < r.top + r.height / 2) { before = n; break; }
+      }
+      if (before) {
+        if (drag.row.nextSibling !== before) listEl.insertBefore(drag.row, before);
+      } else if (list.length) {
+        /* 落到末尾：插在最后一个可拖行之后（不越过列表里不参与排序的行） */
+        var last = list[list.length - 1];
+        if (last !== drag.row && last.nextSibling !== drag.row) {
+          listEl.insertBefore(drag.row, last.nextSibling);
+        }
+      }
+    }
+
+    function endDrag() {
+      if (!drag) return;
+      var row = drag.row;
+      drag = null;
+      scroller.stop();
+      if (row.classList) row.classList.remove('is-dragging');
+      onDragChange(false);
+      onSuppress(SUPPRESS_MS);
+      var ids = rows().map(getId).filter(function (v) { return !!v; });
+      onReorder(ids);
+    }
+
+    function onMove(e) {
+      if (drag) {
+        if (e.cancelable !== false && e.preventDefault) e.preventDefault();
+        moveDrag(e.clientY);
+        return;
+      }
+      if (!press) return;
+      var dx = Math.abs(e.clientX - press.x);
+      var dy = Math.abs(e.clientY - press.y);
+      if (press.mouse) {
+        /* 鼠标：移动超阈值即起拖（无需长按），起拖后立刻跟手 */
+        if (dx > SLOP_PX || dy > SLOP_PX) {
+          var p = press;
+          beginDrag(p);
+          if (e.cancelable !== false && e.preventDefault) e.preventDefault();
+          moveDrag(e.clientY);
+        }
+        return;
+      }
+      if (dx > SLOP_PX || dy > SLOP_PX) cancelPress();
+    }
+
+    function onUp() {
+      if (press) cancelPress();
+      detach();
+      endDrag();
+    }
+
+    function detach() {
+      document.removeEventListener('pointermove', onMove, true);
+      document.removeEventListener('pointerup', onUp, true);
+      document.removeEventListener('pointercancel', onUp, true);
+    }
+
+    function onDown(e) {
+      if (drag) return;
+      var isMouse = e.pointerType === 'mouse';
+      if (isMouse && !allowMouse) return;
+      if (typeof e.button === 'number' && e.button !== 0) return;
+      var row = rowOf(e.target);
+      if (!row || !getId(row)) return;
+      press = { row: row, x: e.clientX, y: e.clientY, mouse: isMouse, timer: null };
+      var p = press;
+      if (!isMouse) {
+        press.timer = setTimeout(function () {
+          if (press === p) beginDrag(p);
+        }, LONG_PRESS_MS);
+      }
+      document.addEventListener('pointermove', onMove, true);
+      document.addEventListener('pointerup', onUp, true);
+      document.addEventListener('pointercancel', onUp, true);
+    }
+
+    if (listEl) listEl.addEventListener('pointerdown', onDown);
+
+    return {
+      destroy: function () {
+        cancelPress();
+        scroller.stop();
+        if (drag) { drag.row.classList.remove('is-dragging'); drag = null; }
+        if (listEl) listEl.removeEventListener('pointerdown', onDown);
+      }
+    };
+  }
+
+  return { attach: attach, edgeScroll: edgeScroll, LONG_PRESS_MS: LONG_PRESS_MS, EDGE_PX: EDGE_PX };
+});
+</script>
+<script>
+/**
  * DayPlan · src/views/month.js —— 月视图（迭代 4 / T48）
  *
  * 契约：docs/spec/07-iteration-4-delta.md
@@ -36361,7 +36860,7 @@ body.tut-landing {
         var progress = seriesProgress(it, ym);
         return {
           type: 'series', id: it.id, text: it.title,
-          done: progress.total > 0 && progress.done === progress.total,
+          done: !!it.done || (progress.total > 0 && progress.done === progress.total),
           series: it, progress: progress
         };
       });
@@ -36380,6 +36879,21 @@ body.tut-landing {
       return p ? (p.year + ' 年 ' + p.month + ' 月') : ym;
     }
 
+    /* F-108：计划完成手势（桌面右键 / 手机单击完成·双击编辑） */
+    var MP_TAP_DELAY_MS = 300;
+    var mpTap = null;
+    var mpPointerType = 'mouse';
+    var mpDragSuppressUntil = 0;
+    function clearMpTap() {
+      if (mpTap && mpTap.timer) clearTimeout(mpTap.timer);
+      mpTap = null;
+    }
+    function fireMpTap() {
+      var p = mpTap;
+      mpTap = null;
+      if (p) togglePlanDone(p.ym, p.entry);
+    }
+
     function buildPlanRow(entry, index, ym) {
       var isSeries = entry.type === 'series';
       var progress = entry.progress || null;
@@ -36389,7 +36903,9 @@ body.tut-landing {
         'data-done': entry.done ? 'true' : 'false',
         tabindex: '0', role: 'button',
         title: isSeries
-          ? '点击编辑「' + entry.text + '」；完成情况按天记录'
+          ? (entry.done
+            ? '已完成：' + entry.text + '（右键 / 手机单击取消完成）'
+            : '点击编辑「' + entry.text + '」；右键 / 手机单击标记完成')
           : (entry.done
             ? '已完成：' + entry.text + '（右键取消完成）'
             : '点击修改「' + entry.text + '」；右键标记完成')
@@ -36413,15 +36929,32 @@ body.tut-landing {
           removePlanNow(ym, entry);
         }
       }));
-      row.addEventListener('click', function () { editPlan(ym, entry); });
-      if (!isSeries) {
-        row.addEventListener('contextmenu', function (e) {
-          if (e && e.preventDefault) e.preventDefault();
-          /* 右键 ✕ 不切换完成，交给按钮自身（浏览器菜单已屏蔽） */
-          if (e && e.target && closestBy(e.target, '.mp-del')) return;
-          togglePlanDone(ym, entry);
-        });
-      }
+      row.addEventListener('pointerdown', function (e) {
+        mpPointerType = e.pointerType || 'mouse';
+      });
+      row.addEventListener('click', function () {
+        if (Date.now() < mpDragSuppressUntil) return;
+        if (mpPointerType !== 'mouse') {
+          if (mpTap && mpTap.id === entry.id) {
+            clearMpTap();
+            editPlan(ym, entry);
+            return;
+          }
+          if (mpTap) fireMpTap();
+          var timer = setTimeout(function () {
+            if (mpTap && mpTap.timer === timer) fireMpTap();
+          }, MP_TAP_DELAY_MS);
+          mpTap = { id: entry.id, ym: ym, entry: entry, timer: timer };
+          return;
+        }
+        editPlan(ym, entry);
+      });
+      row.addEventListener('contextmenu', function (e) {
+        if (e && e.preventDefault) e.preventDefault();
+        /* 右键 ✕ 不切换完成，交给按钮自身（浏览器菜单已屏蔽） */
+        if (e && e.target && closestBy(e.target, '.mp-del')) return;
+        togglePlanDone(ym, entry);
+      });
       row.addEventListener('keydown', function (e) {
         /* 焦点在行内 ✕ 上时，键盘事件会冒泡到行；交给按钮自身（删除 / 空格），
            否则 Enter 会同时触发删除与编辑弹窗。 */
@@ -36431,8 +36964,8 @@ body.tut-landing {
           editPlan(ym, entry);
           return;
         }
-        /* 键盘等价于右键：标准「菜单键」/ Shift+F10（仅旧版清单条目） */
-        if (!isSeries && (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10'))) {
+        /* 键盘等价于右键：标准「菜单键」/ Shift+F10 */
+        if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
           e.preventDefault();
           togglePlanDone(ym, entry);
         }
@@ -36460,7 +36993,34 @@ body.tut-landing {
         el('h3', { class: 'mp-title', text: '本月计划' }),
         el('span', { class: 'mp-sub', text: monthLabel(ym) })
       ]));
-      panel.appendChild(el('div', { class: 'mp-list' }));
+      var list = el('div', { class: 'mp-list' });
+      panel.appendChild(list);
+
+      /* F-108：序列计划拖动排序（旧版纯文本计划不参与；落列表内 = 排序） */
+      function commitPlanReorder() {
+        var ids = [];
+        var rows = list.querySelectorAll('.mp-item.is-series');
+        for (var i = 0; i < rows.length; i += 1) {
+          var id = rows[i].getAttribute('data-plan-id');
+          if (id) ids.push(id);
+        }
+        try { store.reorderPlans(ids); } catch (err) { M.toast('调整次序失败'); }
+        afterPlanChange();
+      }
+      /* F-110：月计划面板是绝对定位覆盖层，Chromium 会吞掉这种环境里的 HTML5 drop
+         （dragstart/dragover 正常、松手只发 dragend，排序不落盘）。改用指针拖拽：
+         桌面鼠标按下移动即拖、手机长按拖，同一套 touchReorder，松手按 DOM 顺序提交。 */
+      var TR = root.DayPlan ? root.DayPlan.touchReorder : null;
+      if (TR && typeof TR.attach === 'function') {
+        TR.attach(list, {
+          rowSelector: '.mp-item.is-series',
+          allowMouse: true,
+          getId: function (row) { return row.getAttribute('data-plan-id'); },
+          onSuppress: function (ms) { mpDragSuppressUntil = Date.now() + ms; },
+          onReorder: function () { commitPlanReorder(); }
+        });
+      }
+
       panel.appendChild(el('div', { class: 'mp-foot' }, [
         el('button', {
           class: 'btn mp-add', type: 'button', text: '＋ 创建',
@@ -36787,7 +37347,18 @@ body.tut-landing {
 
     /** 切换完成态（右键 / 菜单键）；仅旧版清单条目。序列的完成按天记录在日视图。 */
     function togglePlanDone(ym, entry) {
-      if (entry && entry.type === 'series') return;
+      /* F-110：拖拽刚结束时抑制（真机安卓长按会触发 contextmenu，避免拖动中途误翻完成态打断拖拽） */
+      if (mpDragSuppressUntil && Date.now() < mpDragSuppressUntil) return;
+      if (entry && entry.type === 'series') {
+        if (!store || typeof store.togglePlanDone !== 'function') return;
+        var r;
+        try { r = store.togglePlanDone(entry.id); } catch (e) { M.toast(e.message); return; }
+        afterPlanChange();
+        M.toast(r.done
+          ? (r.copies > 0 ? '已标记完成（含 ' + r.copies + ' 个日副本）' : '已标记完成')
+          : '已取消完成');
+        return;
+      }
       if (!store || typeof store.toggleMonthPlanItemDone !== 'function') return;
       var done;
       try {
@@ -36865,22 +37436,27 @@ body.tut-landing {
       renderList();
       updateStatus();
       syncDiagnostics();
-      /* 重绘会重建月份列：把打开中的计划面板**原节点**搬进新列，
-         尺寸仍由新列决定（不重建面板 → 列表滚动位置与焦点不丢）。 */
-      if (planPanel && planYM) {
-        var freshCol = findPlanColumn(planYM);
-        if (freshCol) {
-          planColumn = freshCol;
-          if (planPanel.parentNode) planPanel.parentNode.removeChild(planPanel);
-          freshCol.appendChild(planPanel);
-          if (freshCol.classList) freshCol.classList.add('is-plan-open');
-          var head = planHeadOf(freshCol);
-          if (head && head.classList) head.classList.add('is-plan-open');
-          if (head && head.setAttribute) head.setAttribute('aria-expanded', 'true');
-          fillPlanPanel();
-        } else {
-          closePlan(true);
-        }
+      reanchorPlanPanel();
+    }
+
+    /** 重绘 / 头部追加会重建月份列：把打开中的计划面板**原节点**搬进新列，
+        尺寸仍由新列决定（不重建面板 → 列表滚动位置与焦点不丢）。
+        F-110：extend('back') 也走 innerHTML 重建，同样必须重新锚定，
+        否则贴边滚动续年会把打开中的面板连同旧列一起清掉。 */
+    function reanchorPlanPanel() {
+      if (!planPanel || !planYM) return;
+      var freshCol = findPlanColumn(planYM);
+      if (freshCol) {
+        planColumn = freshCol;
+        if (planPanel.parentNode) planPanel.parentNode.removeChild(planPanel);
+        freshCol.appendChild(planPanel);
+        if (freshCol.classList) freshCol.classList.add('is-plan-open');
+        var head = planHeadOf(freshCol);
+        if (head && head.classList) head.classList.add('is-plan-open');
+        if (head && head.setAttribute) head.setAttribute('aria-expanded', 'true');
+        fillPlanPanel();
+      } else {
+        closePlan(true);
       }
     }
 
@@ -37045,6 +37621,7 @@ body.tut-landing {
         }
         if (prependHeight > 0) setScrollTop((scrollEl.scrollTop || 0) + prependHeight);
         restoreAnchor(anchorYm);
+        reanchorPlanPanel();
       } else {
         /* 尾部追加：已有节点不动，直接续渲染 */
         renderAppended(context, beforeCount);
@@ -39450,16 +40027,41 @@ body.tut-landing {
       return time.start + (time.end ? '–' + time.end : '');
     }
 
+    /* F-108：计划完成手势（桌面右键 / 手机单击完成·双击编辑），与事项同口径 */
+    var PLAN_TAP_DELAY_MS = 300;
+    var planTap = null;
+    var planPointerType = 'mouse';
+    function clearPlanTap() {
+      if (planTap && planTap.timer) clearTimeout(planTap.timer);
+      planTap = null;
+    }
+    function firePlanTap() {
+      var p = planTap;
+      planTap = null;
+      if (p) togglePlanDone(p.id);
+    }
+    function togglePlanDone(planId) {
+      if (dragSuppressUntil && Date.now() < dragSuppressUntil) return;
+      var r;
+      try { r = store.togglePlanDone(planId); } catch (e) { M.toast(errText(e)); return; }
+      M.toast(r.done
+        ? (r.copies > 0 ? '已标记完成（含 ' + r.copies + ' 个日副本）' : '已标记完成')
+        : '已标记为未完成');
+      afterWrite();
+    }
+
     function planRowNode(plan, cats) {
       var cat = (cats && cats[plan.categoryId]) || { name: '未分类', color: DEFAULT_CAT_COLOR };
       var isMonth = plan.meta.origin === 'monthPlan';
       var tone = toneOf ? toneOf(cat.color) : null;
       var row = el('li', {
-        class: 'wp-item', role: 'button', tabindex: '0', draggable: 'true',
+        class: 'wp-item' + (plan.done ? ' is-done' : ''), role: 'button', tabindex: '0', draggable: 'true',
         'data-plan-id': plan.id,
         'data-plan-kind': isMonth ? 'monthPlan' : 'weekPlan',
+        'data-done': plan.done ? 'true' : 'false',
         style: '--cat:' + catAccent(cat.color) + (tone ? ';--cat-bg:' + tone.background : ''),
-        'aria-label': (isMonth ? '本月：' : '本周：') + plan.title
+        'aria-label': (isMonth ? '本月：' : '本周：') + plan.title + (plan.done ? '（已完成）' : ''),
+        title: plan.done ? '已完成（右键 / 手机单击取消完成）' : '右键 / 手机单击标记完成'
       });
       var main = el('div', { class: 'wp-main' }, [
         el('span', { class: 'wp-cat', 'aria-hidden': 'true' }),
@@ -39472,9 +40074,31 @@ body.tut-landing {
       if (plan.note) row.appendChild(el('div', { class: 'wp-note', text: plan.note }));
       row.addEventListener('click', function () {
         if (dragSuppressUntil && Date.now() < dragSuppressUntil) return;
+        if (planPointerType !== 'mouse') {
+          if (planTap && planTap.id === plan.id) {
+            clearPlanTap();
+            editWeekPlan(plan.id);
+            return;
+          }
+          if (planTap) firePlanTap();
+          var timer = setTimeout(function () {
+            if (planTap && planTap.timer === timer) firePlanTap();
+          }, PLAN_TAP_DELAY_MS);
+          planTap = { id: plan.id, timer: timer };
+          return;
+        }
         editWeekPlan(plan.id);
       });
+      row.addEventListener('contextmenu', function (e) {
+        if (e && e.preventDefault) e.preventDefault();
+        togglePlanDone(plan.id);
+      });
       row.addEventListener('keydown', function (e) {
+        if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
+          e.preventDefault();
+          togglePlanDone(plan.id);
+          return;
+        }
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           editWeekPlan(plan.id);
@@ -39588,15 +40212,53 @@ body.tut-landing {
     function setupPlanDrag() {
       if (!plansListEl || !gridEl) return;
 
+      plansListEl.addEventListener('pointerdown', function (e) {
+        planPointerType = e.pointerType || 'mouse';
+      });
+
+      /* F-110：贴边自动滚动——指针停在右栏列表上/下边缘时滚动，长列表可拖到需滚动才到的位置 */
+      var planDragY = null;
+      var planScroller = (root.DayPlan && root.DayPlan.touchReorder && root.DayPlan.touchReorder.edgeScroll)
+        ? root.DayPlan.touchReorder.edgeScroll(plansListEl, {
+          getY: function () { return planDragY; },
+          onScroll: function () { if (dragPlanId && planDragY != null) planDragInsert(planDragY); }
+        })
+        : { start: function () {}, stop: function () {} };
+
+      /* 按指针几何把拖拽行插到落点（dragover 与自动滚动共用） */
+      function planDragInsert(y) {
+        var dragged = plansListEl.querySelector('.wp-item.is-dragging');
+        if (!dragged) return;
+        var children = plansListEl.children;
+        var before = null;
+        for (var i = 0; i < children.length; i += 1) {
+          var n = children[i];
+          if (n === dragged || !n.getBoundingClientRect || !n.getAttribute('data-plan-id')) continue;
+          var r = n.getBoundingClientRect();
+          if (y < r.top + r.height / 2) { before = n; break; }
+        }
+        if (before) {
+          if (dragged.nextSibling !== before) plansListEl.insertBefore(dragged, before);
+        } else {
+          var last = null;
+          for (var j = children.length - 1; j >= 0; j -= 1) {
+            if (children[j] !== dragged && children[j].getAttribute('data-plan-id')) { last = children[j]; break; }
+          }
+          if (last && last.nextSibling !== dragged) plansListEl.insertBefore(dragged, last.nextSibling);
+        }
+      }
+
       plansListEl.addEventListener('dragstart', function (e) {
         var row = e.target && e.target.closest ? e.target.closest('.wp-item') : null;
         if (!row) return;
         dragPlanId = row.getAttribute('data-plan-id');
         dragSuppressUntil = Date.now() + 500;
         row.classList.add('is-dragging');
+        planDragY = e.clientY;
+        planScroller.start();
         try {
           if (e.dataTransfer) {
-            e.dataTransfer.effectAllowed = 'copy';
+            e.dataTransfer.effectAllowed = 'copyMove';
             e.dataTransfer.setData('application/x-dayplan-weekplan', dragPlanId);
             e.dataTransfer.setData('text/plain', dragPlanId);
           }
@@ -39606,10 +40268,55 @@ body.tut-landing {
       plansListEl.addEventListener('dragend', function (e) {
         var row = e.target && e.target.closest ? e.target.closest('.wp-item') : null;
         if (row) row.classList.remove('is-dragging');
+        planScroller.stop();
+        planDragY = null;
         clearPlanPreview();
         foldPlanAxis();
         dragPlanId = null;
+        /* 列表内拖排只改 DOM 未提交时（取消 / 落到网格复制），按 store 顺序复原右栏 */
+        renderPlans(docOf(), state.monday);
       });
+
+      /* F-108：落点决定——松手在计划列表内 = 排序（拖到网格仍是复制副本） */
+      plansListEl.addEventListener('dragover', function (e) {
+        if (!dragPlanId) return;
+        e.preventDefault();
+        try { if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'; } catch (err) { /* 忽略 */ }
+        planDragY = e.clientY;
+        planDragInsert(e.clientY);
+      });
+
+      plansListEl.addEventListener('drop', function (e) {
+        if (!dragPlanId) return;
+        e.preventDefault();
+        if (e.stopPropagation) e.stopPropagation();
+        var ids = [];
+        var children = plansListEl.children;
+        for (var i = 0; i < children.length; i += 1) {
+          var id = children[i].getAttribute && children[i].getAttribute('data-plan-id');
+          if (id) ids.push(id);
+        }
+        planScroller.stop();
+        planDragY = null;
+        dragPlanId = null;
+        dragSuppressUntil = Date.now() + 500;
+        try { store.reorderPlans(ids); } catch (err) { M.toast('调整次序失败：' + errText(err)); }
+        afterWrite();
+      });
+
+      /* F-108：手机长按拖 = 列表内排序（鼠标走上面的 HTML5 拖拽） */
+      var TR = root.DayPlan ? root.DayPlan.touchReorder : null;
+      if (TR && typeof TR.attach === 'function') {
+        TR.attach(plansListEl, {
+          rowSelector: '.wp-item',
+          getId: function (row) { return row.getAttribute('data-plan-id'); },
+          onSuppress: function (ms) { dragSuppressUntil = Date.now() + ms; },
+          onReorder: function (ids) {
+            try { store.reorderPlans(ids); } catch (err) { M.toast('调整次序失败：' + errText(err)); }
+            afterWrite();
+          }
+        });
+      }
 
       gridEl.addEventListener('dragover', function (e) {
         if (!dragPlanId) return;
@@ -44894,7 +45601,13 @@ body.tut-landing {
         http: http,
         uid: uid,
         withToken: function (fn) { return session.withToken(fn); },
-        device: deviceLabel
+        device: deviceLabel,
+        rpc: (cloudConfig && cloudFetchImpl) ? function (fn, params, token) {
+          return Supabase.rpcCall({
+            config: cloudConfig, fetchImpl: cloudFetchImpl,
+            fn: fn, params: params, accessToken: token
+          });
+        } : undefined
       });
       return cloudClient;
     }
@@ -44987,7 +45700,6 @@ body.tut-landing {
         refreshSaveState();
         if (reminderSync) reminderSync.reset();
         reminderSyncArmed = onAccountScope(uid);
-        if (reminderSyncArmed) scheduleReminderSync();
         if (cloudSectionInst && typeof cloudSectionInst.render === 'function') {
           try { cloudSectionInst.render(); } catch (e) { /* 面板已关闭 */ }
         }
@@ -45238,6 +45950,8 @@ body.tut-landing {
             device: deviceLabel,
             hash: hashOfDoc(row.schedule_data)
           });
+          /* F-109：本机刚以云端为准建立副本，此时同步提醒才与云端文档一致。 */
+          syncReminders({ force: true });
         } else {
           /* 云端为空：没有标记 = 本机这份还没传过（保存按钮亮着小红点）。 */
           clearMarker(uid);
@@ -45287,8 +46001,10 @@ body.tut-landing {
         }
         if (res && res.ok) {
           if (reminderSync) reminderSync.reset();
-          reminderSyncArmed = true;
-          syncReminders({ force: true });
+          reminderSyncArmed = onAccountScope(uid);
+          /* F-109：登录后的提醒对齐交给 cloudOpenPass（干净则静默载入云端再同步），
+             不再拿本机当前文档强制整批替换，避免陈旧本机写回旧 fire_at。 */
+          if (onAccountScope(uid)) cloudOpenPass();
           refreshPushActive();
         }
       });
@@ -45384,10 +46100,11 @@ body.tut-landing {
         var uid = session.getUserId();
         lastOpenPassAt = Date.now();
         enterAccountForSession(uid, true).then(function () {
-          if (onAccountScope(uid)) cloudOpenPass();
           if (reminderSync) reminderSync.reset();
-          reminderSyncArmed = true;
-          scheduleReminderSync();
+          reminderSyncArmed = onAccountScope(uid);
+          /* F-109：启动恢复的提醒同步由 enterAccount 采纳云端行 / cloudOpenPass 载入驱动，
+             不再无条件按本机当前文档整批替换。 */
+          if (onAccountScope(uid)) cloudOpenPass();
           refreshPushActive();
         });
       }, function () {
@@ -45851,6 +46568,18 @@ body.tut-landing {
       scheduleReconcile();
     });
 
+    /* F-111：任意编辑（含拖排 / 标完成等走 mutate 的改动）即时刷新「保存」二字颜色。
+       首帧立即变色，连续编辑用 150ms 尾帧收口，避免每次 mutate 都重算整文档哈希。 */
+    var saveStateTimer = null;
+    store.subscribe(function () {
+      if (saveStateTimer) return;
+      refreshSaveState();
+      saveStateTimer = setTimeout(function () {
+        saveStateTimer = null;
+        refreshSaveState();
+      }, 150);
+    });
+
     /* ---------------- D34：本地提醒兜底 ----------------
        未登录 / 未授权 / 无 SW / 单文件 / Electron 都走这里；
        推送订阅成功后由云端模块调用 setPushActive(true) 关闭本地补发。 */
@@ -45922,7 +46651,8 @@ body.tut-landing {
       });
     }
 
-    store.subscribe(function () { scheduleReminderSync(); });
+    /* F-109：提醒只随「保存 / 回溯 / 云端覆盖本机」同步，不订阅本机编辑——
+       手动保存模型下本机临时状态可能落后于其它设备，整批替换会把旧 fire_at 写回。 */
 
     /* ---------------- 初始化渲染 ---------------- */
 
@@ -45959,6 +46689,19 @@ body.tut-landing {
           marker: marker,
           busy: !!cloudBusy
         };
+      },
+      /* 只读排障钩子：调服务端 immutable 指纹函数 dayplan_content_hash，
+         供 F-111.2 parity E2E 比对 SQL 与 JS 指纹是否一致。不写任何数据。 */
+      cloudHash: function (doc) {
+        if (!session || !cloudConfig || !cloudFetchImpl || !sessionUserId()) {
+          return Promise.resolve({ ok: false, code: 'E_SKIP' });
+        }
+        return session.withToken(function (token) {
+          return Supabase.rpcCall({
+            config: cloudConfig, fetchImpl: cloudFetchImpl,
+            fn: 'dayplan_content_hash', params: { doc: doc }, accessToken: token
+          });
+        });
       }
     };
 

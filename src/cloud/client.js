@@ -75,6 +75,7 @@
    * @param {Function} opts.withToken session.withToken：(fn(accessToken)) => Promise
    * @param {string} [opts.device]   设备标签（写入 saved_by）
    * @param {number} [opts.maxAttempts] 写冲突重试上限，默认 3
+   * @param {Function} [opts.rpc]    (fnName, params, token) => Promise；注入则优先走 save_schedule RPC
    * @returns {{read:Function, save:Function, restore:Function}}
    */
   function createClient(opts) {
@@ -90,6 +91,16 @@
     if (!http || !uid || typeof withToken !== 'function') {
       throw new TypeError('createClient 需要 http / uid / withToken');
     }
+
+    /* F-111 乐观写：缓存上次见过的云端整行。read/save 成功与采纳后更新；
+       任何写冲突即清空（缓存 revision 已陈旧），下一轮退回读改写。
+       有缓存时保存省掉「保存前整段 GET」，直接本地算版本栈 + 条件 PATCH。 */
+    var lastRow = null;
+
+    /* F-111.2 服务端 RPC：注入了 opts.rpc 才尝试 save_schedule（一次 RPC 完成
+       读+算栈+条件写，行锁串行化）。函数不存在（未部署 / 404 PGRST202）即永久
+       关闭 RPC，回退到已验证的乐观写 / 读改写——因此 SQL 部署前上线本代码也安全。 */
+    var rpcAvailable = typeof opts.rpc === 'function';
 
     /**
      * 把「同步抛 / Promise 拒绝」统一成失败结果：调用方只处理一种形状。
@@ -111,14 +122,15 @@
           return fail((res && res.code) || 'E_BAD_RESPONSE', (res && res.message) || '读取云端失败');
         }
         var row = rowOf(res);
-        if (!row) return { ok: true, row: null };
+        if (!row) { lastRow = null; return { ok: true, row: null }; }
         var normalized = normalizeRow(row);
         if (!normalized) return fail('E_BAD_ROW', '云端行结构不可识别，已拒绝使用');
+        lastRow = normalized;
         return { ok: true, row: normalized };
       });
     }
 
-    /** 一次写入尝试：内部完成「读 → 算版本栈 → insert / 条件 PATCH」。 */
+    /** 一次写入尝试（回退路径）：内部完成「读 → 算版本栈 → insert / 条件 PATCH」。 */
     function attempt(payload) {
       return read().then(function (r) {
         if (!r.ok) return r;
@@ -135,8 +147,8 @@
               });
             });
           }, '保存失败：网络不可用').then(function (res) {
-            if (res && res.ok) return { ok: true, row: normalizeRow(rowOf(res)) };
-            if (res && res.code === 'E_CONFLICT') return { ok: false, retry: true };
+            if (res && res.ok) { lastRow = normalizeRow(rowOf(res)); return { ok: true, row: lastRow }; }
+            if (res && res.code === 'E_CONFLICT') { lastRow = null; return { ok: false, retry: true }; }
             return mapWriteError(fail((res && res.code) || 'E_BAD_RESPONSE', (res && res.message) || '保存失败'));
           });
         }
@@ -154,10 +166,75 @@
             }, prev.revision, token);
           });
         }, '保存失败：网络不可用').then(function (res) {
-          if (res && res.ok) return { ok: true, row: normalizeRow(rowOf(res)) };
-          if (res && res.code === 'E_CONFLICT') return { ok: false, retry: true };
+          if (res && res.ok) { lastRow = normalizeRow(rowOf(res)); return { ok: true, row: lastRow }; }
+          if (res && res.code === 'E_CONFLICT') { lastRow = null; return { ok: false, retry: true }; }
           return mapWriteError(fail((res && res.code) || 'E_BAD_RESPONSE', (res && res.message) || '保存失败'));
         });
+      });
+    }
+
+    /** F-111 乐观写：用缓存整行本地算版本栈，直接条件 PATCH（省掉保存前 GET），
+        响应裁成 revision,updated_at；成功后用「发出的 payload+版本栈 + 返回列」重建缓存。
+        冲突即清缓存退回读改写。条件 PATCH 仍守 revision，0 行绝不报成功。 */
+    function attemptOptimistic(payload) {
+      var prev = lastRow;
+      var versions = V.nextVersions(prev);
+      return callNetwork(function () {
+        return withToken(function (token) {
+          return http.updateConditional(uid, {
+            schedule_data: payload,
+            versions: versions,
+            saved_by: device,
+            revision: prev.revision + 1
+          }, prev.revision, token, { select: 'revision,updated_at' });
+        });
+      }, '保存失败：网络不可用').then(function (res) {
+        if (res && res.ok) {
+          var ret = res.row || {};
+          lastRow = {
+            schedule_data: payload,
+            revision: typeof ret.revision === 'number' && isFinite(ret.revision) ? ret.revision : prev.revision + 1,
+            updated_at: typeof ret.updated_at === 'string' ? ret.updated_at : '',
+            saved_by: device,
+            versions: versions
+          };
+          return { ok: true, row: lastRow };
+        }
+        if (res && res.code === 'E_CONFLICT') { lastRow = null; return { ok: false, retry: true }; }
+        return mapWriteError(fail((res && res.code) || 'E_BAD_RESPONSE', (res && res.message) || '保存失败'));
+      });
+    }
+
+    /** F-111.2 服务端 RPC：一次 save_schedule 完成读+算栈+条件写（行锁串行化）。
+        函数未部署（404 / PGRST202）→ 关闭 RPC 并回退；服务端报 conflict → 清缓存重试；
+        成功用返回的整行（含服务端算好的 versions）重建缓存，供回退路径继续使用。 */
+    function attemptRpc(payload) {
+      return callNetwork(function () {
+        return withToken(function (token) {
+          return opts.rpc('save_schedule', { p_data: payload, p_device: device }, token);
+        });
+      }, '保存失败：网络不可用').then(function (res) {
+        if (!res || !res.ok) {
+          if (res && (res.status === 404 || /PGRST202|Could not find the function/i.test(String(res.message || '')))) {
+            rpcAvailable = false;
+            return { ok: false, fallback: true };
+          }
+          return mapWriteError(fail((res && res.code) || 'E_BAD_RESPONSE', (res && res.message) || '保存失败'));
+        }
+        var r = Array.isArray(res.rows) && res.rows.length ? res.rows[0] : null;
+        if (!isPlainObject(r)) return fail('E_BAD_RESPONSE', '保存响应不可验证');
+        if (r.ok === false && r.code === 'conflict') { lastRow = null; return { ok: false, retry: true }; }
+        if (r.ok !== true || typeof r.revision !== 'number' || !isFinite(r.revision)) {
+          return fail('E_BAD_RESPONSE', '保存响应不可验证');
+        }
+        lastRow = {
+          schedule_data: payload,
+          revision: r.revision,
+          updated_at: typeof r.updated_at === 'string' ? r.updated_at : '',
+          saved_by: typeof r.saved_by === 'string' ? r.saved_by : device,
+          versions: Array.isArray(r.versions) ? r.versions : []
+        };
+        return { ok: true, row: lastRow };
       });
     }
 
@@ -173,8 +250,17 @@
       var n = 0;
       function loop() {
         n += 1;
-        return attempt(payload).then(function (res) {
+        var p;
+        if (rpcAvailable && typeof opts.rpc === 'function') {
+          p = attemptRpc(payload);
+        } else if (lastRow && typeof lastRow.revision === 'number') {
+          p = attemptOptimistic(payload);
+        } else {
+          p = attempt(payload);
+        }
+        return p.then(function (res) {
           if (res.ok) return { ok: true, row: res.row, attempts: n };
+          if (res.fallback) { n -= 1; return loop(); }  // RPC 未部署：不消耗重试轮次
           if (res.retry && n < maxAttempts) return loop();
           if (res.retry) {
             return fail('E_CONFLICT', '云端刚被其它设备保存过，请再点一次保存', { attempts: n });

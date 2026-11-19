@@ -935,7 +935,13 @@
         http: http,
         uid: uid,
         withToken: function (fn) { return session.withToken(fn); },
-        device: deviceLabel
+        device: deviceLabel,
+        rpc: (cloudConfig && cloudFetchImpl) ? function (fn, params, token) {
+          return Supabase.rpcCall({
+            config: cloudConfig, fetchImpl: cloudFetchImpl,
+            fn: fn, params: params, accessToken: token
+          });
+        } : undefined
       });
       return cloudClient;
     }
@@ -1896,6 +1902,18 @@
       scheduleReconcile();
     });
 
+    /* F-111：任意编辑（含拖排 / 标完成等走 mutate 的改动）即时刷新「保存」二字颜色。
+       首帧立即变色，连续编辑用 150ms 尾帧收口，避免每次 mutate 都重算整文档哈希。 */
+    var saveStateTimer = null;
+    store.subscribe(function () {
+      if (saveStateTimer) return;
+      refreshSaveState();
+      saveStateTimer = setTimeout(function () {
+        saveStateTimer = null;
+        refreshSaveState();
+      }, 150);
+    });
+
     /* ---------------- D34：本地提醒兜底 ----------------
        未登录 / 未授权 / 无 SW / 单文件 / Electron 都走这里；
        推送订阅成功后由云端模块调用 setPushActive(true) 关闭本地补发。 */
@@ -2005,6 +2023,19 @@
           marker: marker,
           busy: !!cloudBusy
         };
+      },
+      /* 只读排障钩子：调服务端 immutable 指纹函数 dayplan_content_hash，
+         供 F-111.2 parity E2E 比对 SQL 与 JS 指纹是否一致。不写任何数据。 */
+      cloudHash: function (doc) {
+        if (!session || !cloudConfig || !cloudFetchImpl || !sessionUserId()) {
+          return Promise.resolve({ ok: false, code: 'E_SKIP' });
+        }
+        return session.withToken(function (token) {
+          return Supabase.rpcCall({
+            config: cloudConfig, fetchImpl: cloudFetchImpl,
+            fn: 'dayplan_content_hash', params: { doc: doc }, accessToken: token
+          });
+        });
       }
     };
 
