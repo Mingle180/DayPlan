@@ -2113,7 +2113,7 @@
       var isMonth = plan.meta.origin === 'monthPlan';
       var tone = toneOf ? toneOf(cat.color) : null;
       var row = el('li', {
-        class: 'wp-item' + (plan.done ? ' is-done' : ''), role: 'button', tabindex: '0', draggable: 'true',
+        class: 'wp-item' + (plan.done ? ' is-done' : ''), role: 'button', tabindex: '0',
         'data-plan-id': plan.id,
         'data-plan-kind': isMonth ? 'monthPlan' : 'weekPlan',
         'data-done': plan.done ? 'true' : 'false',
@@ -2167,6 +2167,7 @@
 
     function renderPlans(doc, monday) {
       if (!plansListEl) return;
+      if (planDragHandle && planDragHandle.abort) planDragHandle.abort();
       var cats = {};
       ((doc && doc.categories) || []).forEach(function (c) { cats[c.id] = c; });
       var plans = weekPlansOf(doc, monday);
@@ -2247,9 +2248,9 @@
       if (typeof form.focus === 'function') form.focus();
     }
 
-    /* ---- 显示区 → 左网格的拖拽（独立副本，源不消失、允许重复） ---- */
+    /* ---- 计划栏拖拽（列表内排序 / 拖到左网格生成独立副本，源不消失、允许重复） ---- */
 
-    var dragPlanId = null;
+    var planDragHandle = null;   /* F-117：统一指针拖拽句柄，重渲染前 abort */
     var planDropGhost = null;   /* 四十轮 / F-90：拖拽落点预览块 */
 
     function clearPlanDropTarget() {
@@ -2274,179 +2275,78 @@
         planPointerType = e.pointerType || 'mouse';
       });
 
-      /* F-110：贴边自动滚动——指针停在右栏列表上/下边缘时滚动，长列表可拖到需滚动才到的位置 */
-      var planDragY = null;
-      var planScroller = (root.DayPlan && root.DayPlan.touchReorder && root.DayPlan.touchReorder.edgeScroll)
-        ? root.DayPlan.touchReorder.edgeScroll(plansListEl, {
-          getY: function () { return planDragY; },
-          onScroll: function () { if (dragPlanId && planDragY != null) planDragInsert(planDragY); }
-        })
-        : { start: function () {}, stop: function () {} };
-
-      /* 按指针几何把拖拽行插到落点（dragover 与自动滚动共用） */
-      function planDragInsert(y) {
-        var dragged = plansListEl.querySelector('.wp-item.is-dragging');
-        if (!dragged) return;
-        var children = plansListEl.children;
-        var before = null;
-        for (var i = 0; i < children.length; i += 1) {
-          var n = children[i];
-          if (n === dragged || !n.getBoundingClientRect || !n.getAttribute('data-plan-id')) continue;
-          var r = n.getBoundingClientRect();
-          if (y < r.top + r.height / 2) { before = n; break; }
-        }
-        if (before) {
-          if (dragged.nextSibling !== before) plansListEl.insertBefore(dragged, before);
-        } else {
-          var last = null;
-          for (var j = children.length - 1; j >= 0; j -= 1) {
-            if (children[j] !== dragged && children[j].getAttribute('data-plan-id')) { last = children[j]; break; }
-          }
-          if (last && last.nextSibling !== dragged) plansListEl.insertBefore(dragged, last.nextSibling);
-        }
-      }
-
-      plansListEl.addEventListener('dragstart', function (e) {
-        var row = e.target && e.target.closest ? e.target.closest('.wp-item') : null;
-        if (!row) return;
-        dragPlanId = row.getAttribute('data-plan-id');
-        dragSuppressUntil = Date.now() + 500;
-        row.classList.add('is-dragging');
-        planDragY = e.clientY;
-        planScroller.start();
-        try {
-          if (e.dataTransfer) {
-            e.dataTransfer.effectAllowed = 'copyMove';
-            e.dataTransfer.setData('application/x-dayplan-weekplan', dragPlanId);
-            e.dataTransfer.setData('text/plain', dragPlanId);
-          }
-        } catch (err) { /* 忽略 */ }
-      });
-
-      plansListEl.addEventListener('dragend', function (e) {
-        var row = e.target && e.target.closest ? e.target.closest('.wp-item') : null;
-        if (row) row.classList.remove('is-dragging');
-        planScroller.stop();
-        planDragY = null;
-        clearPlanPreview();
-        foldPlanAxis();
-        dragPlanId = null;
-        /* 列表内拖排只改 DOM 未提交时（取消 / 落到网格复制），按 store 顺序复原右栏 */
-        renderPlans(docOf(), state.monday);
-      });
-
-      /* F-108：落点决定——松手在计划列表内 = 排序（拖到网格仍是复制副本） */
-      plansListEl.addEventListener('dragover', function (e) {
-        if (!dragPlanId) return;
-        e.preventDefault();
-        try { if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'; } catch (err) { /* 忽略 */ }
-        planDragY = e.clientY;
-        planDragInsert(e.clientY);
-      });
-
-      plansListEl.addEventListener('drop', function (e) {
-        if (!dragPlanId) return;
-        e.preventDefault();
-        if (e.stopPropagation) e.stopPropagation();
-        var ids = [];
-        var children = plansListEl.children;
-        for (var i = 0; i < children.length; i += 1) {
-          var id = children[i].getAttribute && children[i].getAttribute('data-plan-id');
-          if (id) ids.push(id);
-        }
-        planScroller.stop();
-        planDragY = null;
-        dragPlanId = null;
-        dragSuppressUntil = Date.now() + 500;
-        try { store.reorderPlans(ids); } catch (err) { M.toast('调整次序失败：' + errText(err)); }
-        afterWrite();
-      });
-
-      /* F-108：手机长按拖 = 列表内排序（鼠标走上面的 HTML5 拖拽） */
       var TR = root.DayPlan ? root.DayPlan.touchReorder : null;
-      if (TR && typeof TR.attach === 'function') {
-        TR.attach(plansListEl, {
-          rowSelector: '.wp-item',
-          getId: function (row) { return row.getAttribute('data-plan-id'); },
-          onSuppress: function (ms) { dragSuppressUntil = Date.now() + ms; },
-          onReorder: function (ids) {
-            try { store.reorderPlans(ids); } catch (err) { M.toast('调整次序失败：' + errText(err)); }
-            afterWrite();
+      if (!TR || typeof TR.attach !== 'function') return;
+
+      /* F-117：周计划只剩指针一套拖拽（触摸长按 / 鼠标按下移动起拖）。
+         落点在计划列表 = 排序，落点在网格列 = 复制独立副本，其余 = 不动。
+         原生 HTML5 引擎已删——它曾吞掉 pointerup，让 F-115 的 touchmove 拦截器常驻、计划栏划不动。 */
+      planDragHandle = TR.attach(plansListEl, {
+        rowSelector: '.wp-item',
+        allowMouse: true,
+        getId: function (row) { return row.getAttribute('data-plan-id'); },
+        onSuppress: function (ms) { dragSuppressUntil = Date.now() + ms; },
+        onDragChange: function (on) {
+          if (on) return;
+          clearPlanPreview();
+          foldPlanAxis();
+        },
+        onReorder: function (ids) {
+          try { store.reorderPlans(ids); } catch (err) { M.toast('调整次序失败：' + errText(err)); }
+          afterWrite();
+        },
+        gridOf: planColOf,
+        onGridMove: function (col, x, y) {
+          if (!col.classList.contains('is-drop-target')) {
+            clearPlanDropTarget();
+            col.classList.add('is-drop-target');
           }
-        });
-      }
-
-      gridEl.addEventListener('dragover', function (e) {
-        if (!dragPlanId) return;
-        var col = planColOf(e.target);
-        if (!col) return;
-        e.preventDefault();
-        try { if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; } catch (err) { /* 忽略 */ }
-        if (!col.classList.contains('is-drop-target')) {
-          clearPlanDropTarget();
-          col.classList.add('is-drop-target');
-        }
-        var y = e.clientY;
-        if (typeof y !== 'number' || !isFinite(y) || !lastGeom) { hideWeekPill(); return; }
-        var iso = col.getAttribute('data-date');
-        /* 指针进折叠带 → 临时展开整轴（只重渲染网格，右栏源行不摘除 → 拖拽不中断） */
-        var boundary = weekResizeBoundary({ geom: lastGeom, col: col }, y);
-        if (boundary && !axisResizeExpanded) {
-          expandWeekAxisCore(boundary, iso, function () { renderGrid(docOf(), state.monday); });
-          col = weekColumnNode(iso) || col;
-        }
-        var t = Layout.scheduleTime(planMinuteAt(col, y), 60, { step: weekDragStep() });
-        showPlanGhost(col, t);
-        showWeekPill(e.clientX, y, t.start + '–' + t.end);
-      });
-
-      gridEl.addEventListener('dragleave', function (e) {
-        if (!dragPlanId) return;
-        var to = e.relatedTarget;
-        if (to && gridEl.contains && gridEl.contains(to)) return;
-        clearPlanPreview();
-        foldPlanAxis();
-      });
-
-      gridEl.addEventListener('drop', function (e) {
-        if (!dragPlanId) return;
-        var col = planColOf(e.target);
-        if (!col) return;
-        e.preventDefault();
-        if (e.stopPropagation) e.stopPropagation();
-        var planId = dragPlanId;
-        var iso = col.getAttribute('data-date');
-        var y = e.clientY;
-        dragPlanId = null;
-        clearPlanPreview();
-        dragSuppressUntil = Date.now() + 500;
-        var plan = findItemFor({ seriesId: planId });
-        if (!plan || !iso) { foldPlanAxis(); return; }
-        /* 落点 = 指针居中、默认 1h（与未排→时间轴同口径）；坐标缺失回落源时段 */
-        var time = plan.time || null;
-        if (typeof y === 'number' && isFinite(y) && lastGeom) {
+          if (typeof y !== 'number' || !isFinite(y) || !lastGeom) { hideWeekPill(); return; }
+          var iso = col.getAttribute('data-date');
+          /* 指针进折叠带 → 临时展开整轴（只重渲染网格，右栏源行不摘除 → 拖拽不中断） */
+          var boundary = weekResizeBoundary({ geom: lastGeom, col: col }, y);
+          if (boundary && !axisResizeExpanded) {
+            expandWeekAxisCore(boundary, iso, function () { renderGrid(docOf(), state.monday); });
+            col = weekColumnNode(iso) || col;
+          }
           var t = Layout.scheduleTime(planMinuteAt(col, y), 60, { step: weekDragStep() });
-          time = { start: t.start, end: t.end };
+          showPlanGhost(col, t);
+          showWeekPill(x, y, t.start + '–' + t.end);
+        },
+        onGridLeave: function () {
+          clearPlanPreview();
+          foldPlanAxis();
+        },
+        onGridDrop: function (col, x, y, planId) {
+          var iso = col.getAttribute('data-date');
+          var plan = findItemFor({ seriesId: planId });
+          if (!plan || !iso) return;
+          /* 落点 = 指针居中、默认 1h（与未排→时间轴同口径）；坐标缺失回落源时段 */
+          var time = plan.time || null;
+          if (typeof y === 'number' && isFinite(y) && lastGeom) {
+            var t = Layout.scheduleTime(planMinuteAt(col, y), 60, { step: weekDragStep() });
+            time = { start: t.start, end: t.end };
+          }
+          axisResizeExpanded = false;   /* 写入后整轴折回 */
+          try {
+            /* 独立副本：不带 origin / addToDays，与源计划无联动；order 由 store 自动分配 */
+            store.addItem({
+              kind: 'single',
+              date: iso,
+              title: plan.title,
+              categoryId: plan.categoryId,
+              time: time,
+              note: plan.note || '',
+              done: false,
+              meta: { sourcePlanId: plan.id }
+            });
+          } catch (err) {
+            M.toast('添加失败：' + errText(err));
+            return;
+          }
+          afterWrite();
+          M.toast('已添加到 ' + Number(iso.slice(5, 7)) + '月' + Number(iso.slice(8, 10)) + '日');
         }
-        axisResizeExpanded = false;   /* 写入后整轴折回 */
-        try {
-          /* 独立副本：不带 origin / addToDays，与源计划无联动；order 由 store 自动分配 */
-          store.addItem({
-            kind: 'single',
-            date: iso,
-            title: plan.title,
-            categoryId: plan.categoryId,
-            time: time,
-            note: plan.note || '',
-            done: false,
-            meta: { sourcePlanId: plan.id }
-          });
-        } catch (err) {
-          M.toast('添加失败：' + errText(err));
-          return;
-        }
-        afterWrite();
-        M.toast('已添加到 ' + Number(iso.slice(5, 7)) + '月' + Number(iso.slice(8, 10)) + '日');
       });
     }
 
