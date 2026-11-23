@@ -96,6 +96,21 @@
 
     var press = null;
     var drag = null;
+    var touchBlockOn = false;
+    /* F-115：touch-action 允许平移时浏览器会接管滚动并发 pointercancel 掐断指针流；起拖后必须自己消化 touchmove */
+    function onTouchMoveBlock(e) {
+      if (drag && e.preventDefault) e.preventDefault();
+    }
+    function attachTouchBlock() {
+      if (touchBlockOn) return;
+      touchBlockOn = true;
+      document.addEventListener('touchmove', onTouchMoveBlock, { passive: false });
+    }
+    function detachTouchBlock() {
+      if (!touchBlockOn) return;
+      touchBlockOn = false;
+      document.removeEventListener('touchmove', onTouchMoveBlock);
+    }
     var scroller = edgeScroll(listEl, {
       getY: function () { return drag ? drag.lastY : null; },
       onScroll: function () { if (drag) moveDrag(drag.lastY); }
@@ -201,6 +216,7 @@
       document.removeEventListener('pointermove', onMove, true);
       document.removeEventListener('pointerup', onUp, true);
       document.removeEventListener('pointercancel', onUp, true);
+      detachTouchBlock();
     }
 
     function onDown(e) {
@@ -220,6 +236,7 @@
       document.addEventListener('pointermove', onMove, true);
       document.addEventListener('pointerup', onUp, true);
       document.addEventListener('pointercancel', onUp, true);
+      attachTouchBlock();
     }
 
     if (listEl) listEl.addEventListener('pointerdown', onDown);

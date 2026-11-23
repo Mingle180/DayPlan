@@ -1296,26 +1296,29 @@
     ]);
     var timeErr = el('div', { class: 'field-error' });
 
-    function syncTimeVisibility() {
-      timeRow.style.display = timeToggle.checked ? '' : 'none';
-      if (!timeToggle.checked) timeErr.textContent = '';
-    }
-    timeToggle.checked = !!(item && item.time); // 「可选」= 默认不设时段；开启后取 09:00–10:00
-    timeToggle.addEventListener('change', syncTimeVisibility);
-    syncTimeVisibility();
-    form.appendChild(el('div', { class: 'fieldset' }, [
+    var timeFieldsetW = el('div', { class: 'fieldset week-plan-time' }, [
       el('div', { class: 'inline' }, [
         el('label', { class: 'switch' }, [timeToggle, el('span', { text: '设置起止时间' })])
       ]),
       timeRow, timeErr
-    ]));
+    ]);
+    function syncTimeVisibility() {
+      var gated = !addToDaysCheck.checked;
+      timeFieldsetW.hidden = gated;
+      timeRow.style.display = (!gated && timeToggle.checked) ? '' : 'none';
+      if (gated || !timeToggle.checked) timeErr.textContent = '';
+    }
+    timeToggle.checked = !!(item && item.time); // 「可选」= 默认不设时段；开启后取 09:00–10:00
+    timeToggle.addEventListener('change', syncTimeVisibility);
+    syncTimeVisibility();
 
-    /* ---------------- 添加到每天（三十九轮 / F-87.2） ---------------- */
+    /* ---------------- 添加到每天（三十九轮 / F-87.2；F-116 置于时间组上方） ---------------- */
     form.appendChild(el('div', { class: 'fieldset week-plan-adddays' }, [
       el('div', { class: 'inline' }, [
         el('label', { class: 'switch' }, [addToDaysCheck, el('span', { text: '添加到每天' })])
       ])
     ]));
+    form.appendChild(timeFieldsetW);
 
     /* ---------------- 备注（≤ 500 字） ---------------- */
     var noteInput = el('textarea', {
@@ -1346,7 +1349,7 @@
         : '每天（该周 7 天）';
     }
     skipLongCheck.addEventListener('change', syncRepeatText);
-    addToDaysCheck.addEventListener('change', syncRepeatText);
+    addToDaysCheck.addEventListener('change', function () { syncRepeatText(); syncTimeVisibility(); });
     syncRepeatText();
     form.appendChild(el('div', { class: 'fieldset week-plan-repeat' }, [
       el('div', { class: 'field' }, [
@@ -1374,7 +1377,7 @@
       return {
         title: titleInput.value.trim(),
         categoryId: catSelect.value,
-        time: timeToggle.checked ? { start: startInput.value, end: endInput.value } : null,
+        time: (addToDaysCheck.checked && timeToggle.checked) ? { start: startInput.value, end: endInput.value } : null,
         note: noteInput.value,
         meta: meta,
         repeat: fixedRepeat()
@@ -1502,26 +1505,29 @@
     ]);
     var timeErr = el('div', { class: 'field-error' });
 
-    function syncTimeVisibility() {
-      timeRow.style.display = timeToggle.checked ? '' : 'none';
-      if (!timeToggle.checked) timeErr.textContent = '';
-    }
-    timeToggle.checked = !!(item && item.time);
-    timeToggle.addEventListener('change', syncTimeVisibility);
-    syncTimeVisibility();
-    form.appendChild(el('div', { class: 'fieldset' }, [
+    var timeFieldsetM = el('div', { class: 'fieldset month-plan-time' }, [
       el('div', { class: 'inline' }, [
         el('label', { class: 'switch' }, [timeToggle, el('span', { text: '设置起止时间' })])
       ]),
       timeRow, timeErr
-    ]));
+    ]);
+    function syncTimeVisibility() {
+      var gated = !addToDaysCheck.checked;
+      timeFieldsetM.hidden = gated;
+      timeRow.style.display = (!gated && timeToggle.checked) ? '' : 'none';
+      if (gated || !timeToggle.checked) timeErr.textContent = '';
+    }
+    timeToggle.checked = !!(item && item.time);
+    timeToggle.addEventListener('change', syncTimeVisibility);
+    syncTimeVisibility();
 
-    /* ---------------- 添加到每天（三十九轮 / F-87.2） ---------------- */
+    /* ---------------- 添加到每天（三十九轮 / F-87.2；F-116 置于时间组上方） ---------------- */
     form.appendChild(el('div', { class: 'fieldset month-plan-adddays' }, [
       el('div', { class: 'inline' }, [
         el('label', { class: 'switch' }, [addToDaysCheck, el('span', { text: '添加到每天' })])
       ])
     ]));
+    form.appendChild(timeFieldsetM);
 
     /* ---------------- 备注 ---------------- */
     var noteInput = el('textarea', { maxlength: String(S.NOTE_MAX), 'aria-label': '备注' });
@@ -1552,7 +1558,7 @@
         : '每天（该月 ' + dayCount + ' 天）';
     }
     skipLongCheck.addEventListener('change', syncRepeatText);
-    addToDaysCheck.addEventListener('change', syncRepeatText);
+    addToDaysCheck.addEventListener('change', function () { syncRepeatText(); syncTimeVisibility(); });
     syncRepeatText();
     form.appendChild(el('div', { class: 'fieldset month-plan-repeat' }, [
       el('div', { class: 'field' }, [
@@ -1577,7 +1583,7 @@
       return {
         title: titleInput.value.trim(),
         categoryId: catSelect.value,
-        time: timeToggle.checked ? { start: startInput.value, end: endInput.value } : null,
+        time: (addToDaysCheck.checked && timeToggle.checked) ? { start: startInput.value, end: endInput.value } : null,
         note: noteInput.value,
         meta: meta,
         repeat: fixedRepeat()

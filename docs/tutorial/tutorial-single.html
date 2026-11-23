@@ -15019,6 +15019,8 @@ body.tut-landing {
       out.categoryId = ctx.fallbackCategoryId || URGENT_CATEGORY_ID;
     }
     out.time = sanitizeTime(out.time);
+    /* F-116：未同步到每天的计划模板不带时段（表单同口径；云端存量载入也清） */
+    if (out.meta && out.meta.addToDays === false) out.time = null;
     if (out.reminder !== undefined && out.reminder !== null) {
       var rem = normalizeReminder(out.reminder);
       if (!rem) {
@@ -24061,6 +24063,8 @@ body.tut-landing {
       if (item.starred === undefined) item.starred = false; // DM-4.5 缺省 false
       if (item.note === undefined) item.note = '';
       if (item.time === undefined) item.time = null;
+      /* F-116：未同步到每天的计划模板不带时段（与 schema.sanitizeItem 同口径） */
+      if (item.meta && item.meta.addToDays === false) item.time = null;
       mutate(function (draft) {
         if (typeof item.order !== 'number' || !isFinite(item.order)) {
           var anchor = item.kind === 'single' ? item.date : (item.repeat && item.repeat.startDate);
@@ -24090,6 +24094,8 @@ body.tut-landing {
         } else if (prevCategoryId === URGENT_ID && next.categoryId !== URGENT_ID) {
           if (schema.isPlainObject(next.meta)) delete next.meta.previousCategoryId;
         }
+        /* F-116：改成「不同步到每天」即清掉时段（存量编辑保存同口径） */
+        if (next.meta && next.meta.addToDays === false) next.time = null;
         next.updatedAt = now();
         draft.items[i] = next;
       });
@@ -33596,26 +33602,29 @@ body.tut-landing {
     ]);
     var timeErr = el('div', { class: 'field-error' });
 
-    function syncTimeVisibility() {
-      timeRow.style.display = timeToggle.checked ? '' : 'none';
-      if (!timeToggle.checked) timeErr.textContent = '';
-    }
-    timeToggle.checked = !!(item && item.time); // 「可选」= 默认不设时段；开启后取 09:00–10:00
-    timeToggle.addEventListener('change', syncTimeVisibility);
-    syncTimeVisibility();
-    form.appendChild(el('div', { class: 'fieldset' }, [
+    var timeFieldsetW = el('div', { class: 'fieldset week-plan-time' }, [
       el('div', { class: 'inline' }, [
         el('label', { class: 'switch' }, [timeToggle, el('span', { text: '设置起止时间' })])
       ]),
       timeRow, timeErr
-    ]));
+    ]);
+    function syncTimeVisibility() {
+      var gated = !addToDaysCheck.checked;
+      timeFieldsetW.hidden = gated;
+      timeRow.style.display = (!gated && timeToggle.checked) ? '' : 'none';
+      if (gated || !timeToggle.checked) timeErr.textContent = '';
+    }
+    timeToggle.checked = !!(item && item.time); // 「可选」= 默认不设时段；开启后取 09:00–10:00
+    timeToggle.addEventListener('change', syncTimeVisibility);
+    syncTimeVisibility();
 
-    /* ---------------- 添加到每天（三十九轮 / F-87.2） ---------------- */
+    /* ---------------- 添加到每天（三十九轮 / F-87.2；F-116 置于时间组上方） ---------------- */
     form.appendChild(el('div', { class: 'fieldset week-plan-adddays' }, [
       el('div', { class: 'inline' }, [
         el('label', { class: 'switch' }, [addToDaysCheck, el('span', { text: '添加到每天' })])
       ])
     ]));
+    form.appendChild(timeFieldsetW);
 
     /* ---------------- 备注（≤ 500 字） ---------------- */
     var noteInput = el('textarea', {
@@ -33646,7 +33655,7 @@ body.tut-landing {
         : '每天（该周 7 天）';
     }
     skipLongCheck.addEventListener('change', syncRepeatText);
-    addToDaysCheck.addEventListener('change', syncRepeatText);
+    addToDaysCheck.addEventListener('change', function () { syncRepeatText(); syncTimeVisibility(); });
     syncRepeatText();
     form.appendChild(el('div', { class: 'fieldset week-plan-repeat' }, [
       el('div', { class: 'field' }, [
@@ -33674,7 +33683,7 @@ body.tut-landing {
       return {
         title: titleInput.value.trim(),
         categoryId: catSelect.value,
-        time: timeToggle.checked ? { start: startInput.value, end: endInput.value } : null,
+        time: (addToDaysCheck.checked && timeToggle.checked) ? { start: startInput.value, end: endInput.value } : null,
         note: noteInput.value,
         meta: meta,
         repeat: fixedRepeat()
@@ -33802,26 +33811,29 @@ body.tut-landing {
     ]);
     var timeErr = el('div', { class: 'field-error' });
 
-    function syncTimeVisibility() {
-      timeRow.style.display = timeToggle.checked ? '' : 'none';
-      if (!timeToggle.checked) timeErr.textContent = '';
-    }
-    timeToggle.checked = !!(item && item.time);
-    timeToggle.addEventListener('change', syncTimeVisibility);
-    syncTimeVisibility();
-    form.appendChild(el('div', { class: 'fieldset' }, [
+    var timeFieldsetM = el('div', { class: 'fieldset month-plan-time' }, [
       el('div', { class: 'inline' }, [
         el('label', { class: 'switch' }, [timeToggle, el('span', { text: '设置起止时间' })])
       ]),
       timeRow, timeErr
-    ]));
+    ]);
+    function syncTimeVisibility() {
+      var gated = !addToDaysCheck.checked;
+      timeFieldsetM.hidden = gated;
+      timeRow.style.display = (!gated && timeToggle.checked) ? '' : 'none';
+      if (gated || !timeToggle.checked) timeErr.textContent = '';
+    }
+    timeToggle.checked = !!(item && item.time);
+    timeToggle.addEventListener('change', syncTimeVisibility);
+    syncTimeVisibility();
 
-    /* ---------------- 添加到每天（三十九轮 / F-87.2） ---------------- */
+    /* ---------------- 添加到每天（三十九轮 / F-87.2；F-116 置于时间组上方） ---------------- */
     form.appendChild(el('div', { class: 'fieldset month-plan-adddays' }, [
       el('div', { class: 'inline' }, [
         el('label', { class: 'switch' }, [addToDaysCheck, el('span', { text: '添加到每天' })])
       ])
     ]));
+    form.appendChild(timeFieldsetM);
 
     /* ---------------- 备注 ---------------- */
     var noteInput = el('textarea', { maxlength: String(S.NOTE_MAX), 'aria-label': '备注' });
@@ -33852,7 +33864,7 @@ body.tut-landing {
         : '每天（该月 ' + dayCount + ' 天）';
     }
     skipLongCheck.addEventListener('change', syncRepeatText);
-    addToDaysCheck.addEventListener('change', syncRepeatText);
+    addToDaysCheck.addEventListener('change', function () { syncRepeatText(); syncTimeVisibility(); });
     syncRepeatText();
     form.appendChild(el('div', { class: 'fieldset month-plan-repeat' }, [
       el('div', { class: 'field' }, [
@@ -33877,7 +33889,7 @@ body.tut-landing {
       return {
         title: titleInput.value.trim(),
         categoryId: catSelect.value,
-        time: timeToggle.checked ? { start: startInput.value, end: endInput.value } : null,
+        time: (addToDaysCheck.checked && timeToggle.checked) ? { start: startInput.value, end: endInput.value } : null,
         note: noteInput.value,
         meta: meta,
         repeat: fixedRepeat()
@@ -35711,6 +35723,21 @@ body.tut-landing {
 
     var press = null;
     var drag = null;
+    var touchBlockOn = false;
+    /* F-115：touch-action 允许平移时浏览器会接管滚动并发 pointercancel 掐断指针流；起拖后必须自己消化 touchmove */
+    function onTouchMoveBlock(e) {
+      if (drag && e.preventDefault) e.preventDefault();
+    }
+    function attachTouchBlock() {
+      if (touchBlockOn) return;
+      touchBlockOn = true;
+      document.addEventListener('touchmove', onTouchMoveBlock, { passive: false });
+    }
+    function detachTouchBlock() {
+      if (!touchBlockOn) return;
+      touchBlockOn = false;
+      document.removeEventListener('touchmove', onTouchMoveBlock);
+    }
     var scroller = edgeScroll(listEl, {
       getY: function () { return drag ? drag.lastY : null; },
       onScroll: function () { if (drag) moveDrag(drag.lastY); }
@@ -35816,6 +35843,7 @@ body.tut-landing {
       document.removeEventListener('pointermove', onMove, true);
       document.removeEventListener('pointerup', onUp, true);
       document.removeEventListener('pointercancel', onUp, true);
+      detachTouchBlock();
     }
 
     function onDown(e) {
@@ -35835,6 +35863,7 @@ body.tut-landing {
       document.addEventListener('pointermove', onMove, true);
       document.addEventListener('pointerup', onUp, true);
       document.addEventListener('pointercancel', onUp, true);
+      attachTouchBlock();
     }
 
     if (listEl) listEl.addEventListener('pointerdown', onDown);

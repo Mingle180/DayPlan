@@ -532,6 +532,8 @@
       if (item.starred === undefined) item.starred = false; // DM-4.5 缺省 false
       if (item.note === undefined) item.note = '';
       if (item.time === undefined) item.time = null;
+      /* F-116：未同步到每天的计划模板不带时段（与 schema.sanitizeItem 同口径） */
+      if (item.meta && item.meta.addToDays === false) item.time = null;
       mutate(function (draft) {
         if (typeof item.order !== 'number' || !isFinite(item.order)) {
           var anchor = item.kind === 'single' ? item.date : (item.repeat && item.repeat.startDate);
@@ -561,6 +563,8 @@
         } else if (prevCategoryId === URGENT_ID && next.categoryId !== URGENT_ID) {
           if (schema.isPlainObject(next.meta)) delete next.meta.previousCategoryId;
         }
+        /* F-116：改成「不同步到每天」即清掉时段（存量编辑保存同口径） */
+        if (next.meta && next.meta.addToDays === false) next.time = null;
         next.updatedAt = now();
         draft.items[i] = next;
       });

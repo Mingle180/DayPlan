@@ -742,6 +742,8 @@
       out.categoryId = ctx.fallbackCategoryId || URGENT_CATEGORY_ID;
     }
     out.time = sanitizeTime(out.time);
+    /* F-116：未同步到每天的计划模板不带时段（表单同口径；云端存量载入也清） */
+    if (out.meta && out.meta.addToDays === false) out.time = null;
     if (out.reminder !== undefined && out.reminder !== null) {
       var rem = normalizeReminder(out.reminder);
       if (!rem) {
