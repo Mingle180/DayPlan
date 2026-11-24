@@ -1,5 +1,5 @@
 /**
- * DayPlan · 列表指针拖动排序（F-108 手机长按；F-110 桌面鼠标 + 贴边自动滚动；F-117 可选网格落点）
+ * DayPlan · 列表指针拖动排序（F-108 手机长按；F-110 桌面鼠标 + 贴边自动滚动；F-117 可选网格落点；F-118 跟手幽灵 + 三向边缘滚动）
  *
  * 触屏：长按 320ms 起拖；鼠标（allowMouse）：按下移动超过阈值即起拖。
  * 跟手把行插到指针所在位置，松手提交新顺序；起拖后抑制 click，避免误触发完成/编辑。
@@ -8,14 +8,18 @@
  * attach(listEl, {
  *   rowSelector, getId(row)->string|null, allowMouse,
  *   onReorder(ids), onSuppress(ms), onDragChange(bool),
- *   gridOf(node)->col|null, onGridMove(col,x,y), onGridLeave(), onGridDrop(col,x,y,id), hitTest(x,y)
+ *   gridOf(node)->col|null, onGridMove(col,x,y), onGridLeave(), onGridDrop(col,x,y,id), hitTest(x,y),
+ *   makeGhost(row)->element|null, edgeTargets:[{ target, axis:'y'|'x', when:'list'|'grid'|'always' }]
  * }) -> { destroy, abort }
  *   传 gridOf 时启用「落点决定去向」：命中网格列 → 网格模式（源行归位，松手交 onGridDrop）；
  *   命中列表 → 列表模式（跟手换序，松手交 onReorder）；两者都不在 → 保持（不写不改）。
- *   不传 gridOf 时行为与旧版逐条一致（月面板）。
+ *   传 makeGhost 时起拖建跟手克隆（触摸上抬 36px 不挡手指），松手/abort 摘除；不传则不建。
+ *   edgeTargets 按 when 门控额外边缘滚动（页面竖滚 / 网格横滚），滚动时重算落点。
+ *   不传 gridOf / makeGhost / edgeTargets 时行为与旧版逐条一致（月面板）。
  *
- * edgeScroll(listEl, { getY, onScroll, edge, maxSpeed }) -> { start, stop }
- *   纯几何驱动，可脱离 DOM 单测（fake listEl 只需 getBoundingClientRect/scrollHeight/clientHeight/scrollTop）。
+ * edgeScroll(target, { axis, getPos|getY, onScroll, edge, maxSpeed }) -> { start, stop, stepFor }
+ *   纯几何驱动，可脱离 DOM 单测。target 可以是元素（fake 只需 getBoundingClientRect/scrollHeight/clientHeight/scrollTop），
+ *   也可以是适配器 { getRect, getScroll, setScroll, getScrollSize, getClientSize }（文档滚动取视口矩形）。
  */
 (function (root, factory) {
   'use strict';
@@ -33,13 +37,18 @@
   var SUPPRESS_MS = 450;
   var EDGE_PX = 48;
   var MAX_SPEED = 18;
+  var GHOST_LIFT_PX = 36;
 
-  /** 贴边自动滚动：指针进入列表上/下 EDGE_PX 带内按接近程度变速滚动，离带即停。 */
-  function edgeScroll(listEl, opts) {
+  /** 贴边自动滚动：指针进入上/下（横轴左/右）EDGE_PX 带内按接近程度变速滚动，离带即停。
+      target 可以是元素，也可以是适配器 { getRect, getScroll, setScroll, getScrollSize, getClientSize }
+      ——文档滚动时 documentElement 的矩形是全高负顶，不能当视口用，故由调用方给视口矩形。 */
+  function edgeScroll(target, opts) {
     opts = opts || {};
+    var axis = opts.axis === 'x' ? 'x' : 'y';
     var edge = typeof opts.edge === 'number' ? opts.edge : EDGE_PX;
     var maxSpeed = typeof opts.maxSpeed === 'number' ? opts.maxSpeed : MAX_SPEED;
-    var getY = typeof opts.getY === 'function' ? opts.getY : function () { return null; };
+    var getPos = typeof opts.getPos === 'function' ? opts.getPos
+      : (typeof opts.getY === 'function' ? opts.getY : function () { return null; });
     var onScroll = typeof opts.onScroll === 'function' ? opts.onScroll : function () {};
     var rafFn = (root && typeof root.requestAnimationFrame === 'function')
       ? function (cb) { return root.requestAnimationFrame(cb); }
@@ -48,33 +57,56 @@
       ? function (id) { root.cancelAnimationFrame(id); }
       : function (id) { clearTimeout(id); };
     var handle = null;
+    var isAdapter = !!target && typeof target.getRect === 'function';
+
+    function rectOf() {
+      if (isAdapter) return target.getRect();
+      return (target && target.getBoundingClientRect) ? target.getBoundingClientRect() : null;
+    }
+    function scrollSize() {
+      if (isAdapter) return target.getScrollSize();
+      return axis === 'x' ? target.scrollWidth : target.scrollHeight;
+    }
+    function clientSize() {
+      if (isAdapter) return target.getClientSize();
+      return axis === 'x' ? target.clientWidth : target.clientHeight;
+    }
+    function getScroll() {
+      if (isAdapter) return Number(target.getScroll()) || 0;
+      return Number(axis === 'x' ? target.scrollLeft : target.scrollTop) || 0;
+    }
+    function setScroll(v) {
+      if (isAdapter) { target.setScroll(v); return; }
+      if (axis === 'x') target.scrollLeft = v; else target.scrollTop = v;
+    }
 
     /** 单帧滚动量（px）：带外 0，带内随接近边缘线性增大到 maxSpeed。导出供单测。 */
-    function stepFor(y, rect, scrollH, clientH) {
-      if (y == null || !(scrollH > clientH) || !rect) return 0;
-      var dy = 0;
-      if (y < rect.top + edge) {
-        var t = (y - rect.top) / edge;
+    function stepFor(pos, rect, size, client) {
+      if (pos == null || !(size > client) || !rect) return 0;
+      var lo = axis === 'x' ? rect.left : rect.top;
+      var hi = axis === 'x' ? rect.right : rect.bottom;
+      var d = 0;
+      if (pos < lo + edge) {
+        var t = (pos - lo) / edge;
         if (t < 0) t = 0; if (t > 1) t = 1;
-        dy = -Math.ceil(maxSpeed * (1 - t));
-      } else if (y > rect.bottom - edge) {
-        var b = (rect.bottom - y) / edge;
+        d = -Math.ceil(maxSpeed * (1 - t));
+      } else if (pos > hi - edge) {
+        var b = (hi - pos) / edge;
         if (b < 0) b = 0; if (b > 1) b = 1;
-        dy = Math.ceil(maxSpeed * (1 - b));
+        d = Math.ceil(maxSpeed * (1 - b));
       }
-      return dy;
+      return d;
     }
 
     function tick() {
-      var y = getY();
-      if (listEl) {
-        var dy = stepFor(y, listEl.getBoundingClientRect ? listEl.getBoundingClientRect() : null,
-          listEl.scrollHeight, listEl.clientHeight);
-        if (dy) {
-          var max = listEl.scrollHeight - listEl.clientHeight;
-          var next = (listEl.scrollTop || 0) + dy;
+      var pos = getPos();
+      if (target) {
+        var d = stepFor(pos, rectOf(), scrollSize(), clientSize());
+        if (d) {
+          var max = scrollSize() - clientSize();
+          var next = getScroll() + d;
           if (next < 0) next = 0; if (next > max) next = max;
-          if (next !== listEl.scrollTop) { listEl.scrollTop = next; onScroll(); }
+          if (next !== getScroll()) { setScroll(next); onScroll(); }
         }
       }
       handle = rafFn(tick);
@@ -130,6 +162,51 @@
       onScroll: function () { if (drag && !drag.col) insertAt(drag.lastY); }
     });
 
+    /* F-118：可选跟手幽灵克隆。不传 makeGhost → 不建（月面板零改动）。
+       克隆由工厂建（周视图克隆整行），引擎只管定位/摘除；触摸上抬 GHOST_LIFT_PX 不挡手指。 */
+    var makeGhost = typeof opts.makeGhost === 'function' ? opts.makeGhost : null;
+    var ghost = null;
+    var ghostOffX = 0;
+    var ghostOffY = 0;
+    var ghostLift = 0;
+    function positionGhost(x, y) {
+      if (!ghost || !ghost.style) return;
+      ghost.style.left = Math.round(x - ghostOffX) + 'px';
+      ghost.style.top = Math.round(y - ghostOffY - ghostLift) + 'px';
+    }
+    function removeGhost() {
+      if (ghost && ghost.parentNode) ghost.parentNode.removeChild(ghost);
+      ghost = null;
+    }
+
+    /* F-118：可选额外边缘滚动目标（页面竖滚 / 周网格横滚），按 when 门控拖拽模式。
+       自动滚动时重算落点：网格模式重发 onGridMove（内容在静止指针下移动），列表模式重插行。 */
+    var edgeTargets = Array.isArray(opts.edgeTargets) ? opts.edgeTargets : [];
+    var extraScrollers = edgeTargets.map(function (t) {
+      return edgeScroll(t.target, {
+        axis: t.axis === 'x' ? 'x' : 'y',
+        getPos: function () {
+          if (!drag) return null;
+          if (t.when === 'list' && drag.col) return null;
+          if (t.when === 'grid' && !drag.col) return null;
+          return t.axis === 'x' ? drag.lastX : drag.lastY;
+        },
+        onScroll: function () {
+          if (!drag) return;
+          if (drag.col) onGridMove(drag.col, drag.lastX, drag.lastY);
+          else insertAt(drag.lastY);
+        }
+      });
+    });
+    function startScrollers() {
+      scroller.start();
+      for (var i = 0; i < extraScrollers.length; i += 1) extraScrollers[i].start();
+    }
+    function stopScrollers() {
+      scroller.stop();
+      for (var i = 0; i < extraScrollers.length; i += 1) extraScrollers[i].stop();
+    }
+
     function rowOf(target) {
       var n = target;
       while (n && n !== listEl) {
@@ -176,7 +253,19 @@
       if (row.classList) row.classList.add('is-dragging');
       onDragChange(true);
       onSuppress(SUPPRESS_MS);
-      scroller.start();
+      startScrollers();
+      if (makeGhost) {
+        var gr = row.getBoundingClientRect ? row.getBoundingClientRect() : null;
+        ghost = makeGhost(row);
+        if (ghost) {
+          ghostOffX = gr ? p.x - gr.left : 0;
+          ghostOffY = gr ? p.y - gr.top : 0;
+          ghostLift = p.mouse ? 0 : GHOST_LIFT_PX;
+          if (gr && ghost.style) ghost.style.width = Math.round(gr.width) + 'px';
+          if (typeof document !== 'undefined' && document && document.body) document.body.appendChild(ghost);
+          positionGhost(p.x, p.y);
+        }
+      }
       if (press === p) press = null;
     }
 
@@ -228,6 +317,7 @@
       if (!drag) return;
       drag.lastX = x;
       drag.lastY = y;
+      positionGhost(x, y);
       if (!gridOf) { insertAt(y); return; }
       var zone = zoneAt(x, y);
       if (zone && zone.col) {
@@ -246,7 +336,8 @@
       var d = drag;
       drag = null;
       detach();
-      scroller.stop();
+      stopScrollers();
+      removeGhost();
       if (d.row.classList) d.row.classList.remove('is-dragging');
       onDragChange(false);
       onSuppress(SUPPRESS_MS);
@@ -263,7 +354,8 @@
       var row = drag.row;
       drag = null;
       detach();
-      scroller.stop();
+      stopScrollers();
+      removeGhost();
       if (row.classList) row.classList.remove('is-dragging');
       onDragChange(false);
     }
@@ -330,7 +422,8 @@
       destroy: function () {
         cancelPress();
         abort();
-        scroller.stop();
+        stopScrollers();
+        removeGhost();
         if (listEl) listEl.removeEventListener('pointerdown', onDown);
       }
     };

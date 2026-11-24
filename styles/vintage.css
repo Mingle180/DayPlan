@@ -1326,6 +1326,16 @@ html[data-theme='dark'] .notes-input {
   backdrop-filter: none;
   border-bottom: 1px solid var(--border);
 }
+/* F-119：吸顶浮层 vintage  parity——容器与表头格同款纸面实底（无毛玻璃），方角不变 */
+.wk-sticky-head {
+  background: color-mix(in srgb, var(--surface) 78%, var(--surface-2));
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.wk-sticky-row .wk-head {
+  background: color-mix(in srgb, var(--surface) 78%, var(--surface-2)) !important;
+  border-bottom: 1px solid var(--border);
+}
 .wk-head .wk-dow { font-family: var(--font-serif); font-size: 12.5px; letter-spacing: .6px; }
 .wk-head.is-today .wk-dow { color: var(--danger); }
 .wk-col { border-left: 1px solid rgba(132, 112, 82, .14); }

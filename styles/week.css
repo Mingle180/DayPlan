@@ -35,9 +35,9 @@
  * 总宽可超过容器 → 由 .week-scroll 横向滚动）。
  * 下面的静态规则只是 JS 未运行时的兜底（等宽 84px 起），运行时始终被内联样式覆盖。 */
 .week-grid { display: grid; grid-template-columns: 38px repeat(7, minmax(84px, 1fr)); }
-/* 规范 12 / LA-3：表头毛玻璃置顶（内容从其下滚过时呈毛玻璃通透）。
- * 2026-11-13（item 4）：竖直吸顶改由 JS translate 驱动（week.js syncStickyHead）——
- * 原生 sticky 被 .week-grid-scroll 的 overflow-y:hidden 困住永不生效，故改用 relative + translate。 */
+/* 规范 12 / LA-3：表头毛玻璃（内容从其下滚过时呈毛玻璃通透）。
+ * F-119（第五十八轮）：吸顶改独立固定浮层（.wk-sticky-head，week.js rebuildStickyOverlay），
+ * 本格回归纯网格流、不再写 transform；旧 is-floating 圆角/投影规则随 translate 机制删除。 */
 .week-grid .wk-head {
   position: relative;
   z-index: 6;
@@ -50,15 +50,37 @@
   font-size: 12px;
   cursor: pointer;
 }
-/* item 4：表头悬浮时保持时间表上边的圆角，并抬到事项 / 展开卡之上（拉边 9 / 浮层 60 仍更高）。
-   底边细线来自 vintage 的 border-bottom，作为与表体的分隔；这里只补圆角与一道柔和投影。 */
-.week-grid.is-floating .wk-corner,
-.week-grid.is-floating .wk-head {
+/* F-119：VS Code 式吸顶浮层——真实表头滑出顶线才出现，钉住期间 top 恒=顶线（竖向零跟踪无缝隙）。
+   方角（用户口径）；毛玻璃容器 + 下沿细线 + 柔和投影（沿用旧悬浮观感，去圆角）。
+   浮层在 .week-grid-scroll 之外，横向由 strip translateX(-scrollLeft) 与列对齐。 */
+.wk-sticky-head {
+  position: fixed;
   z-index: 8;
+  overflow: hidden;
+  border-radius: 0;
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border-bottom: 1px solid var(--border-strong);
   box-shadow: 0 5px 12px -6px rgba(60, 45, 25, .28);
 }
-.week-grid.is-floating .wk-corner { border-top-left-radius: var(--radius); }
-.week-grid.is-floating .wk-head-end { border-top-right-radius: var(--radius); }
+.wk-sticky-head[hidden] { display: none; }
+.wk-sticky-row { display: grid; }
+/* 浮层内表头格镜像 .week-grid .wk-head 外观（浮层不在 .week-grid 内，scoped 规则不命中）；
+   底色透明——毛玻璃由浮层容器统一提供，避免嵌套 backdrop-filter 双层采样。 */
+.wk-sticky-row .wk-head {
+  position: relative;
+  background: transparent;
+  padding: 6px 4px;
+  text-align: center;
+  font-size: 12px;
+  cursor: pointer;
+}
+.wk-sticky-row .wk-corner {
+  background: transparent !important;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
 /* 迭代 10 批次 2（条3）：表头只留星期（日期/农历下线，完整日期在 title/aria-label） */
 .wk-head .wk-dow { font-weight: 600; }
 /* 2026-10-21 用户口径：今天不再铺浅蓝底，只把「周几」标红 */

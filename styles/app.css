@@ -1449,6 +1449,17 @@ body.is-panning * { cursor: grabbing !important; user-select: none !important; }
 }
 .wp-item:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .wp-item.is-dragging { opacity: .45; }
+/* F-118：拖拽跟手幽灵克隆（引擎负责定位/摘除；克隆保留 wp-item 视觉，触摸上抬不挡手指）。
+   选择器带 .wp-item 提升优先级——主题表（vintage）的 .wp-item{box-shadow:none} 否则会同级覆盖掉投影。 */
+.wp-item.wp-drag-ghost {
+  position: fixed;
+  z-index: 90;
+  margin: 0;
+  opacity: .92;
+  box-shadow: 0 12px 28px -10px rgba(60, 45, 25, .45);
+  cursor: grabbing;
+}
+.wp-drag-ghost, .wp-drag-ghost * { pointer-events: none; }
 /* F-108：计划完成态——划线降透明度 */
 .wp-item.is-done { opacity: .55; }
 .wp-item.is-done .wp-title { color: var(--text-3); text-decoration: line-through; }

@@ -1255,6 +1255,7 @@
     /* ---------------- 渲染 ---------------- */
 
     function renderGrid(doc, monday) {
+      invalidateVScroller();   /* F-118：网格重建可能改变纵滚容器命中，边缘滚动适配器下一帧重解析 */
       var settings = settingsOf(doc);
       var pxPerHourSetting = numOr(settings.weekPxPerHour, DEFAULT_WEEK_PX_PER_HOUR);
       var lanesMax = clampInt(settings.maxLanes, 1, WEEK_LANE_HARD_CAP, DEFAULT_LANES_MAX);
@@ -1394,7 +1395,7 @@
       /* 8 列 × 2 行：表头行 + 轴/列行 */
       gridEl.innerHTML = '';
       /* 左上角：与 .wk-head 同款表头外观（不共用 wk-head 类，便于「7 列表头」计数）。
-         竖直吸顶改由 JS translate 驱动（syncStickyHead），故用 relative 而非被 overflow 困住的 sticky。 */
+         F-119：吸顶改独立固定浮层（克隆本角块+周几），本格回归纯网格流，不再写 transform。 */
       gridEl.appendChild(el('div', {
         class: 'wk-corner', 'aria-hidden': 'true',
         style: 'position:relative;z-index:6;background:var(--surface-2);' +
@@ -1450,40 +1451,79 @@
     }
 
     /* ------------------------------------------------------------------ *
-     * 周几表头竖直吸顶（item 4 / 2026-11-13）
-     * 原生 sticky 被 .week-grid-scroll 的 overflow-y:hidden 困住（它是最近滚动容器，
-     * 却只横滚、永不纵滚），表头随文档 / 外层 .week-scroll 一起滑走。改用 JS 竖直 translate：
-     *   表头正常可见 → shift=0，跟整表滑；本该滑出顶线但表体仍有可见部分 → 钉在顶线；
-     *   钉住量到「表高 − 表头高」为止，再往下表头随表体下底边一起上移（该挡就挡）。
-     * 只管竖直：横滚仍由 .week-grid-scroll 原样带动表头，列始终对齐。
-     * 真实版与教程同源：gBCR 在教程里被 shim 换算成「相对应用根、未缩放」，与 translate 同一坐标世界。
-     * 快滑跟进（2026-11-13 跟进）：几何（gridOffset/maxShift/表头节点）缓存于 measureSticky，
-     *   滚动当帧 applySticky 只读 scrollTop/pageYOffset 同步写 transform（零强制布局、不等 rAF），
-     *   每帧至多一次重量自纠；旧版逐帧 getComputedStyle 祖先 walk + rAF 延迟在快滑时拖影跟不上。
+     * 周几吸顶 · VS Code 式固定浮层（F-119 / 2026-11-24 第五十八轮）
+     * 旧机制（item 4 / 2026-11-13）是实体表头格 JS translate 跟随：scroll 事件慢于合成器滚动
+     * → 表头与顶线露缝、快滑拖影卡顿。改为独立浮层（克隆角块 + 7 周几，position:fixed，方角）：
+     *   真实表头滑出顶线才出现；钉住期间 top 恒=顶线（竖向零写入零跟踪，无缝隙零延迟）；
+     *   表尾逼近时随表底上移（该挡就挡，等价旧 maxShift）；表头滚回顶线之下即隐藏。
+     * 横向：浮层在 .week-grid-scroll 之外，strip translateX(-scrollLeft) 与列对齐（当帧同步写；
+     *   横滚是用户主动平移，接受一帧级 JS 同步延迟——浮层方案固有代价，竖向体验优先）。
+     * 几何缓存：measure 缓存 scroller/pinLine/gridOffset/gridHeight/rowH/hLeft/hWidth，
+     *   滚动当帧只读 scrollTop/scrollLeft（零强制布局）；render/resize/每帧至多一次 rAF 重量自纠。
+     * 真实版与教程同源：教程 iframe 内 fixed=iframe 视口，gBCR 同坐标世界。
      * ------------------------------------------------------------------ */
     var stickyRaf = 0;
     var stickyGeom = null;
-    function stickyCells() {
-      if (!gridEl) return [];
-      var out = [];
-      var corner = gridEl.querySelector('.wk-corner');
-      if (corner) out.push(corner);
-      var heads = gridEl.querySelectorAll('.wk-head');
-      for (var i = 0; i < heads.length; i += 1) out.push(heads[i]);
-      return out;
-    }
-    /* 真正纵滚的容器：桌面是内层 .week-scroll；手机（max-height:none）落到文档 / 教程应用根。 */
+    var stickyOverlay = null;   /* div.wk-sticky-head（body 级 fixed，装饰性重复 → aria-hidden） */
+    var stickyStrip = null;     /* 内层 .wk-sticky-row（grid，列宽同网格，JS 内联） */
+    /* 真正纵滚的容器：桌面是内层 .week-scroll；手机（max-height:none）落到文档 / 教程应用根。
+       F-118：结果 memoize（render/renderGrid/resize 失效），边缘滚动每帧不再 walk 祖先强制布局。 */
+    var vScrollerResolved = false;
+    var vScrollerCache = null;
+    function invalidateVScroller() { vScrollerResolved = false; vScrollerCache = null; }
     function weekVScroller() {
+      if (vScrollerResolved) return vScrollerCache;
       var stop = root.document ? root.document.body : null;
       var n = gridEl ? gridEl.parentNode : null;
+      var found = null;
       while (n && n !== stop) {
         if (n.nodeType === 1) {
           var oy = root.getComputedStyle(n).overflowY;
-          if ((oy === 'auto' || oy === 'scroll') && n.scrollHeight > n.clientHeight + 1) return n;
+          if ((oy === 'auto' || oy === 'scroll') && n.scrollHeight > n.clientHeight + 1) { found = n; break; }
         }
         n = n.parentNode;
       }
-      return null;
+      vScrollerResolved = true;
+      vScrollerCache = found;
+      return found;
+    }
+    /* F-118：页面竖向边缘滚动适配器。命中内层滚动容器则用其矩形/scrollTop；
+       否则（文档滚动）矩形取视口、滚动量取 scrollingElement——documentElement 的矩形是全高负顶，不能当视口。 */
+    function pageScrollAdapter() {
+      function de() {
+        var d = root.document;
+        return (d && d.scrollingElement) || (d && d.documentElement) || null;
+      }
+      return {
+        getRect: function () {
+          var sc = weekVScroller();
+          if (sc) {
+            var r = sc.getBoundingClientRect();
+            return { top: r.top, bottom: r.bottom, left: r.left, right: r.right };
+          }
+          return { top: 0, bottom: Number(root.innerHeight) || 0, left: 0, right: Number(root.innerWidth) || 0 };
+        },
+        getScroll: function () {
+          var sc = weekVScroller();
+          return sc ? (Number(sc.scrollTop) || 0) : stickyDocScroll();
+        },
+        setScroll: function (v) {
+          var sc = weekVScroller();
+          if (sc) { sc.scrollTop = v; return; }
+          var d = de();
+          if (d) d.scrollTop = v;
+        },
+        getScrollSize: function () {
+          var sc = weekVScroller();
+          if (sc) return sc.scrollHeight;
+          var d = de();
+          return d ? d.scrollHeight : 0;
+        },
+        getClientSize: function () {
+          var sc = weekVScroller();
+          return sc ? sc.clientHeight : (Number(root.innerHeight) || 0);
+        }
+      };
     }
     /* 顶线：内层滚动容器取其视口顶；文档滚动则取 sticky 顶栏下沿（无顶栏取 0）。 */
     function stickyPinLine(sc) {
@@ -1504,42 +1544,86 @@
       var body = root.document && root.document.body;
       return Number(de && de.scrollTop) || Number(body && body.scrollTop) || 0;
     }
+    /* 重建浮层内容：克隆角块 + 7 周几（render 后真表头刚重建时调用）。克隆不带监听；
+       浮层 click 委托读 data-date → openDay（与真表头 S26/US-22.2 同行为）。列宽同步网格内联值。 */
+    function rebuildStickyOverlay() {
+      var doc = root.document;
+      if (!doc || !gridEl) return;
+      if (!stickyOverlay) {
+        stickyOverlay = el('div', { class: 'wk-sticky-head', 'aria-hidden': 'true', hidden: true });
+        stickyStrip = el('div', { class: 'wk-sticky-row' });
+        stickyOverlay.appendChild(stickyStrip);
+        stickyOverlay.addEventListener('click', function (e) {
+          var n = e.target;
+          while (n && n !== stickyOverlay) {
+            if (n.getAttribute && n.getAttribute('data-date')) { openDay(n.getAttribute('data-date')); return; }
+            n = n.parentNode;
+          }
+        });
+        if (doc.body) doc.body.appendChild(stickyOverlay);
+      }
+      stickyStrip.innerHTML = '';
+      var corner = gridEl.querySelector('.wk-corner');
+      if (corner) stickyStrip.appendChild(corner.cloneNode(true));
+      var heads = gridEl.querySelectorAll('.wk-head');
+      for (var i = 0; i < heads.length; i += 1) stickyStrip.appendChild(heads[i].cloneNode(true));
+      stickyStrip.style.gridTemplateColumns = gridEl.style.gridTemplateColumns || '';
+    }
     /* 量一次几何（getComputedStyle 祖先 walk + 多次 gBCR，会触发强制布局，较贵）。
-       缓存「网格在滚动坐标里的顶偏移 gridOffset、可钉量 maxShift、表头节点」：滚动当帧只读
-       scrollTop / pageYOffset 就能算位移，不再逐帧 walk / gBCR。快滑时主线程不被强制布局拖慢，
-       表头才能严格跟上。仅在 render / resize / 每帧至多一次的 scroll 回调里重量。 */
+       缓存「顶线 pinLine、网格在滚动坐标里的顶偏移 gridOffset、表高/表头高、横滚容器视口左缘/宽」：
+       滚动当帧只读 scrollTop/scrollLeft 就能算显隐与位置。仅在 render/resize/每帧至多一次 scroll 回调里重量。 */
     function measureSticky() {
-      if (!gridEl) { stickyGeom = null; return; }
-      var cells = stickyCells();
-      if (!cells.length) { stickyGeom = null; return; }
+      if (!gridEl || !stickyOverlay) { stickyGeom = null; return; }
       var gr = gridEl.getBoundingClientRect();
       if (!(gr.width > 0 && gr.height > 0)) { stickyGeom = null; return; }
-      var rowH = cells[0].getBoundingClientRect().height;
+      var corner = gridEl.querySelector('.wk-corner');
+      var rowH = corner ? corner.getBoundingClientRect().height : 0;
+      if (!(rowH > 0)) { stickyGeom = null; return; }
       var sc = weekVScroller();
       var pinLine = stickyPinLine(sc);
       var gridOffset = sc
         ? gr.top - sc.getBoundingClientRect().top + (Number(sc.scrollTop) || 0)
         : gr.top + stickyDocScroll() - pinLine;
-      stickyGeom = { scroller: sc, cells: cells, gridOffset: gridOffset, maxShift: Math.max(0, gr.height - rowH) };
+      var hr = gridScrollEl.getBoundingClientRect();
+      stickyGeom = {
+        scroller: sc, pinLine: pinLine, gridOffset: gridOffset,
+        gridHeight: gr.height, rowH: rowH,
+        hLeft: hr.left, hWidth: Number(gridScrollEl.clientWidth) || 0
+      };
     }
-    /* 当帧位移：只读滚动量（零强制布局），用缓存几何立即写 transform。
-       shift = clamp(滚动量 − gridOffset, 0, maxShift)，与旧 gBCR 公式 pinLine − gridTop 恒等。 */
+    /* 当帧：只读滚动量（零强制布局）。显隐阈值跨越才写 hidden；钉住期间 top 恒=pinLine（零写入）；
+       表尾逼近 top=gridBottom−rowH；横同步 translateX(−scrollLeft)。所有写入都先比对，未变不写。 */
     function applySticky() {
+      if (!stickyOverlay) return;
       var g = stickyGeom;
-      if (!gridEl || !g) return;
+      /* 视图被隐藏（切到日/月）→ gridEl offsetParent 为 null：浮层必须收起，不能留在别的视图上 */
+      if (!g || (gridEl && gridEl.offsetParent === null)) {
+        if (!stickyOverlay.hidden) stickyOverlay.hidden = true;
+        return;
+      }
       var scrolled = g.scroller ? (Number(g.scroller.scrollTop) || 0) : stickyDocScroll();
-      var shift = Math.max(0, Math.min(scrolled - g.gridOffset, g.maxShift));
-      var floating = shift > 0.5;
-      var t = floating ? 'translateY(' + Math.round(shift) + 'px)' : '';
-      for (var i = 0; i < g.cells.length; i += 1) g.cells[i].style.transform = t;
-      if (gridEl.classList) gridEl.classList.toggle('is-floating', floating);
+      var gridTop = g.pinLine + g.gridOffset - scrolled;
+      var gridBottom = gridTop + g.gridHeight;
+      var show = gridTop < g.pinLine - 0.5 && gridBottom > g.pinLine + 0.5;
+      if (stickyOverlay.hidden !== !show) stickyOverlay.hidden = !show;
+      if (!show) return;
+      var top = Math.round(Math.min(g.pinLine, gridBottom - g.rowH)) + 'px';
+      if (stickyOverlay.style.top !== top) stickyOverlay.style.top = top;
+      var left = Math.round(g.hLeft) + 'px';
+      if (stickyOverlay.style.left !== left) stickyOverlay.style.left = left;
+      var width = Math.round(g.hWidth) + 'px';
+      if (stickyOverlay.style.width !== width) stickyOverlay.style.width = width;
+      var sl = Math.round(Number(gridScrollEl.scrollLeft) || 0);
+      var t = sl ? 'translateX(' + (-sl) + 'px)' : '';
+      if (stickyStrip.style.transform !== t) stickyStrip.style.transform = t;
     }
-    /* render / resize 收尾：重量几何 + 立即应用（表头刚重建时同一帧钉住，避免闪未吸顶帧）。 */
+    /* render 收尾：重建克隆 + 重量几何 + 立即应用（表头刚重建时同一帧定显隐，避免闪一帧）。 */
     function syncStickyHead() {
+      rebuildStickyOverlay();
       measureSticky();
       applySticky();
     }
-    /* scroll：先用缓存几何当帧同步写 transform（紧跟每一次滚动事件，不等 rAF，快滑不拖影），
+    /* scroll：先用缓存几何当帧同步写（紧跟每一次滚动事件，不等 rAF），
        再每帧至多一次重量几何自纠（祖先高度 / 顶线变化时下一帧修正）。 */
     function onStickyScroll() {
       applySticky();
@@ -1555,6 +1639,7 @@
       if (stickyRaf) return;
       stickyRaf = weekRaf(function () {
         stickyRaf = 0;
+        invalidateVScroller();
         measureSticky();
         applySticky();
       });
@@ -1573,7 +1658,7 @@
       if (railCover) railCover.render();
       loadNotes();
       lastRenderStamp = dataStamp(doc);
-      /* 表头刚被重建（transform 清空）：同一帧内按当前滚动量重新钉住，避免闪一下未吸顶的表头。 */
+      /* F-119：表头刚重建 → 同一帧重建浮层克隆并按当前滚动量定显隐，避免闪一帧。 */
       syncStickyHead();
     }
 
@@ -2295,6 +2380,20 @@
           try { store.reorderPlans(ids); } catch (err) { M.toast('调整次序失败：' + errText(err)); }
           afterWrite();
         },
+        /* F-118：跟手幽灵＝克隆整行（引擎定位/摘除，触摸上抬 36px）；
+           边缘滚动＝页面竖滚（内层周表或文档）＋周网格横滚（仅网格模式），计划栏旧 scroller 保留。 */
+        makeGhost: function (row) {
+          var g = row.cloneNode(true);
+          g.classList.remove('is-dragging');
+          g.classList.add('wp-drag-ghost');
+          g.removeAttribute('id');
+          g.setAttribute('aria-hidden', 'true');
+          return g;
+        },
+        edgeTargets: [
+          { target: pageScrollAdapter(), axis: 'y', when: 'always' },
+          { target: gridScrollEl, axis: 'x', when: 'grid' }
+        ],
         gridOf: planColOf,
         onGridMove: function (col, x, y) {
           if (!col.classList.contains('is-drop-target')) {
@@ -2378,9 +2477,9 @@
     setupPan();
     render();
 
-    /* 周几表头竖直吸顶：捕获阶段监听任意滚动（文档 / 内层 .week-scroll / 教程应用根），
-       scroll 不冒泡但会走捕获，故一处监听即可覆盖所有纵滚来源；resize 时重算顶线与表高。
-       scroll 走 onStickyScroll（当帧同步写 + 每帧一次重量自纠），快滑严格跟上。 */
+    /* F-119 吸顶浮层：捕获阶段监听任意滚动（文档 / 内层 .week-scroll / 周网格横滚 / 教程应用根），
+       scroll 不冒泡但会走捕获，故一处监听覆盖纵滚显隐 + 横滚列对齐；resize 时重算顶线与表高。
+       scroll 走 onStickyScroll（当帧同步写 + 每帧一次重量自纠）；钉住期间竖向零写入，快滑无缝隙。 */
     if (root.document && typeof root.document.addEventListener === 'function') {
       root.document.addEventListener('scroll', onStickyScroll, true);
     }
